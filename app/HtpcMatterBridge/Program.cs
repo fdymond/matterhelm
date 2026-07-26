@@ -9,8 +9,17 @@ internal static class Program
 
     /// <summary>Entry point.</summary>
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        // S2-2 acceptance demo: run the Actions/ self-test and exit — no tray,
+        // no single-instance guard (it must work beside a running instance).
+        if (args.Contains("--selftest-actions"))
+        {
+            Environment.ExitCode = Actions.ActionsSelfTest.Run(
+                includeDisplayTests: args.Contains("--selftest-actions-display"));
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, name: MutexName, createdNew: out bool createdNew);
         if (!createdNew)
         {
