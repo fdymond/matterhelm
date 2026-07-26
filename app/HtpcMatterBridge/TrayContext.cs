@@ -82,8 +82,9 @@ public sealed class TrayContext : ApplicationContext
 
         // BLUEPRINT §2.4: amber's parenthetical is "shows 'Pair…' menu item" —
         // read as "this is when it's actionable", not "only time it exists":
-        // the item stays visible always (so users can find it) but is only
-        // enabled while running-and-uncommissioned.
+        // the item stays visible always (so users can find it) and is enabled
+        // whenever the bridge is running or a pairing code has been cached
+        // (see UpdateMenuForState for why Connected must count).
         _pairItem = new ToolStripMenuItem("Pair with Google Home…");
         _pairItem.Click += OnPairClicked;
 
@@ -182,6 +183,7 @@ public sealed class TrayContext : ApplicationContext
         void Apply()
         {
             _lastPairingInfo = (qrPayload, manualCode);
+            UpdateMenuForState();
             if (_pairingWindow is { IsDisposed: false })
             {
                 _pairingWindow.SetPairingInfo(qrPayload, manualCode);
@@ -210,7 +212,13 @@ public sealed class TrayContext : ApplicationContext
         // "Enable bridge" is left purely user-driven here (not resynced from
         // SetState) so an external state update never fights an in-flight
         // user click; only the "actionable now" hint is state-derived.
-        _pairItem.Enabled = _state == BridgeState.Running;
+        // Pair… must stay enabled while Connected (green): green currently
+        // means "sidecar link up", NOT "commissioned" (BridgeHost.DeriveState)
+        // — the pairing code arrives over that link, so gating on Running
+        // alone would disable the item exactly when the code exists (S2-R
+        // finding 1). Enabled whenever the bridge runs or a code is cached.
+        _pairItem.Enabled =
+            _lastPairingInfo is not null || _state is BridgeState.Running or BridgeState.Connected;
     }
 
     private void OnEnableBridgeCheckedChanged(object? sender, EventArgs e)

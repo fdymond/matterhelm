@@ -447,10 +447,29 @@ public static class Protocol
             return err;
         }
 
-        // "D" is exactly the canonical hyphenated uuid form z.uuid() accepts.
+        // Parity with zod v4's z.uuid() (the normative side, protocol.ts):
+        // canonical hyphenated form AND RFC 9562 constraints — version nibble
+        // 1-8, variant nibble [89ab] — with nil/max special-cased. Bare
+        // Guid.TryParseExact("D") accepts any hex in the 8-4-4-4-12 shape,
+        // which zod rejects; since we echo the id into the ack, a looser
+        // parse here could emit an ack the sidecar's parser kills the socket
+        // over (S2-R finding 3).
         if (!Guid.TryParseExact(raw, "D", out id))
         {
             return "\"id\" must be a canonical uuid";
+        }
+
+        if (raw is "00000000-0000-0000-0000-000000000000" or "ffffffff-ffff-ffff-ffff-ffffffffffff")
+        {
+            return null;
+        }
+
+        char version = char.ToLowerInvariant(raw[14]);
+        char variant = char.ToLowerInvariant(raw[19]);
+        if (version is < '1' or > '8' || variant is not ('8' or '9' or 'a' or 'b'))
+        {
+            id = Guid.Empty;
+            return "\"id\" must be an RFC 9562 uuid (version 1-8, variant 8/9/a/b)";
         }
 
         return null;

@@ -134,6 +134,33 @@ public static class ProtocolTests
             Assert.False(Parse("""{"v":1,"type":"action","id":"not-a-uuid","name":"playPause"}""").Success);
         }
 
+        // RFC 9562 parity with zod v4's z.uuid() (S2-R finding 3): hex in the
+        // right shape is not enough — version nibble must be 1-8 and variant
+        // 8/9/a/b, with nil and (lowercase) max special-cased, exactly as the
+        // normative protocol.ts side accepts/rejects.
+        [Theory]
+        [InlineData("12345678-1234-c234-c234-123456789012")] // version 'c'
+        [InlineData("12345678-1234-0234-9234-123456789012")] // version '0'
+        [InlineData("12345678-1234-4234-c234-123456789012")] // variant 'c'
+        [InlineData("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")] // uppercase max: zod's literal is lowercase-only
+        public void RejectsANonRfc9562UuidThatZodWouldReject(string id)
+        {
+            SidecarParseResult result =
+                Parse($$"""{"v":1,"type":"action","id":"{{id}}","name":"playPause"}""");
+            Assert.False(result.Success);
+        }
+
+        [Theory]
+        [InlineData("00000000-0000-0000-0000-000000000000")] // nil
+        [InlineData("ffffffff-ffff-ffff-ffff-ffffffffffff")] // max
+        [InlineData("ABCDEF01-2345-4678-89AB-CDEF01234567")] // uppercase hex, valid v4
+        public void AcceptsEveryUuidFormZodAccepts(string id)
+        {
+            SidecarParseResult result =
+                Parse($$"""{"v":1,"type":"action","id":"{{id}}","name":"playPause"}""");
+            Assert.True(result.Success);
+        }
+
         [Fact]
         public void RejectsAMissingId()
         {
