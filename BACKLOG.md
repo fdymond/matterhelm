@@ -9,7 +9,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S0-1 | Verify & pin the bridge scaffold: in `bridge/`, `npm install` matter.js (`@matter/main`), zod, pino, tsx + the eslint/prettier/vitest toolchain; make `npm run verify` pass on the placeholder; pin exact versions | `npm run verify` output green in report; lockfile committed; versions listed | S | — | impl (Sonnet) |
+| S0-1 ✅ | Verify & pin the bridge scaffold: in `bridge/`, `npm install` matter.js (`@matter/main`), zod, pino, tsx + the eslint/prettier/vitest toolchain; make `npm run verify` pass on the placeholder; pin exact versions | `npm run verify` output green in report; lockfile committed; versions listed | S | — | impl (Sonnet) |
 | S0-2 | CI: GitHub Actions `verify` (bridge) on windows-latest + ubuntu-latest | Green run demonstrated | S | S0-1 | impl (Sonnet) |
 | S0-3 | **SPIKE** (re-scoped by ADR-002): with test VID/PID registered in a free Google Home Developer Console project + Nest hub on LAN, commission a minimal matter.js bridge (Speaker + one OnOff endpoint); verify Speaker volume UX (voice % + app slider) | Result documented in `docs/spikes/S0-3-pairing.md` with log evidence: console recipe, hub confirmation, Speaker UX verdict; **needs the human** for console signup + phone/Home-app steps | M | S0-1 | impl (Fable) + human |
 | S0-4 | **SPIKE**: momentary-switch UX — auto-reset 800 ms OnOff endpoint; verify Home-app taps and voice register cleanly; ALSO commission one Generic Switch endpoint and record app/routine surfacing (ADR-002) | Findings + chosen reset interval + Generic Switch verdict in `docs/spikes/S0-4-momentary.md` | S | S0-3 | impl (Fable) + human |
@@ -24,6 +24,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S1-3 | `matter/adapter.ts` + `bridge.ts` + `devices.ts`: Aggregator with Speaker, 3 momentary switches, power toggle; persisted storage in configurable dir | Manual: all endpoints visible in the Home app; storage survives restart (no re-pair) | L | S0-3, S0-4, S1-2 | impl (Fable) |
 | S1-4 | `ipc/client.ts`: WS client, token hello, jittered-backoff reconnect, graceful degradation when peer absent | Integration tests vs mock server: auth-reject closes, actions drop with one WARN when down, reconnect works (fake timers) | M | S1-1 | impl (Fable) |
 | S1-5 | `config.ts` + `index.ts` composition root + pino logging + `pairing` message emission; config incl. `mdnsInterface` (BLUEPRINT §2.1 Windows notes) | `npm start` runs the full bridge against a mock tray-app peer; README quick-start true | S | S1-3, S1-4 | impl (Sonnet) |
+| S1-6 | ESLint import-boundary enforcement per ENGINEERING-STANDARDS: `matter/` ↛ `ipc/` (and vice versa), `@matter/*` imports only in `matter/adapter.ts`, `ws`/socket types only behind `ipc/` (via `import-x/no-restricted-paths` or `no-restricted-imports`; add `eslint-import-resolver-typescript` only if needed) | Lint demonstrably fails on a violation (show output), then verify green | S | S1-3, S1-4 | impl (Sonnet) |
 | S1-R | Adversarial review of Sprint 1 (races, protocol drift, matter.js leakage past adapter, bloat) | Findings verified + fixed or explicitly waived | M | S1-5 | review (different model) |
 
 ## Sprint 2 — the tray application (`app/`)

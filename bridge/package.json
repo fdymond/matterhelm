@@ -4,7 +4,9 @@
   "private": true,
   "description": "Matter virtual-device bridge exposing a Windows HTPC (VoiceRemote) to Google Home",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -13,5 +15,22 @@
     "verify": "npm run typecheck && npm run lint && npm run test",
     "start": "tsx src/index.ts"
   },
-  "//": "Dependencies are intentionally empty: story S0-1 installs and PINS exact versions (@matter/main, zod, pino, and the ts/eslint/vitest toolchain) and records them in its report."
+  "dependencies": {
+    "@matter/main": "0.17.6",
+    "pino": "10.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "eslint": "10.8.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-import-x": "4.17.1",
+    "prettier": "3.9.6",
+    "tsx": "4.23.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.65.0",
+    "vitest": "4.1.10"
+  }
 }
