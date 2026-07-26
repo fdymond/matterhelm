@@ -1,0 +1,11 @@
+# Checkout as LF everywhere: prettier enforces LF, and CI runs on Windows
+# runners whose default autocrlf would otherwise fail the format check.
+* text=auto eol=lf
+
+# Windows-native files where CRLF is conventional
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.ico binary
+*.png binary
