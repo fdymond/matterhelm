@@ -41,10 +41,22 @@ support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
 
 ## Status
 
-**Phase: blueprint.** Research done (`docs/RESEARCH.md`), standalone design
-fixed (`docs/BLUEPRINT.md`, ADR-001), agile plan + agent-ready backlog written
-(`docs/DEVELOPMENT-PLAN.md`, `BACKLOG.md`). Sprint 0 starts with hardware
-spikes (pairing an uncertified bridge, momentary-switch UX).
+**Phase: Sprint 2 built, awaiting hardware spikes.** CI green on every commit
+(bridge verify on ubuntu+windows, app build+tests on windows).
+
+- **Bridge (`bridge/`)**: IPC protocol schemas (S1-1), pure mapping layer with
+  lossless volume round-trip (S1-2), and the reconnecting WS client (S1-4) are
+  done — 122 tests. The matter.js device model (S1-3) + composition root
+  (S1-5) are gated on the S0-3 hardware spike.
+- **Tray app (`app/`)**: fully built and wired (S0-5, S2-1…S2-5) — supervisor,
+  loopback IPC server, CoreAudio/media-key/display executor, click-through
+  overlay HUD, pairing-QR window, config + tray states. 126 tests; a mock-
+  sidecar E2E proves action→execute→overlay→ack and state publishing.
+  Adversarial review (S2-R) in progress.
+- **Next human step**: run `docs/spikes/S0-3-pairing.md` (needs a Nest hub, the
+  Google Home app, and a one-time free Developer Console project) to validate
+  pairing + Speaker volume UX, then S1-3/S1-5 close the loop for real
+  "Hey Google" control.
 
 ## Repository layout
 
