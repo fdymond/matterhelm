@@ -162,25 +162,27 @@ Factory reset for a re-run from scratch: stop the spike and delete
   `bridge/spike/spike-storage\`, remove any half-added device from the Home
   app, start over.
 
-## RESULTS (fill in during the run)
+## RESULTS (run of 2026-07-26; integrator-recorded from owner report + logs)
 
-Run date: ____ · Hub model/firmware: ____ · Phone/app version: ____
+Run date: 2026-07-26 · Hub: Google Nest hub · Phone/app version: not recorded
 
 | # | Command / step | Observed (terminal + app/voice response) | Verdict |
 | --- | ------------------------------------ | ---------------------------------------- | ------- |
-| C | Pairing (QR scan, uncertified consent screen) | | |
-| D1 | App volume slider | | |
-| D2 | Voice "set HTPC Speaker volume to 40 %" (expect level ≈ 102/254) | | |
-| D3 | Mute via app | | |
-| D4 | Mute/unmute via voice | | |
-| D5 | Voice "turn on/off HTPC Play Pause" | | |
-| D6 | App tile tap (Play Pause) | | |
-| E | Restart → no re-pair needed | | |
-| — | **Hub requirement confirmed?** (pairing attempted with hub off/absent, or setup flow demanded one) | | |
+| C | Pairing (QR scan, uncertified consent screen) | Owner completed pairing via the Dev Console recipe; storage gained `commissionedFabrics`, root certs, and a session-resumption record (fabric id <fabric id>) — operational CASE session was established | **PASS** |
+| D1–D6 | Validation script | Not executed on the spike: the owner's spike session was terminated before validation (integrator process-kill error) and the hub did not reconnect afterwards (see below). Validation moved to the product bridge after S1-5 landed the same day. | **MOVED → product E2E** |
+| E | Restart → no re-pair needed | Relaunch printed `SPIKE already commissioned — storage persisted, no re-pairing needed.`; identical passcode/discriminator across restarts | **PASS** |
+| — | **Hub requirement confirmed?** | Not falsified by test (no hub-off attempt); ADR-002's docs-based answer stands. Hub used: Nest hub. | Docs-confirmed |
+| — | **Hub reconnection after abrupt bridge death** | After the spike process was force-killed and relaunched (same identity, advertising operational mDNS every ~90 s, port open, firewall allowed), the Nest hub made **zero** reconnection attempts in >60 min; device stayed "offline" in the Home app | **FAIL — carried as product risk** |
 
-**Console recipe notes** (any UI steps that differed from Part A):
+**Console recipe notes** (any UI steps that differed from Part A): none reported.
 
 **Speaker UX verdict** (S0-3 acceptance — does Google surface volume % voice +
-slider on a bridged Speaker endpoint?):
+slider on a bridged Speaker endpoint?): **pending — validated on the product
+bridge** (same Speaker device type; results to be logged in docs/e2e-log.md).
 
 **Other observations / proposed backlog items**:
+- Hub-reconnect failure above → E2E must test app-restart recovery on the
+  product bridge; if reproduced, investigate (mDNS TTLs? hub needs the device
+  to initiate? subscription re-establishment) and consider a backlog story.
+- Pairing recipe (free Dev Console project + test VID 0xFFF1/PID 0x8000)
+  confirmed working end-to-end on real hardware — ADR-002's gate is accurate.
