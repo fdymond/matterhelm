@@ -1,0 +1,78 @@
+# Development plan
+
+Agile delivery plan tuned for **AI sub-agent orchestration**: small,
+independently verifiable stories; explicit contracts between parallel work;
+evidence-based acceptance. Process weight is deliberately minimal — everything
+here exists to raise code quality, not to perform ceremony.
+
+## Method
+
+- **Iterations**: 4 short sprints (0–3), each ending in something demonstrable.
+  Sprint scope is fixed by the backlog; discoveries create new stories, they do
+  not silently expand old ones.
+- **Trunk-based**: `main` is always green. Work lands as small, reviewed
+  increments (agent worktrees → integrator merges). Conventional Commits
+  (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`).
+- **Definition of Ready** (story may be delegated): acceptance criteria are
+  testable, file ownership is disjoint from concurrently running stories,
+  dependencies listed in BACKLOG are done.
+- **Definition of Done** (story may be merged):
+  1. Acceptance criteria demonstrated with **command output or test results in
+     the report** — claims without evidence are not done.
+  2. `npm run verify` green (lint + typecheck + tests) with **zero warnings**.
+  3. New/changed protocol or design decisions recorded (protocol.ts comments,
+     or an ADR for architecture changes).
+  4. No TODOs without a linked backlog story; no dead code; docs touched if
+     behavior changed.
+- **Reviews**: every implementation story gets an adversarial review pass by a
+  second agent (different model preferred) hunting for correctness, races,
+  protocol drift, and bloat — findings verified before fixing (no
+  plausible-but-wrong churn).
+- **ADRs**: any deviation from BLUEPRINT.md needs a one-page ADR in `docs/adr/`
+  (`NNN-title.md`: context, decision, consequences). The blueprint stays the
+  single source of truth.
+- **Spikes before product code**: the two riskiest assumptions (hub
+  requirement, momentary UX) are validated on real hardware in Sprint 0. A
+  failed spike re-plans the project *cheaply* instead of sinking a build.
+
+## Quality gates (`npm run verify`, enforced in CI)
+
+| Gate | Tool | Bar |
+|---|---|---|
+| Types | `tsc --noEmit` strict | 0 errors |
+| Lint/format | ESLint (+ Prettier check) | 0 warnings |
+| Unit tests | Vitest | green; `mapping/` + `ipc/protocol` ≥ 90 % line coverage (pure logic — no excuse) |
+| Integration | Vitest + mock WS peer | protocol round-trips, reconnect, auth-reject |
+| Perf budget | manual per release | idle CPU < 0.5 %, RSS < 80 MB, cold start < 3 s |
+| E2E | manual, scripted checklist | pairing + each voice action on real Google Home hardware, results logged in `docs/e2e-log.md` |
+
+CI: GitHub Actions on push/PR — `npm ci && npm run verify` on
+`windows-latest` + `ubuntu-latest` (protocol/mapping logic is OS-neutral;
+Windows job catches platform drift).
+
+## Sprints
+
+### Sprint 0 — foundations & de-risking
+Scaffold verified (deps installed & pinned, verify pipeline green), CI up, and
+the two hardware spikes answered. **Exit demo**: a minimal OnOff virtual device
+paired with the real Google Home; documented answer to the hub question.
+
+### Sprint 1 — the bridge, properly
+Full device model (Speaker + momentary switches + power), IPC client with auth
++ reconnect, pure mapping layer, persisted commissioning. All logic unit-tested
+against a **mock VoiceRemote** WS peer. **Exit demo**: "Hey Google, set HTPC
+volume to 40 %" reaches the mock peer as `{"type":"action","name":"setVolume","value":40}`.
+
+### Sprint 2 — VoiceRemote integration (C# side, in ../windows-voice-control)
+Supervisor, WS server, CommandRouter dispatch, state publisher, tray toggle +
+pairing-QR UX, config. **Exit demo**: end-to-end voice → Google → sidecar →
+router → media actually pauses; volume slider in Home app tracks reality.
+
+### Sprint 3 — hardening & ship
+SEA packaging, crash/restart chaos pass, unpair/re-pair flows, docs (user
+setup guide), version 0.1.0 release artifacts integrated into VoiceRemote's
+build.sh. **Exit demo**: clean machine → copy dist → enable bridge → pair →
+control, no dev tools involved.
+
+The story-level backlog with sizes, dependencies, and suggested agent/model per
+story lives in [`../BACKLOG.md`](../BACKLOG.md).

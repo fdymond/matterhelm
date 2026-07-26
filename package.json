@@ -1,0 +1,17 @@
+{
+  "name": "windows-google-home-matter",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Matter virtual-device bridge exposing a Windows HTPC (VoiceRemote) to Google Home",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0 && prettier --check .",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm run test",
+    "start": "tsx src/index.ts"
+  },
+  "//": "Dependencies are intentionally empty: story S0-1 installs and PINS exact versions (@matter/main, zod, pino, and the ts/eslint/vitest toolchain) and records them in its report."
+}
