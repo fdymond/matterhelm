@@ -24,7 +24,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S1-3 ✅ (Home-app endpoint visibility validated at integration; S0-4 interval kept at 800 ms pending spike) | `matter/adapter.ts` + `bridge.ts` + `devices.ts`: Aggregator with Speaker, 3 momentary switches, power toggle; persisted storage in configurable dir | Manual: all endpoints visible in the Home app; storage survives restart (no re-pair) | L | S0-3, S0-4, S1-2 | impl (Fable) |
 | S1-4 ✅ | `ipc/client.ts`: WS client, token hello, jittered-backoff reconnect, graceful degradation when peer absent | Integration tests vs mock server: auth-reject closes, actions drop with one WARN when down, reconnect works (fake timers) | M | S1-1 | impl (Fable) |
 | S1-5 ✅ (full bridge ran vs mock tray peer: hello/pairing/state + tether shutdown) | `config.ts` + `index.ts` composition root + pino logging + `pairing` message emission; config incl. `mdnsInterface` (BLUEPRINT §2.1 Windows notes) | `npm start` runs the full bridge against a mock tray-app peer; README quick-start true | S | S1-3, S1-4 | impl (Sonnet) |
-| S1-6 | ESLint import-boundary enforcement per ENGINEERING-STANDARDS: `matter/` ↛ `ipc/` (and vice versa), `@matter/*` imports only in `matter/adapter.ts`, `ws`/socket types only behind `ipc/` (via `import-x/no-restricted-paths` or `no-restricted-imports`; add `eslint-import-resolver-typescript` only if needed) | Lint demonstrably fails on a violation (show output), then verify green | S | S1-3, S1-4 | impl (Sonnet) |
+| S1-6 ✅ (violations demonstrably fail; resolver dep required and pinned) | ESLint import-boundary enforcement per ENGINEERING-STANDARDS: `matter/` ↛ `ipc/` (and vice versa), `@matter/*` imports only in `matter/adapter.ts`, `ws`/socket types only behind `ipc/` (via `import-x/no-restricted-paths` or `no-restricted-imports`; add `eslint-import-resolver-typescript` only if needed) | Lint demonstrably fails on a violation (show output), then verify green | S | S1-3, S1-4 | impl (Sonnet) |
 | S1-R | Adversarial review of Sprint 1 (races, protocol drift, matter.js leakage past adapter, bloat) | Findings verified + fixed or explicitly waived | M | S1-5 | review (different model) |
 
 ## Sprint 2 — the tray application (`app/`)
@@ -49,6 +49,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 ## Proposed (from agent reports, integrator-triaged)
 
 - ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.
+- **P-4**: tether robustness — when the tray app is hard-killed (not menu Exit), the sidecar was observed surviving ≥4s; index.ts listens for stdin "end"/"close" but a broken pipe may surface as "error". Add "error" handling + an S1-R check.
 - **P-2**: additive protocol signal for commissioned/uncommissioned so tray green can mean "fabric joined" rather than "sidecar link up" (needs `v` bump, both sides).
 - **P-3**: "Factory reset bridge" tray action (delete matter storage; BLUEPRINT §2.5) — schedule with S3-2 unpair flow.
 
