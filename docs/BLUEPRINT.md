@@ -69,6 +69,28 @@ bridge/src/
 Rules: `matter/` never imports `ipc/`; they meet in `index.ts` through
 `mapping/` pure functions. matter.js types stay behind `matter/adapter.ts`.
 
+matter.js facts fixed by integrator research 2026-07-26 (repo is now
+`matter-js/matter.js` under the Open Home Foundation):
+
+- Pin `@matter/main@0.17.6`; engines floor is Node **≥ 22.13** (22.0–22.12
+  excluded). Never depend on `@matter/nodejs-ble` (native bindings, broken on
+  Windows, not needed — the phone/hub does BLE commissioning).
+- Confirmed pattern: `ServerNode.create(...)` → `new Endpoint(AggregatorEndpoint)`
+  → `aggregator.add(new Endpoint(SpeakerDevice.with(BridgedDeviceBasicInformationServer), {...}))`;
+  imports from `@matter/main/devices/*`, `@matter/main/endpoints/aggregator`,
+  `@matter/main/behaviors/bridged-device-basic-information`.
+- Storage dir set programmatically via `Environment.default.vars.set("storage.path", dir)`
+  before `ServerNode.create`.
+- Pairing codes: `server.state.commissioning.pairingCodes` (`qrPairingCode`,
+  `manualPairingCode`) — only after start, else it throws. **Limitation**: a
+  fresh code for adding a second controller post-commissioning is an open
+  upstream feature request; our re-pairing story is factory-reset → pair anew.
+- Windows networking: **IPv6 must be enabled** on the NIC (hard matter.js
+  requirement even LAN-only); multi-NIC hosts need the mDNS interface pinned —
+  config exposes `mdnsInterface` (maps to `mdns.networkInterface`), default
+  auto-detect primary LAN adapter. Firewall must allow UDP 5353 + UDP/TCP 5540
+  for the sidecar (Defender prompts on first run; documented in user guide).
+
 ### 2.2 Matter device model
 
 One **Aggregator (bridge)** node exposing:
@@ -168,7 +190,13 @@ Sprint-2 stories implement those choices, they don't reopen them.
 ### 2.6 Packaging
 
 - `bridge/`: Node SEA single exe (`npm run package`) — no Node install for end
-  users. Fallback documented via ADR if SEA × matter.js hits friction.
+  users. Research 2026-07-26: no native addons or worker_threads in the
+  `@matter/*` chain, and npm ships esbuild-built CJS (`dist/cjs`) — so the
+  route is esbuild-bundle (from CJS output, `--format=cjs --platform=node`)
+  → SEA blob → postject, on Node ≥ 22.13. Unproven in the wild: S3-1 smoke-
+  tests a real commissioning handshake from the packaged exe first. Fallback
+  (no ADR needed, pre-approved): ship official `node.exe` beside the esbuild
+  bundle — the tray app launches it either way.
 - `app/`: `dotnet publish` self-contained single-file win-x64 (WinForms — no
   trimming), bundling the sidecar exe beside it.
 - One dist folder ships both; one `build.ps1` at repo root produces it.
