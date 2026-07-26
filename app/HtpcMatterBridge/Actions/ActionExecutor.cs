@@ -1,0 +1,62 @@
+namespace HtpcMatterBridge.Actions;
+
+/// <summary>
+/// Single dispatch point mapping protocol action names onto Windows side effects.
+/// Never throws: every failure is logged and reported as <c>false</c> so the caller
+/// can nack the IPC frame without the tray app crashing.
+/// </summary>
+public sealed class ActionExecutor : IDisposable
+{
+    private readonly SystemVolume _systemVolume = new();
+    private readonly DisplayPower _displayPower = new();
+
+    /// <summary>Volume component, exposed so callers can read state and subscribe to change events.</summary>
+    public SystemVolume Volume => _systemVolume;
+
+    /// <summary>
+    /// Executes the named action. <paramref name="value"/> carries the payload for value
+    /// actions: <c>int</c> 0–100 for <c>setVolume</c>, <c>bool</c> for <c>setMuted</c>.
+    /// </summary>
+    public bool Execute(string name, object? value = null)
+    {
+        try
+        {
+            switch (name)
+            {
+                case "playPause":
+                    return MediaKeys.PlayPause();
+                case "next":
+                    return MediaKeys.NextTrack();
+                case "previous":
+                    return MediaKeys.PreviousTrack();
+                case "setVolume" when value is int percent:
+                    _systemVolume.SetVolumePercent(percent);
+                    return true;
+                case "setMuted" when value is bool muted:
+                    _systemVolume.SetMuted(muted);
+                    return true;
+                // For now power maps straight to the displays; S2-4 layers the
+                // configurable powerOff behavior (displays off vs. sleep) on top.
+                case "powerOn":
+                    return _displayPower.WakeDisplays();
+                case "powerOff":
+                    return _displayPower.DisplaysOff();
+                default:
+                    Log.Warn($"ActionExecutor: unknown or malformed action '{name}' (value: {value ?? "none"}).");
+                    return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"ActionExecutor: action '{name}' failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Disposes the volume observer and the display-power window.</summary>
+    public void Dispose()
+    {
+        _systemVolume.Dispose();
+        _displayPower.Dispose();
+    }
+}
