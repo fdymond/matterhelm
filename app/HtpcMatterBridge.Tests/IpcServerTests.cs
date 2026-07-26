@@ -131,7 +131,12 @@ public sealed class IpcServerTests
         await AssertClosedAsync(client);
         await TestSupport.WaitUntilAsync(() => !server.HasClient, TimeSpan.FromSeconds(5), "client teardown");
         Assert.False(actionFired);
-        Assert.True(capture.Contains("WARN", "invalid frame"), "expected a WARN naming the rejection");
+        // The server logs on its own thread; the client can observe the close
+        // before the WARN lands in the capture — wait, don't assert instantly.
+        await TestSupport.WaitUntilAsync(
+            () => capture.Contains("WARN", "invalid frame"),
+            TimeSpan.FromSeconds(5),
+            "WARN naming the rejection");
     }
 
     [Fact]
@@ -145,7 +150,12 @@ public sealed class IpcServerTests
         using ClientWebSocket client = await ConnectAsync(port);
         // Send nothing; the server must give up on its own.
         await AssertClosedAsync(client);
-        Assert.True(capture.Contains("WARN", "no hello frame within timeout"), "expected a WARN about the timeout");
+        // Same server-thread logging race as above: the close can reach the
+        // client before the WARN reaches the capture (seen on CI runners).
+        await TestSupport.WaitUntilAsync(
+            () => capture.Contains("WARN", "no hello frame within timeout"),
+            TimeSpan.FromSeconds(5),
+            "WARN about the hello timeout");
     }
 
     [Fact]
