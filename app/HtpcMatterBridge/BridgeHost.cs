@@ -127,6 +127,10 @@ public sealed class BridgeHost : IDisposable
     private BridgeState _state = BridgeState.Disabled;
     private bool _disposed;
 
+    /// <summary>Serializes StateChanged delivery; see RecomputeState. Never taken while holding _gate.</summary>
+    private readonly object _notifyGate = new();
+    private BridgeState _notifiedState = BridgeState.Disabled;
+
     /// <summary>Creates the host (nothing starts until <see cref="SetEnabled"/>).</summary>
     /// <param name="config">Live config; <c>ipcPort</c>/<c>logLevel</c> are read at each enable, <c>overlayEnabled</c>/<c>powerOffAction</c> per action.</param>
     /// <param name="executor">Action executor seam; production passes <see cref="ActionExecutorAdapter"/>.</param>
@@ -511,18 +515,39 @@ public sealed class BridgeHost : IDisposable
 
     private void RecomputeState()
     {
-        BridgeState newState;
         lock (_gate)
         {
-            newState = DeriveState(_running, _clientAuthenticated, _restartsSinceAuth);
-            if (newState == _state)
+            BridgeState derived = DeriveState(_running, _clientAuthenticated, _restartsSinceAuth);
+            if (derived == _state)
             {
                 return;
             }
 
-            _state = newState;
+            _state = derived;
         }
 
-        StateChanged?.Invoke(this, newState);
+        // Notifications are serialized under their own gate and always carry
+        // the LATEST state, re-read after acquiring it: two threads racing
+        // through the assignment above could otherwise deliver A-then-B while
+        // the true state is A, pinning the tray icon on a stale color (S2-R
+        // finding 2). A thread that arrives after its update was already
+        // reported by a peer skips the duplicate. Handlers marshal via
+        // BeginInvoke, so holding _notifyGate across Invoke cannot deadlock.
+        lock (_notifyGate)
+        {
+            BridgeState latest;
+            lock (_gate)
+            {
+                latest = _state;
+            }
+
+            if (latest == _notifiedState)
+            {
+                return;
+            }
+
+            _notifiedState = latest;
+            StateChanged?.Invoke(this, latest);
+        }
     }
 }
