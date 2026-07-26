@@ -20,6 +20,14 @@ internal static class Program
             return;
         }
 
+        // S2-3 acceptance demo: objectively prove the overlay HUD never
+        // steals focus or blocks clicks. Not part of the production tray flow.
+        if (args.Contains("--demo-overlay"))
+        {
+            Environment.ExitCode = Ui.OverlayHudDemo.Run();
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, name: MutexName, createdNew: out bool createdNew);
         if (!createdNew)
         {
