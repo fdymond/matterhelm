@@ -1,0 +1,400 @@
+using HtpcMatterBridge.Sidecar;
+using Xunit;
+
+namespace HtpcMatterBridge.Tests;
+
+/// <summary>
+/// Specification tests for <see cref="Protocol"/>, ported case-for-case from
+/// <c>bridge/src/ipc/protocol.test.ts</c> so both sides of the wire enforce
+/// the identical contract. Sidecar-direction cases test
+/// <see cref="Protocol.ParseSidecarFrame"/>; tray-direction cases (ack/state)
+/// test <see cref="Protocol.Serialize"/> and the record invariants.
+/// </summary>
+public static class ProtocolTests
+{
+    private const string Uuid1 = "123e4567-e89b-12d3-a456-426614174000";
+
+    private static SidecarParseResult Parse(string json) => Protocol.ParseSidecarFrame(json);
+
+    public sealed class VersionConstants
+    {
+        [Fact]
+        public void ProtocolVersionIs1()
+        {
+            Assert.Equal(1, Protocol.Version);
+            Assert.Equal(1, Protocol.HandshakeProtocol);
+        }
+    }
+
+    public sealed class HelloFrames
+    {
+        [Fact]
+        public void AcceptsAWellFormedHelloFrame()
+        {
+            SidecarParseResult result = Parse("""{"v":1,"type":"hello","token":"session-token","protocol":1}""");
+            Assert.True(result.Success);
+            HelloFrame hello = Assert.IsType<HelloFrame>(result.Frame);
+            Assert.Equal("session-token", hello.Token);
+        }
+
+        [Fact]
+        public void RejectsAnEmptyToken()
+        {
+            SidecarParseResult result = Parse("""{"v":1,"type":"hello","token":"","protocol":1}""");
+            Assert.False(result.Success);
+            Assert.Contains("token", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAMissingVField()
+        {
+            SidecarParseResult result = Parse("""{"type":"hello","token":"session-token","protocol":1}""");
+            Assert.False(result.Success);
+            Assert.Contains("v", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAVFieldFromAFutureRevision()
+        {
+            Assert.False(Parse("""{"v":2,"type":"hello","token":"session-token","protocol":1}""").Success);
+        }
+
+        [Fact]
+        public void RejectsTheWrongTypeDiscriminator()
+        {
+            // hello fields under type "action" must not parse as anything.
+            Assert.False(Parse("""{"v":1,"type":"action","token":"session-token","protocol":1}""").Success);
+        }
+
+        [Fact]
+        public void RejectsAProtocolFieldOtherThan1()
+        {
+            SidecarParseResult result = Parse("""{"v":1,"type":"hello","token":"session-token","protocol":2}""");
+            Assert.False(result.Success);
+            Assert.Contains("protocol", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsUnknownExtraKeysStrictBoundary()
+        {
+            SidecarParseResult result =
+                Parse("""{"v":1,"type":"hello","token":"session-token","protocol":1,"extra":"nope"}""");
+            Assert.False(result.Success);
+            Assert.Contains("extra", result.Reason, StringComparison.Ordinal);
+        }
+    }
+
+    public sealed class BareActionFrames
+    {
+        public static TheoryData<string, BareActionName> BareNames => new()
+        {
+            { "playPause", BareActionName.PlayPause },
+            { "next", BareActionName.Next },
+            { "previous", BareActionName.Previous },
+            { "powerOn", BareActionName.PowerOn },
+            { "powerOff", BareActionName.PowerOff },
+        };
+
+        [Theory]
+        [MemberData(nameof(BareNames))]
+        public void AcceptsAWellFormedBareAction(string name, BareActionName expected)
+        {
+            SidecarParseResult result = Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"{{name}}"}""");
+            Assert.True(result.Success);
+            BareActionFrame action = Assert.IsType<BareActionFrame>(result.Frame);
+            Assert.Equal(expected, action.Name);
+            Assert.Equal(Guid.Parse(Uuid1), action.Id);
+        }
+
+        [Theory]
+        [InlineData("playPause")]
+        [InlineData("next")]
+        [InlineData("previous")]
+        [InlineData("powerOn")]
+        [InlineData("powerOff")]
+        public void RejectsABareActionCarryingAnUnexpectedValueField(string name)
+        {
+            SidecarParseResult result =
+                Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"{{name}}","value":1}""");
+            Assert.False(result.Success);
+            Assert.Contains("value", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAnUnknownActionName()
+        {
+            SidecarParseResult result = Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"rewind"}""");
+            Assert.False(result.Success);
+            Assert.Contains("rewind", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAMalformedUuidInId()
+        {
+            Assert.False(Parse("""{"v":1,"type":"action","id":"not-a-uuid","name":"playPause"}""").Success);
+        }
+
+        [Fact]
+        public void RejectsAMissingId()
+        {
+            Assert.False(Parse("""{"v":1,"type":"action","name":"playPause"}""").Success);
+        }
+
+        [Fact]
+        public void RejectsAWrongVField()
+        {
+            Assert.False(Parse($$"""{"v":2,"type":"action","id":"{{Uuid1}}","name":"playPause"}""").Success);
+        }
+
+        [Fact]
+        public void RejectsUnknownExtraKeysStrictBoundary()
+        {
+            Assert.False(
+                Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"playPause","extra":"nope"}""").Success);
+        }
+    }
+
+    public sealed class SetVolumeFrames
+    {
+        [Theory]
+        [InlineData(0)]
+        [InlineData(40)]
+        [InlineData(100)]
+        public void AcceptsInRangeVolumesIncludingBoundaries(int value)
+        {
+            SidecarParseResult result =
+                Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setVolume","value":{{value}}}""");
+            Assert.True(result.Success);
+            SetVolumeFrame frame = Assert.IsType<SetVolumeFrame>(result.Frame);
+            Assert.Equal(value, frame.Value);
+        }
+
+        [Fact]
+        public void RejectsAMissingValueField()
+        {
+            SidecarParseResult result = Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setVolume"}""");
+            Assert.False(result.Success);
+            Assert.Contains("value", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("-1")]
+        [InlineData("101")]
+        [InlineData("100.5")]
+        [InlineData("\"40\"")]
+        public void RejectsOutOfRangeFractionalAndStringVolumes(string rawValue)
+        {
+            Assert.False(
+                Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setVolume","value":{{rawValue}}}""").Success);
+        }
+    }
+
+    public sealed class SetMutedFrames
+    {
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void AcceptsAWellFormedSetMutedAction(bool value)
+        {
+            SidecarParseResult result = Parse(
+                $$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setMuted","value":{{(value ? "true" : "false")}}}""");
+            Assert.True(result.Success);
+            SetMutedFrame frame = Assert.IsType<SetMutedFrame>(result.Frame);
+            Assert.Equal(value, frame.Value);
+        }
+
+        [Fact]
+        public void RejectsAMissingValueField()
+        {
+            Assert.False(Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setMuted"}""").Success);
+        }
+
+        [Theory]
+        [InlineData("\"true\"")]
+        [InlineData("1")]
+        public void RejectsNonBooleanValues(string rawValue)
+        {
+            Assert.False(
+                Parse($$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setMuted","value":{{rawValue}}}""").Success);
+        }
+    }
+
+    public sealed class PairingFrames
+    {
+        [Fact]
+        public void AcceptsAWellFormedPairingFrame()
+        {
+            SidecarParseResult result = Parse(
+                """{"v":1,"type":"pairing","qrPayload":"MT:Y.K9042C00KA0648G00","manualCode":"3497-011-2332"}""");
+            Assert.True(result.Success);
+            PairingFrame pairing = Assert.IsType<PairingFrame>(result.Frame);
+            Assert.Equal("MT:Y.K9042C00KA0648G00", pairing.QrPayload);
+            Assert.Equal("3497-011-2332", pairing.ManualCode);
+        }
+
+        [Fact]
+        public void RejectsAQrPayloadMissingTheMtPrefix()
+        {
+            SidecarParseResult result = Parse(
+                """{"v":1,"type":"pairing","qrPayload":"Y.K9042C00KA0648G00","manualCode":"3497-011-2332"}""");
+            Assert.False(result.Success);
+            Assert.Contains("MT:", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAQrPayloadWithALowercaseMtPrefix()
+        {
+            Assert.False(Parse(
+                """{"v":1,"type":"pairing","qrPayload":"mt:Y.K9042C00KA0648G00","manualCode":"3497-011-2332"}""").Success);
+        }
+
+        [Fact]
+        public void RejectsAnEmptyManualCode()
+        {
+            Assert.False(
+                Parse("""{"v":1,"type":"pairing","qrPayload":"MT:Y.K9042C00KA0648G00","manualCode":""}""").Success);
+        }
+
+        [Fact]
+        public void RejectsAMissingQrPayload()
+        {
+            Assert.False(Parse("""{"v":1,"type":"pairing","manualCode":"3497-011-2332"}""").Success);
+        }
+
+        [Fact]
+        public void RejectsTheWrongTypeDiscriminator()
+        {
+            Assert.False(Parse(
+                """{"v":1,"type":"hello","qrPayload":"MT:Y.K9042C00KA0648G00","manualCode":"3497-011-2332"}""").Success);
+        }
+
+        [Fact]
+        public void RejectsUnknownExtraKeysStrictBoundary()
+        {
+            Assert.False(Parse(
+                """{"v":1,"type":"pairing","qrPayload":"MT:Y.K9042C00KA0648G00","manualCode":"3497-011-2332","extra":"nope"}""").Success);
+        }
+    }
+
+    public sealed class TrustBoundary
+    {
+        [Fact]
+        public void RejectsTrayOnlyFrameTypes()
+        {
+            SidecarParseResult state = Parse("""{"v":1,"type":"state","volume":40,"muted":false}""");
+            Assert.False(state.Success);
+            Assert.Contains("tray-only", state.Reason, StringComparison.Ordinal);
+
+            SidecarParseResult ack = Parse($$"""{"v":1,"type":"ack","id":"{{Uuid1}}","ok":true}""");
+            Assert.False(ack.Success);
+            Assert.Contains("tray-only", ack.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAnUnknownFrameType()
+        {
+            SidecarParseResult result = Parse("""{"v":1,"type":"telemetry"}""");
+            Assert.False(result.Success);
+            Assert.Contains("telemetry", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("\"not a frame\"")]
+        [InlineData("null")]
+        [InlineData("42")]
+        [InlineData("[]")]
+        public void RejectsNonObjectInput(string json)
+        {
+            SidecarParseResult result = Parse(json);
+            Assert.False(result.Success);
+            Assert.Contains("object", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void RejectsAnEmptyObject()
+        {
+            Assert.False(Parse("{}").Success);
+        }
+
+        [Fact]
+        public void RejectsInvalidJsonWithAReason()
+        {
+            SidecarParseResult result = Parse("this is {{ not json");
+            Assert.False(result.Success);
+            Assert.Contains("JSON", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void EveryRejectionSurfacesANonEmptyReason()
+        {
+            string[] invalid =
+            [
+                "not json",
+                "null",
+                "{}",
+                """{"v":1,"type":"hello","token":"","protocol":1}""",
+                $$"""{"v":1,"type":"action","id":"{{Uuid1}}","name":"setVolume","value":101}""",
+                """{"v":1,"type":"pairing","qrPayload":"nope","manualCode":"1"}""",
+            ];
+            foreach (string json in invalid)
+            {
+                SidecarParseResult result = Parse(json);
+                Assert.False(result.Success);
+                Assert.False(string.IsNullOrWhiteSpace(result.Reason));
+            }
+        }
+    }
+
+    public sealed class TrayFrameSerialization
+    {
+        [Fact]
+        public void SerializesAnOkAckWithNoErrorField()
+        {
+            string json = Protocol.Serialize(new AckOkFrame(Guid.Parse(Uuid1)));
+            Assert.Equal($$"""{"v":1,"type":"ack","id":"{{Uuid1}}","ok":true}""", json);
+        }
+
+        [Fact]
+        public void OkAcksCannotCarryAnErrorEvenByConstruction()
+        {
+            // The ok/fail split mirrors protocol.ts's discriminated union on
+            // `ok`: AckOkFrame has no error member at all, so the invalid
+            // "ok:true plus error" shape is unrepresentable. Assert the wire
+            // form stays clean.
+            string json = Protocol.Serialize(new AckOkFrame(Guid.Parse(Uuid1)));
+            Assert.DoesNotContain("error", json, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void SerializesAFailedAckWithAnErrorString()
+        {
+            string json = Protocol.Serialize(new AckFailFrame(Guid.Parse(Uuid1), "socket disconnected"));
+            Assert.Equal($$"""{"v":1,"type":"ack","id":"{{Uuid1}}","ok":false,"error":"socket disconnected"}""", json);
+        }
+
+        [Fact]
+        public void OmitsErrorOnAFailedAckWithoutContext()
+        {
+            string json = Protocol.Serialize(new AckFailFrame(Guid.Parse(Uuid1)));
+            Assert.Equal($$"""{"v":1,"type":"ack","id":"{{Uuid1}}","ok":false}""", json);
+        }
+
+        [Theory]
+        [InlineData(0, true)]
+        [InlineData(40, false)]
+        [InlineData(100, true)]
+        public void SerializesStateFramesIncludingBoundaryVolumes(int volume, bool muted)
+        {
+            string json = Protocol.Serialize(new StateFrame(volume, muted));
+            Assert.Equal($$"""{"v":1,"type":"state","volume":{{volume}},"muted":{{(muted ? "true" : "false")}}}""", json);
+        }
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(101)]
+        public void StateFrameConstructionRejectsOutOfRangeVolume(int volume)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new StateFrame(volume, muted: false));
+        }
+    }
+}
