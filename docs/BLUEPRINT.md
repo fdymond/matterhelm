@@ -121,7 +121,19 @@ Endpoint names are user-configurable — they are the Google voice targets.
 
 Bound to `127.0.0.1` only. The tray app generates a random token per session
 and passes it to the child via environment variable; the first frame must be a
-valid `hello` or the socket closes. One JSON object per message; additive
+valid `hello` or the socket closes.
+
+Environment contract (tray app → sidecar child; fixed here so S1-5 and S2-1
+implement the same names):
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `HTPC_BRIDGE_IPC_PORT` | loopback WS port the tray app listens on | `39531` |
+| `HTPC_BRIDGE_IPC_TOKEN` | per-session auth token for `hello` | required, no default |
+| `HTPC_BRIDGE_STORAGE_DIR` | matter.js `storage.path` | `%APPDATA%\HtpcMatterBridge\matter` |
+| `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
+
+The token is never logged and never persisted (either side). One JSON object per message; additive
 evolution via `v`, breaking changes bump `protocol` in `hello`.
 
 Sidecar → tray app:
