@@ -153,6 +153,11 @@ House style: mirrors proven WinForms tray-app patterns (XML doc summaries,
 `SynchronizationContext`, P/Invoke over dependencies) — written fresh here,
 zero code imported from other repos.
 
+Concrete native techniques (WS server prefix, CoreAudio interop rules,
+SendInput-not-SMTC, message-only window for SC_MONITORPOWER, layered-window
+rules, QRCoder as the one NuGet, publish flags) are fixed by **ADR-003** —
+Sprint-2 stories implement those choices, they don't reopen them.
+
 ### 2.5 Persistence & lifecycle
 
 - Matter fabric/commissioning state: `%APPDATA%\HtpcMatterBridge\matter\`
