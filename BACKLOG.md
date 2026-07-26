@@ -35,7 +35,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S2-2 ✅ | `Actions/`: `ActionExecutor` + `MediaKeys` (SendInput VK_MEDIA_*) + `SystemVolume` (CoreAudio get/set/observe with change events) + `DisplayPower` | Manual demo: each action works on real media; volume observation fires state updates | M | S0-5 | impl (Fable) |
 | S2-3 ✅ | `Ui/OverlayHud.cs`: persistent click-through non-activating flash window — primary line = incoming command ("Google Home → volume 40 %"), pill = executed action/failure; updates in place, fades; toggleable + persisted | Manual demo incl. rapid-fire updates without flicker; never steals focus or blocks clicks | M | S0-5 | impl (Sonnet) |
 | S2-4 ✅ (pair-to-green + Home-app name checks deferred to hardware E2E) | `Ui/PairingWindow.cs` (QR rendered locally from `qrPayload` + manual code) + tray states (gray/green/amber/red) + full menu + `Config.cs` (device names, port, power mapping, overlay toggle) + Reload | Manual: enable → pair → green; names from config appear in Home app after re-pair; reload applies without restart | M | S2-1 | impl (Sonnet) |
-| S2-5 | Wire it: IpcServer actions → executor → overlay flash → ack; state publisher (volume/mute on connect + on change) | **Exit demo evidence**: "Hey Google…" pauses real media; overlay flashes; Home-app slider tracks local volume change | M | S2-1, S2-2, S2-3, S2-4 | impl (Fable) |
+| S2-5 ✅ (mock-sidecar E2E PASS; "Hey Google" hop deferred to hardware E2E) | Wire it: IpcServer actions → executor → overlay flash → ack; state publisher (volume/mute on connect + on change) | **Exit demo evidence**: "Hey Google…" pauses real media; overlay flashes; Home-app slider tracks local volume change | M | S2-1, S2-2, S2-3, S2-4 | impl (Fable) |
 | S2-R | Adversarial review of Sprint 2 (thread marshalling, supervisor races, P/Invoke correctness, protocol drift vs bridge) | Findings verified + fixed | M | S2-5 | review |
 
 ## Sprint 3 — hardening & ship
@@ -45,6 +45,12 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S3-1 | Node SEA single-exe (`npm run package`) + `dotnet publish` self-contained app + root `build.ps1` producing one dist folder; ADR if SEA infeasible | Clean-machine run of the packaged dist pairs & controls; sizes reported | L | S2-R | impl (Fable) |
 | S3-2 | Unpair / factory-reset flow (tray action deletes matter storage) + `docs/user-guide.md` | Scripted E2E checklist executed & logged in `docs/e2e-log.md` | M | S3-1 | impl (Sonnet) |
 | S3-3 | Perf/budget pass (BLUEPRINT G6) + `npm audit` clean + release 0.1.0 | Budget table meets G6; tagged release | S | S3-2 | impl (Sonnet) |
+
+## Proposed (from agent reports, integrator-triaged)
+
+- **P-1**: SidecarSupervisor must pass `HTPC_BRIDGE_DEVICE_NAMES` + `HTPC_BRIDGE_MDNS_INTERFACE` env vars (BLUEPRINT §2.3) — needed when S1-5's real sidecar consumes them; fold into S1-5 integration or a small S story.
+- **P-2**: additive protocol signal for commissioned/uncommissioned so tray green can mean "fabric joined" rather than "sidecar link up" (needs `v` bump, both sides).
+- **P-3**: "Factory reset bridge" tray action (delete matter storage; BLUEPRINT §2.5) — schedule with S3-2 unpair flow.
 
 ## Icebox (explicitly not now)
 

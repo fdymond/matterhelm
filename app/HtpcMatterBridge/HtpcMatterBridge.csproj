@@ -19,4 +19,10 @@
     <PackageReference Include="QRCoder" Version="1.8.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- S2-5: stub sidecar for the wired demo and the wiring tests (flows to
+         referencing projects' output too). The real sidecar ships via S3-1. -->
+    <Content Include="DemoAssets\StubSidecar.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
