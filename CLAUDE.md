@@ -32,6 +32,8 @@ npm ci                 # exact deps
 npm run verify         # lint + typecheck + tests — THE merge bar
 npm start              # run bridge (dev)
 npm test -- --watch    # tdd loop
+npm test -- src/mapping/actions.test.ts   # single test file (vitest)
+npm test -- -t "volume"                   # tests matching a name
 ```
 
 Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
@@ -39,6 +41,11 @@ Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
 `dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release`
 (warnings-as-errors). This product is fully standalone (ADR-001): never
 reference, read config from, or depend on `../windows-voice-control` code.
+
+**Pre-Sprint-0 state**: `bridge/package.json` deps are intentionally empty
+(story S0-1 installs and pins them), so `npm ci`/`verify` fail until S0-1
+lands; `app/` is empty until S0-5 creates the csproj. That is expected — don't
+"fix" it outside those stories.
 
 ## Architecture invariants (enforced in review)
 
@@ -49,6 +56,10 @@ reference, read config from, or depend on `../windows-voice-control` code.
 - All inbound IPC frames zod-parsed; all trust boundaries validated.
 - Pure logic (`mapping/`, protocol schemas) has ≥ 90 % test coverage.
 - IPC binds to 127.0.0.1 only; token via env; token never logged/persisted.
+- Normative specs: device model = BLUEPRINT §2.2, IPC frames = BLUEPRINT §2.3.
+  `app/.../Sidecar/Protocol.cs` must mirror `bridge/src/ipc/protocol.ts`
+  exactly — changing one side without the other is protocol drift (review
+  blocker); breaking changes bump `protocol` in `hello` + need an ADR.
 
 ## Integrator workflow (main session)
 
