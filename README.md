@@ -5,10 +5,14 @@ HTPC a **locally-paired Google Home device**. Say "Hey Google, set HTPC volume
 to 40 %", tap devices in the Home app, or wire routines ("movie time") — the
 app executes the media/volume/power actions directly on the PC.
 
-No cloud, no Google developer account, no OAuth: pairing is a QR-code scan
+No cloud, no OAuth server, no paid certification: pairing is a QR-code scan
 (Matter over the local network via a [matter.js](https://github.com/project-chip/matter.js/)
-virtual bridge). Fully independent product — see `docs/adr/001` (it shares a
-machine, but no code, with the VoiceRemote voice-control app).
+virtual bridge). Two Google-side prerequisites (see `docs/adr/002`): a
+Google/Nest **Matter hub** device on the LAN (Nest speaker/display/Wifi Pro/
+Google TV Streamer), and a one-time **free** Google Home Developer Console
+project registering the bridge's test VID/PID. Fully independent product —
+see `docs/adr/001` (it shares a machine, but no code, with the VoiceRemote
+voice-control app).
 
 ```
 Google Home app / Nest speaker

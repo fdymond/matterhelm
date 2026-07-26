@@ -51,6 +51,27 @@ simultaneously local, ceremony-free on the Google side, and Windows-native.
    auto-reset (~800 ms) makes taps behave as presses. Verify Google doesn't
    debounce/flag the rapid state change.
 
+## Addendum 2026-07-26 (integrator feasibility pass — supersedes conflicting text above)
+
+Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
+
+1. **Hub requirement (open question 1): answered — REQUIRED.** Google's docs
+   are unambiguous: commissioning and controlling any Matter device in Google
+   Home requires a Google/Nest Matter-hub device on the LAN. No phone-only
+   path exists. S0-3 validates on hardware but no longer treats this as open.
+2. **"Uncertified device" pairing (open question 2): NOT a click-through
+   warning.** It is a hard attestation gate. Working recipe: test VID
+   `0xFFF1`–`0xFFF4` / PID `0x8000`–`0x801F` registered in a free Google Home
+   Developer Console project whose member is the commissioning account. "Zero
+   Google account/developer ceremony" above is therefore wrong; the correct
+   claim is "no cloud, no OAuth, no payment — one-time free console setup".
+3. **New since April 2026**: Google Home natively supports Matter **Generic
+   Switch** button-press routine triggers. S0-4's spike now also evaluates a
+   Generic Switch endpoint alongside the momentary On/Off pattern (ADR-002).
+4. Speaker (OnOff+LevelControl) volume mapping is documented by Google but has
+   no confirmed real-world sighting for bridged endpoints — S0-3 must verify
+   voice + slider explicitly before Sprint 1 leans on it.
+
 ## Sources
 
 - Google Home Developers — [Supported Matter clusters](https://developers.home.google.com/matter/clusters) · [Supported device types](https://developers.home.google.com/matter/supported-devices) · [Matter release notes](https://developers.home.google.com/matter/release-notes) · [Virtual-device codelab](https://developers.home.google.com/codelabs/matter-device-virtual)

@@ -170,10 +170,13 @@ zero code imported from other repos.
 
 ## 3. Riskiest assumptions → Sprint 0 spikes
 
-1. **S0-3**: commissioning a third-party uncertified bridge from a phone-only
-   household (border-router/fabric-admin question) — validate on real hardware
-   before product code.
+1. **S0-3**: commissioning the uncertified bridge. Per ADR-002 a Nest hub
+   device is required and the test VID/PID must be registered in a free Google
+   Home Developer Console project first — the spike validates that recipe on
+   real hardware and explicitly verifies the Speaker endpoint's volume UX
+   (voice "set … volume to 40 %" + app slider), which Google documents but no
+   field report confirms for bridged endpoints.
 2. **S0-4**: momentary-switch auto-reset UX (Home app taps register cleanly;
-   no debounce weirdness at 800 ms).
-3. Speaker voice grammar ("set HTPC volume to 40 %") resolves for an
-   uncertified bridged endpoint.
+   no debounce weirdness at 800 ms) — plus commission one **Generic Switch**
+   endpoint and record how the Home app/routines surface it (ADR-002; Google
+   ships native button-press routine triggers since April 2026).
