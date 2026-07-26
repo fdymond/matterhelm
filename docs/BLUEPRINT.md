@@ -85,6 +85,16 @@ matter.js facts fixed by integrator research 2026-07-26 (repo is now
   `manualPairingCode`) — only after start, else it throws. **Limitation**: a
   fresh code for adding a second controller post-commissioning is an open
   upstream feature request; our re-pairing story is factory-reset → pair anew.
+- Spike-confirmed (S0-3 prep, runs on this machine): attribute-change events
+  are `endpoint.events.onOff.onOff$Changed.on(...)` /
+  `events.levelControl.currentLevel$Changed.on(...)` (`currentLevel` is
+  `number | null`); `uniqueId` must differ from `serialNumber` in every
+  BasicInformation block or matter.js warns; set
+  `Environment.default.vars.set("runtime.signals", false)` so the app owns
+  SIGINT; storage layout under `storage.path` is one dir per node id.
+- Node 22 undici quirk (S1-4): a `WebSocket` that fails to connect fires only
+  `error`, never `close` — reconnect logic must treat either as terminal for
+  the attempt (client.ts guards this; don't assume spec-shaped close events).
 - Windows networking: **IPv6 must be enabled** on the NIC (hard matter.js
   requirement even LAN-only); multi-NIC hosts need the mDNS interface pinned —
   config exposes `mdnsInterface` (maps to `mdns.networkInterface`), default
