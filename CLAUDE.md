@@ -16,8 +16,9 @@ defines Done.
 3. **Evidence or it didn't happen.** Paste verbatim `npm run verify` / test
    output into your final report. DoD requires it.
 4. **Never** run `git commit/checkout/reset/stash` unless your prompt says so.
-   The integrator owns git. Never push. Never touch `%APPDATA%` state or the
-   sibling repo (`../windows-voice-control`) unless your story lives there.
+   The integrator owns git. Never push. Never touch `%APPDATA%` state and
+   never touch the sibling repo `../windows-voice-control` — this product is
+   independent of it by decision (ADR-001).
 5. **Deviation = ADR.** If the blueprint is wrong or matter.js reality differs,
    write the one-page ADR draft in `docs/adr/` and flag it prominently — don't
    silently improvise architecture.
@@ -26,16 +27,18 @@ defines Done.
 ## Commands
 
 ```bash
+cd bridge
 npm ci                 # exact deps
 npm run verify         # lint + typecheck + tests — THE merge bar
 npm start              # run bridge (dev)
 npm test -- --watch    # tdd loop
 ```
 
-Node 22 LTS. On this machine dotnet (for Sprint-2 stories) is at
-`"C:\Program Files\dotnet\dotnet.exe"`; the C# app builds with
-`dotnet build VoiceRemote/VoiceRemote.csproj -c Release` from the sibling repo
-root — that repo has its own conventions; read its code before writing any.
+Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
+(Sprint 0/2 stories) builds with
+`dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release`
+(warnings-as-errors). This product is fully standalone (ADR-001): never
+reference, read config from, or depend on `../windows-voice-control` code.
 
 ## Architecture invariants (enforced in review)
 

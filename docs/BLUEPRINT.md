@@ -1,144 +1,179 @@
-# Blueprint: HTPC Matter Bridge
+# Blueprint: HTPC Matter Bridge (standalone app)
 
-Technical design for the matter.js sidecar and its integration with VoiceRemote.
-Decisions recorded here are binding until superseded by an ADR in `docs/adr/`.
+Technical design for a **fully independent** Windows product: a tray
+application that makes the HTPC a locally-paired Google Home device and
+executes the resulting commands itself. No dependency on any other repo or app
+(see ADR-001). Decisions here are binding until superseded by an ADR.
 
 ## 1. Goals & non-goals
 
 **Goals**
-- G1: Pair the HTPC with Google Home locally (QR code, no cloud) and control
-  volume/mute/transport/power by voice and routines.
-- G2: Reuse VoiceRemote's `CommandRouter` for every action — one dispatch path
-  for voice, tray, and Google Home.
-- G3: Reflect real device state (volume %, mute) back into Google Home.
-- G4: Survive restarts (persisted Matter fabric credentials) and run unattended.
-- G5: Stay lean: sidecar idle CPU < 0.5 %, RSS < 80 MB, cold start < 3 s.
+- G1: Pair the HTPC with Google Home locally (QR code, no cloud, no Google
+  developer ceremony) and control volume/mute/transport/power by voice and
+  routines.
+- G2: **Self-contained execution** — the app performs every action itself via
+  OS facilities (SMTC, media keys, CoreAudio, display power).
+- G3: Visible feedback — a click-through overlay HUD flashes each incoming
+  command (“Google Home → Volume 40 %”) and the executed action; a tray icon
+  reflects bridge state at a glance.
+- G4: Reflect real device state (volume %, mute) back into Google Home.
+- G5: Survive restarts (persisted Matter fabric credentials) and run unattended.
+- G6: Lean: sidecar idle CPU < 0.5 %, sidecar RSS < 80 MB, tray app RSS
+  < 40 MB, cold start < 3 s.
 
 **Non-goals**
 - Matter Media Playback / Content Launcher clusters (Google doesn't surface
-  them — see RESEARCH.md). Revisit only when Google's docs change.
-- Multi-admin ecosystems beyond Google (Alexa/Apple pairing may incidentally
-  work — Matter is multi-admin — but is untested and unsupported).
-- Running without VoiceRemote (the sidecar is an accessory, not a standalone).
+  them — RESEARCH.md). Revisit when Google's supported-clusters page changes.
+- Voice recognition of any kind — that is VoiceRemote's domain; the two apps
+  are unrelated processes that may coexist on one machine.
+- Kodi-aware routing (icebox — would be a fresh implementation here if wanted).
+- Ecosystems beyond Google (Alexa/Apple may incidentally pair; untested).
 
 ## 2. System design
 
 ```mermaid
 flowchart LR
     GH[Google Home\napp / Nest speaker] -- Matter over LAN\nmDNS + UDP/TCP --> MB
-    subgraph HTPC [Windows HTPC]
-        MB[matter-bridge sidecar\nNode 22 + matter.js] -- WS localhost:39531\nJSON, token auth --> VR[VoiceRemote tray app\nC# .NET 8]
-        VR --> CR[CommandRouter]
-        CR --> A[SMTC / media keys /\nCoreAudio / Kodi JSON-RPC]
-        VR -- volume/mute state --> MB
+    subgraph HTPC [Windows HTPC — this product]
+        MB[bridge/ sidecar\nNode 22 + matter.js] -- WS 127.0.0.1:39531\nJSON, token auth --> TA[app/ tray application\nC# .NET 8 WinForms]
+        TA --> EX[ActionExecutor]
+        EX --> OS[SMTC / media keys /\nCoreAudio / display power]
+        TA --> HUD[Overlay HUD\nclick-through flash pop-ups]
+        TA -- volume/mute state --> MB
     end
 ```
 
-Two processes, one owner: VoiceRemote **spawns and supervises** the sidecar
-(start on "Enable Google Home bridge", restart with backoff on crash, kill on
-exit). The sidecar never outlives the tray app.
+One owner process: the **tray app** spawns and supervises the sidecar (start
+when the bridge is enabled, restart with jittered backoff on crash, stdin
+tether so an orphaned sidecar self-terminates, kill on exit).
 
-### 2.1 Module structure (sidecar, `src/`)
+### 2.1 `bridge/` — Matter sidecar (Node 22, TypeScript)
 
 ```
-src/
+bridge/src/
   index.ts            composition root: config → ipc client → bridge → run
-  config.ts           env/file config parsing + validation (zod)
+  config.ts           env/args parsing + validation (zod)
   matter/
     bridge.ts         Aggregator endpoint; owns the matter.js ServerNode
     devices.ts        endpoint factories: speaker, momentary switch, toggle
-    adapter.ts        THIN wrapper isolating matter.js API churn from the app
+    adapter.ts        THIN wrapper isolating matter.js API churn
   mapping/
     actions.ts        pure fns: cluster writes -> Action msgs (unit-tested)
-    state.ts          pure fns: VoiceRemote state -> cluster attribute updates
+    state.ts          pure fns: app state -> cluster attribute updates
   ipc/
-    client.ts         WS client to VoiceRemote, reconnect w/ backoff, auth
-    protocol.ts       message types (shared contract, versioned)
-  log.ts              pino, one line per event, no chatter
+    client.ts         WS client to the tray app, reconnect w/ backoff, auth
+    protocol.ts       message types (versioned contract)
+  log.ts              pino, one structured line per event
 ```
 
-Rules: `matter/` never imports `ipc/`; both meet only in `index.ts` wiring
-through `mapping/` pure functions. matter.js types do not leak past
-`matter/adapter.ts`.
+Rules: `matter/` never imports `ipc/`; they meet in `index.ts` through
+`mapping/` pure functions. matter.js types stay behind `matter/adapter.ts`.
 
 ### 2.2 Matter device model
 
 One **Aggregator (bridge)** node exposing:
 
-| Endpoint | Matter device type | Clusters | Maps to |
+| Endpoint | Matter device type | Clusters | Executor action |
 |---|---|---|---|
-| `HTPC Speaker` | Speaker | OnOff (= mute), LevelControl (= volume 0–254 → 0–100 %) | `SetVolume` / `Mute` / `Unmute` |
-| `HTPC Play Pause` | On/Off Plug-in Unit (momentary) | OnOff | `PlayPause` |
-| `HTPC Next` | On/Off Plug-in Unit (momentary) | OnOff | `Next` |
-| `HTPC Previous` | On/Off Plug-in Unit (momentary) | OnOff | `Previous` |
-| `HTPC Power` | On/Off Plug-in Unit (stateful) | OnOff | configurable: `Pause`+display-off / sleep / close-app |
+| `HTPC Speaker` | Speaker | OnOff (= mute), LevelControl (0–254 → 0–100 %) | set system volume / mute / unmute |
+| `HTPC Play Pause` | On/Off Plug-in Unit (momentary) | OnOff | media play/pause toggle |
+| `HTPC Next` | On/Off Plug-in Unit (momentary) | OnOff | next track |
+| `HTPC Previous` | On/Off Plug-in Unit (momentary) | OnOff | previous track |
+| `HTPC Power` | On/Off Plug-in Unit (stateful) | OnOff | configurable: pause + display off / sleep |
 
-Momentary semantics: an `on` write dispatches the action then auto-resets the
-attribute to `off` after 800 ms, so voice, app taps, and routines all behave as
-a single button press. Names are user-configurable (they become the Google
-voice targets).
+Momentary semantics: an `on` write dispatches the action, then auto-resets to
+`off` after 800 ms so voice, app taps, and routines behave as one button press.
+Endpoint names are user-configurable — they are the Google voice targets.
 
 ### 2.3 IPC protocol (localhost WebSocket, default port 39531)
 
-- Transport: `ws://127.0.0.1:<port>` — **bound to loopback only**. Auth: the
-  supervisor (VoiceRemote) generates a random token per session, passes it to
-  the child via environment variable; first frame must be `hello` with the
-  token or the socket is closed.
-- Framing: one JSON object per message. `v` fields allow additive evolution;
-  breaking changes bump the protocol version in `hello`.
+Bound to `127.0.0.1` only. The tray app generates a random token per session
+and passes it to the child via environment variable; the first frame must be a
+valid `hello` or the socket closes. One JSON object per message; additive
+evolution via `v`, breaking changes bump `protocol` in `hello`.
 
-Sidecar → VoiceRemote (commands):
+Sidecar → tray app:
 ```json
 { "v": 1, "type": "hello", "token": "…", "protocol": 1 }
 { "v": 1, "type": "action", "id": "uuid", "name": "playPause" }
 { "v": 1, "type": "action", "id": "uuid", "name": "setVolume", "value": 40 }
-{ "v": 1, "type": "action", "id": "uuid", "name": "mute" }
+{ "v": 1, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
 ```
 
-VoiceRemote → sidecar (acks + state):
+Tray app → sidecar:
 ```json
 { "v": 1, "type": "ack", "id": "uuid", "ok": true }
 { "v": 1, "type": "state", "volume": 40, "muted": false }
-{ "v": 1, "type": "pairing?", "show": true }   // sidecar asks tray to show QR
 ```
 
-State flows on connect and on every change (VoiceRemote already observes system
-volume for its own commands). If the socket is down, cluster writes fail
-gracefully (Matter write acked, action dropped, WARN logged) — never crash.
+State flows on connect and on every change (the executor observes system
+volume/mute via CoreAudio callbacks). If the socket is down, Matter writes are
+acked, the action is dropped with one WARN, and the bridge never crashes.
 
-### 2.4 VoiceRemote-side integration (lives in ../windows-voice-control)
+### 2.4 `app/` — tray application (C# .NET 8 WinForms, `HtpcMatterBridge`)
 
-- `Integrations/MatterBridge/` — process supervisor (spawn node/SEA exe,
-  restart backoff, env token), WS server-side of the protocol, mapping to
-  `CommandRouter.HandleBindingAsync`, state publisher.
-- `Config.cs` — `MatterBridgeConfig { Enabled, Port, DeviceNames, SidecarPath,
-  StoragePath }`.
-- Tray menu — "Google Home bridge" toggle; first-enable shows pairing QR
-  (reuse `TranscriptOverlay` pattern or a minimal form; QR payload + manual
-  code come from the sidecar's stdout/IPC).
+```
+app/HtpcMatterBridge/
+  Program.cs            single-instance mutex, Application.Run(TrayContext)
+  TrayContext.cs        tray icon + menu + lifecycle (enable/disable bridge)
+  Config.cs             %APPDATA%\HtpcMatterBridge\config.json (camelCase JSON)
+  Log.cs                rolling daily file log (7 days)
+  Sidecar/
+    SidecarSupervisor.cs   spawn node/SEA exe, env token, restart backoff,
+                           stdin tether, stdout/stderr → log
+    IpcServer.cs           loopback WS server, hello/auth, frame parsing
+    Protocol.cs            typed records mirroring bridge/src/ipc/protocol.ts
+  Actions/
+    ActionExecutor.cs      dispatch: playPause/next/previous/setVolume/mute/power
+    MediaKeys.cs           SendInput VK_MEDIA_* scan codes
+    SystemVolume.cs        CoreAudio IAudioEndpointVolume (get/set/observe)
+    DisplayPower.cs        SC_MONITORPOWER off / SendInput jiggle on
+  Ui/
+    OverlayHud.cs          click-through, non-activating flash pop-ups:
+                           primary line = source + intent ("Google Home → volume 40 %"),
+                           pill = executed action/result; updates in place, fades
+    PairingWindow.cs       QR code (rendered locally from qrPayload) + manual code
+```
+
+- **Tray states**: gray = bridge off · green = paired & connected · amber =
+  running, not commissioned (shows "Pair…" menu item) · red = sidecar
+  crashed/restarting.
+- **Menu**: Enable bridge · Pair with Google Home… · Overlay pop-ups (toggle,
+  persisted) · Device names… (opens config) · Open config · Reload config ·
+  About · Exit.
+- **Overlay HUD**: same UX bar as a good voice-assistant overlay — a single
+  persistent, click-through, non-activating window that updates in place and
+  fades; flashes on every executed/failed command and on pairing events. All
+  text originates as structured input (the parsed command), rendered as the
+  "transcribed input" line, with the action pill beneath/next to it.
+- **No admin rights**; single instance; optional Start-with-Windows Run key.
+
+House style: mirrors proven WinForms tray-app patterns (XML doc summaries,
+`_camelCase` fields, events marshalled to the UI thread via
+`SynchronizationContext`, P/Invoke over dependencies) — written fresh here,
+zero code imported from other repos.
 
 ### 2.5 Persistence & lifecycle
 
-- Matter fabric/commissioning state: matter.js storage dir →
-  `%APPDATA%\VoiceRemote\matter\` (survives restarts; deleting it = unpair).
-- Sidecar logs: pino → stdout, captured by VoiceRemote into its rolling log.
-- Clean shutdown on SIGTERM/stdin-close (supervisor closes stdin on exit so an
-  orphaned sidecar self-terminates).
+- Matter fabric/commissioning state: `%APPDATA%\HtpcMatterBridge\matter\`
+  (delete = unpair; exposed as "Factory reset bridge" menu action).
+- Config + rolling logs under the same appdata root.
+- Sidecar stdout is structured (pino) → parsed into the app log with levels.
 
 ### 2.6 Packaging
 
-Ship as **Node SEA (single executable application)** built in CI: no Node
-install for end users; the exe sits next to VoiceRemote.exe (~60–80 MB).
-Development mode: `npm start` with system Node 22.
-Fallback if SEA + matter.js native-free claim hits friction: document a Node 22
-prerequisite in Sprint 3 and defer SEA (ADR required).
+- `bridge/`: Node SEA single exe (`npm run package`) — no Node install for end
+  users. Fallback documented via ADR if SEA × matter.js hits friction.
+- `app/`: `dotnet publish` self-contained single-file win-x64 (WinForms — no
+  trimming), bundling the sidecar exe beside it.
+- One dist folder ships both; one `build.ps1` at repo root produces it.
 
-## 3. Riskiest assumptions → spikes first (see DEVELOPMENT-PLAN)
+## 3. Riskiest assumptions → Sprint 0 spikes
 
-1. **S0-3**: a Google Home *without* a Nest hub may refuse to commission a
-   third-party bridge (border-router/fabric-admin question). Validate with the
-   minimal OnOff example on real hardware before any product code.
-2. **S0-4**: momentary-switch auto-reset UX in the Home app (no debounce
-   weirdness, taps register as presses).
-3. Speaker device volume voice-grammar actually resolves ("set HTPC volume to
-   40 %") for an uncertified bridged endpoint.
+1. **S0-3**: commissioning a third-party uncertified bridge from a phone-only
+   household (border-router/fabric-admin question) — validate on real hardware
+   before product code.
+2. **S0-4**: momentary-switch auto-reset UX (Home app taps register cleanly;
+   no debounce weirdness at 800 ms).
+3. Speaker voice grammar ("set HTPC volume to 40 %") resolves for an
+   uncertified bridged endpoint.

@@ -42,13 +42,16 @@ serves one of those four words; anything that doesn't is ceremony and gets cut.
 - Errors: never swallow; `catch` blocks either handle meaningfully or add
   context and rethrow. No empty catches.
 
-## C# (VoiceRemote-side integration)
+## C# (tray application, `app/`)
 
-Match the existing VoiceRemote house style exactly: XML doc `<summary>` on
-public members, terse why-comments, `_camelCase` fields, locks with documented
-discipline, events fired outside locks, P/Invoke over new dependencies. The
-integration must pass the same bar as the rest of that repo: build with **zero
-warnings**, no behavior regressions (harness still green).
+House style for `HtpcMatterBridge` (written fresh here — no code imported from
+other repos): XML doc `<summary>` on public members, terse why-comments,
+`_camelCase` fields, locks with documented discipline, events marshalled to the
+UI thread via `SynchronizationContext` and fired outside locks, P/Invoke over
+new dependencies (a NuGet needs justification). Build with
+**warnings-as-errors**; WinForms is not trim-compatible — never add
+`PublishTrimmed`. UI never blocks on IPC or process supervision; the overlay
+HUD is click-through, non-activating, and updates in place.
 
 ## Testing
 

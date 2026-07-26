@@ -46,9 +46,10 @@ here exists to raise code quality, not to perform ceremony.
 | Perf budget | manual per release | idle CPU < 0.5 %, RSS < 80 MB, cold start < 3 s |
 | E2E | manual, scripted checklist | pairing + each voice action on real Google Home hardware, results logged in `docs/e2e-log.md` |
 
-CI: GitHub Actions on push/PR — `npm ci && npm run verify` on
+CI: GitHub Actions on push/PR — `cd bridge && npm ci && npm run verify` on
 `windows-latest` + `ubuntu-latest` (protocol/mapping logic is OS-neutral;
-Windows job catches platform drift).
+Windows job catches platform drift), plus `dotnet build app/... -c Release`
+with warnings-as-errors on `windows-latest` once Sprint 2 starts.
 
 ## Sprints
 
@@ -60,19 +61,23 @@ paired with the real Google Home; documented answer to the hub question.
 ### Sprint 1 — the bridge, properly
 Full device model (Speaker + momentary switches + power), IPC client with auth
 + reconnect, pure mapping layer, persisted commissioning. All logic unit-tested
-against a **mock VoiceRemote** WS peer. **Exit demo**: "Hey Google, set HTPC
+against a **mock tray-app** WS peer. **Exit demo**: "Hey Google, set HTPC
 volume to 40 %" reaches the mock peer as `{"type":"action","name":"setVolume","value":40}`.
 
-### Sprint 2 — VoiceRemote integration (C# side, in ../windows-voice-control)
-Supervisor, WS server, CommandRouter dispatch, state publisher, tray toggle +
-pairing-QR UX, config. **Exit demo**: end-to-end voice → Google → sidecar →
-router → media actually pauses; volume slider in Home app tracks reality.
+### Sprint 2 — the tray application (C#, in `app/`)
+The standalone product shell: sidecar supervisor (spawn/token/backoff/stdin
+tether), loopback WS server, `ActionExecutor` (SMTC play-pause/next/previous,
+CoreAudio volume/mute with change observation, display power), click-through
+**overlay HUD** (incoming command + executed action, update-in-place flash),
+pairing-QR window, tray states/menu, config + rolling log. **Exit demo**:
+end-to-end "Hey Google…" → sidecar → executor → media actually pauses; the
+overlay flashes the command; the Home-app volume slider tracks local changes.
 
 ### Sprint 3 — hardening & ship
-SEA packaging, crash/restart chaos pass, unpair/re-pair flows, docs (user
-setup guide), version 0.1.0 release artifacts integrated into VoiceRemote's
-build.sh. **Exit demo**: clean machine → copy dist → enable bridge → pair →
-control, no dev tools involved.
+Node SEA packaging + `dotnet publish` self-contained app, one `build.ps1`
+producing a single dist folder, crash/restart chaos pass, unpair/factory-reset
+flow, user guide, version 0.1.0. **Exit demo**: clean machine → copy dist →
+enable bridge → pair → control, no dev tools involved.
 
 The story-level backlog with sizes, dependencies, and suggested agent/model per
 story lives in [`../BACKLOG.md`](../BACKLOG.md).

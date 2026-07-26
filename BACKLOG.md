@@ -9,42 +9,46 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S0-1 | Verify & pin the scaffold: `npm install` matter.js (`@matter/main`), zod, pino, vitest, eslint stack; make `npm run verify` pass on the placeholder; pin exact versions | `npm run verify` output green in report; lockfile committed; versions listed | S | — | impl (Sonnet) |
-| S0-2 | CI: GitHub Actions `verify` on windows-latest + ubuntu-latest | Green run linked/logged on a test push | S | S0-1 | impl (Sonnet) |
-| S0-3 | **SPIKE**: minimal OnOff virtual device (matter.js example) pairs with the real Google Home; answer the hub/border-router question | Pairing succeeds/fails documented in `docs/spikes/S0-3-pairing.md` with screenshots/log evidence + the hub answer; **needs the human for the phone/Home app steps** | M | S0-1 | impl (Fable) + human |
-| S0-4 | **SPIKE**: momentary-switch UX — auto-reset 800 ms endpoint; verify Home app taps and voice register cleanly | Findings + chosen reset interval in `docs/spikes/S0-4-momentary.md` | S | S0-3 | impl (Fable) + human |
+| S0-1 | Verify & pin the bridge scaffold: in `bridge/`, `npm install` matter.js (`@matter/main`), zod, pino, tsx + the eslint/prettier/vitest toolchain; make `npm run verify` pass on the placeholder; pin exact versions | `npm run verify` output green in report; lockfile committed; versions listed | S | — | impl (Sonnet) |
+| S0-2 | CI: GitHub Actions `verify` (bridge) on windows-latest + ubuntu-latest | Green run demonstrated | S | S0-1 | impl (Sonnet) |
+| S0-3 | **SPIKE**: minimal OnOff virtual device (matter.js example) pairs with the real Google Home; answer the hub/border-router question | Result documented in `docs/spikes/S0-3-pairing.md` with log evidence + the hub answer; **needs the human** for the phone/Home-app steps | M | S0-1 | impl (Fable) + human |
+| S0-4 | **SPIKE**: momentary-switch UX — auto-reset 800 ms endpoint; verify Home-app taps and voice register cleanly | Findings + chosen reset interval in `docs/spikes/S0-4-momentary.md` | S | S0-3 | impl (Fable) + human |
+| S0-5 | `app/` scaffold: `HtpcMatterBridge.csproj` (net8.0-windows, WinForms, single-instance Program.cs, Log.cs, empty TrayContext showing an icon), builds with warnings-as-errors | `dotnet build -c Release` 0 warnings; exe shows tray icon; report screenshot/log | S | — | impl (Sonnet) |
 
-## Sprint 1 — the bridge
-
-| ID | Story | Acceptance criteria | Size | Deps | Agent |
-|---|---|---|---|---|---|
-| S1-1 | `ipc/protocol.ts` + zod schemas + exhaustive unit tests (valid/invalid frames, version field) | ≥ 90 % coverage on the module; tests read as a protocol spec | S | S0-1 | impl (Sonnet) |
-| S1-2 | `mapping/actions.ts` + `mapping/state.ts` pure functions + tests (incl. 0–254 ↔ 0–100 % rounding edges) | ≥ 90 % coverage; property-style edge tests | S | S1-1 | impl (Sonnet) |
-| S1-3 | `matter/adapter.ts` + `bridge.ts` + `devices.ts`: Aggregator with Speaker, 3 momentary switches, power toggle; persisted storage in configurable dir | Manual: all endpoints visible in Home app; storage survives restart (re-pair NOT required) | L | S0-3, S0-4, S1-2 | impl (Fable) |
-| S1-4 | `ipc/client.ts`: WS client, token hello, reconnect w/ jittered backoff, graceful degradation when peer absent | Integration tests vs mock server: auth-reject closes, actions queue-drop with WARN when down, reconnect works (fake timers) | M | S1-1 | impl (Fable) |
-| S1-5 | `config.ts` + `index.ts` composition root + pino logging | `npm start` runs the full bridge against a mock peer; README quick-start true | S | S1-3, S1-4 | impl (Sonnet) |
-| S1-R | Adversarial review of Sprint 1 (races, protocol drift, matter.js leakage past adapter, bloat) | Findings verified + fixed or explicitly waived in report | M | S1-5 | review (different model) |
-
-## Sprint 2 — VoiceRemote integration (files live in ../windows-voice-control)
+## Sprint 1 — the bridge (`bridge/`)
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S2-1 | `Integrations/MatterBridge/`: supervisor (spawn, env token, restart backoff, stdin-tether kill), WS server, protocol handling | Unit-testable protocol part covered; kill/restart chaos manually demonstrated | L | S1-5 | impl (Fable) |
-| S2-2 | Dispatch into `CommandRouter.HandleBindingAsync` + state publisher (volume/mute on connect + on change) | E2E: sidecar action pauses real media; Home app slider tracks volume changed locally | M | S2-1 | impl (Fable) |
-| S2-3 | Config (`MatterBridgeConfig`) + tray toggle + pairing QR overlay on first enable | Enable → QR shows → pairing completes; toggle off stops sidecar; config persists | M | S2-1 | impl (Sonnet) |
-| S2-R | Adversarial review of Sprint 2 + full VoiceRemote regression (existing speech harness still green) | Findings verified; harness output in report | M | S2-3 | review |
+| S1-1 | `ipc/protocol.ts` + zod schemas + exhaustive unit tests (valid/invalid frames, version field, pairing msg) | ≥ 90 % coverage on the module; tests read as a protocol spec | S | S0-1 | impl (Sonnet) |
+| S1-2 | `mapping/actions.ts` + `mapping/state.ts` pure functions + tests (incl. 0–254 ↔ 0–100 % rounding edges) | ≥ 90 % coverage; edge-case tests | S | S1-1 | impl (Sonnet) |
+| S1-3 | `matter/adapter.ts` + `bridge.ts` + `devices.ts`: Aggregator with Speaker, 3 momentary switches, power toggle; persisted storage in configurable dir | Manual: all endpoints visible in the Home app; storage survives restart (no re-pair) | L | S0-3, S0-4, S1-2 | impl (Fable) |
+| S1-4 | `ipc/client.ts`: WS client, token hello, jittered-backoff reconnect, graceful degradation when peer absent | Integration tests vs mock server: auth-reject closes, actions drop with one WARN when down, reconnect works (fake timers) | M | S1-1 | impl (Fable) |
+| S1-5 | `config.ts` + `index.ts` composition root + pino logging + `pairing` message emission | `npm start` runs the full bridge against a mock tray-app peer; README quick-start true | S | S1-3, S1-4 | impl (Sonnet) |
+| S1-R | Adversarial review of Sprint 1 (races, protocol drift, matter.js leakage past adapter, bloat) | Findings verified + fixed or explicitly waived | M | S1-5 | review (different model) |
+
+## Sprint 2 — the tray application (`app/`)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S2-1 | `Sidecar/`: `SidecarSupervisor` (spawn node/SEA exe, env token, restart backoff, stdin tether, stdout→log) + `IpcServer` (loopback WS, hello/auth, close on invalid frame) + `Protocol.cs` typed records | Protocol unit tests; chaos demo: kill sidecar → auto-restart with backoff logged; wrong token → socket closed | L | S0-5, S1-5 | impl (Fable) |
+| S2-2 | `Actions/`: `ActionExecutor` + `MediaKeys` (SendInput VK_MEDIA_*) + `SystemVolume` (CoreAudio get/set/observe with change events) + `DisplayPower` | Manual demo: each action works on real media; volume observation fires state updates | M | S0-5 | impl (Fable) |
+| S2-3 | `Ui/OverlayHud.cs`: persistent click-through non-activating flash window — primary line = incoming command ("Google Home → volume 40 %"), pill = executed action/failure; updates in place, fades; toggleable + persisted | Manual demo incl. rapid-fire updates without flicker; never steals focus or blocks clicks | M | S0-5 | impl (Sonnet) |
+| S2-4 | `Ui/PairingWindow.cs` (QR rendered locally from `qrPayload` + manual code) + tray states (gray/green/amber/red) + full menu + `Config.cs` (device names, port, power mapping, overlay toggle) + Reload | Manual: enable → pair → green; names from config appear in Home app after re-pair; reload applies without restart | M | S2-1 | impl (Sonnet) |
+| S2-5 | Wire it: IpcServer actions → executor → overlay flash → ack; state publisher (volume/mute on connect + on change) | **Exit demo evidence**: "Hey Google…" pauses real media; overlay flashes; Home-app slider tracks local volume change | M | S2-1, S2-2, S2-3, S2-4 | impl (Fable) |
+| S2-R | Adversarial review of Sprint 2 (thread marshalling, supervisor races, P/Invoke correctness, protocol drift vs bridge) | Findings verified + fixed | M | S2-5 | review |
 
 ## Sprint 3 — hardening & ship
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S3-1 | Node SEA single-exe build (`npm run package`) wired into VoiceRemote's build.sh; ADR if SEA proves infeasible | Clean-machine run of the packaged exe pairs & controls; sizes reported | L | S2-R | impl (Fable) |
-| S3-2 | Unpair/re-pair + factory-reset flow (delete storage via tray) + docs `docs/user-guide.md` | Scripted E2E checklist executed & logged in `docs/e2e-log.md` | M | S3-1 | impl (Sonnet) |
-| S3-3 | Perf/budget pass (idle CPU, RSS, cold start) + `npm audit` + release 0.1.0 | Budget table in report meets BLUEPRINT G5; tagged release | S | S3-2 | impl (Sonnet) |
+| S3-1 | Node SEA single-exe (`npm run package`) + `dotnet publish` self-contained app + root `build.ps1` producing one dist folder; ADR if SEA infeasible | Clean-machine run of the packaged dist pairs & controls; sizes reported | L | S2-R | impl (Fable) |
+| S3-2 | Unpair / factory-reset flow (tray action deletes matter storage) + `docs/user-guide.md` | Scripted E2E checklist executed & logged in `docs/e2e-log.md` | M | S3-1 | impl (Sonnet) |
+| S3-3 | Perf/budget pass (BLUEPRINT G6) + `npm audit` clean + release 0.1.0 | Budget table meets G6; tagged release | S | S3-2 | impl (Sonnet) |
 
 ## Icebox (explicitly not now)
 
+- Kodi JSON-RPC target for transport/volume (fresh implementation here)
 - Free VID/PID registration to remove the "Uncertified" pairing banner
 - Media Playback cluster support (blocked on Google — watch release notes)
 - Alexa/Apple Home multi-admin validation
-- Wyoming-satellite exposure of VoiceRemote (different feature entirely)
+- Additional endpoints: app-launch switches, "movie mode" scene endpoint
