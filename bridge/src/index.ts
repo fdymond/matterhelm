@@ -56,7 +56,11 @@ async function main(): Promise<void> {
   };
 
   const client = new IpcClient({
-    url: `ws://127.0.0.1:${String(config.ipcPort)}`,
+    // Must be the literal host "localhost", not 127.0.0.1: the tray app's
+    // HttpListener registers the http://localhost:{port}/ prefix (ADR-003 —
+    // the only admin-free loopback prefix) and rejects upgrades whose Host
+    // header names any other form. Still loopback-only either way.
+    url: `ws://localhost:${String(config.ipcPort)}`,
     token: config.ipcToken,
     logger,
     onFrame: (frame) => {
