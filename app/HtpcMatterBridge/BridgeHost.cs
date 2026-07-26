@@ -65,11 +65,38 @@ public sealed class ActionExecutorAdapter : IActionExecutor
 /// </summary>
 public static class SidecarLaunchSpec
 {
-    /// <summary>The production spec, resolved relative to the exe.</summary>
+    /// <summary>
+    /// The production spec, resolved relative to the exe; falls back to the
+    /// repo build tree (bridge sources via tsx, node.exe from PATH) when the
+    /// packaged layout is absent so the app is runnable during development.
+    /// </summary>
     public static SidecarSpec Default()
     {
-        string dir = Path.Combine(AppContext.BaseDirectory, "sidecar");
-        return new SidecarSpec(Path.Combine(dir, "node.exe"), [Path.Combine(dir, "bridge.cjs")], dir);
+        string packagedDir = Path.Combine(AppContext.BaseDirectory, "sidecar");
+        string packagedNode = Path.Combine(packagedDir, "node.exe");
+        string packagedEntry = Path.Combine(packagedDir, "bridge.cjs");
+        if (File.Exists(packagedNode) && File.Exists(packagedEntry))
+        {
+            return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
+        }
+
+        // Dev fallback: walk up from the exe (bin\Release\net8.0-windows is
+        // four levels below the repo root) looking for the bridge sources +
+        // installed tsx. node.exe resolves via PATH — dev machines have it.
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            string bridgeDir = Path.Combine(dir.FullName, "bridge");
+            string tsxCli = Path.Combine(bridgeDir, "node_modules", "tsx", "dist", "cli.mjs");
+            if (File.Exists(Path.Combine(bridgeDir, "src", "index.ts")) && File.Exists(tsxCli))
+            {
+                return new SidecarSpec(
+                    "node.exe", [tsxCli, Path.Combine(bridgeDir, "src", "index.ts")], bridgeDir);
+            }
+        }
+
+        // Neither layout found: return the packaged spec; the supervisor's
+        // spawn failure produces one clear ERROR instead of a crash here.
+        return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
     }
 }
 
