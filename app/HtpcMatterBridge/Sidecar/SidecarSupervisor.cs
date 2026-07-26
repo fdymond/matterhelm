@@ -58,6 +58,7 @@ public sealed class SidecarSupervisor : IDisposable
     private readonly string _logLevel;
     private readonly SupervisorOptions _options;
     private readonly Action<string, string> _log;
+    private readonly IReadOnlyDictionary<string, string>? _extraEnv;
     private readonly object _gate = new();
     private Process? _child;
     private System.Threading.Timer? _restartTimer;
@@ -73,13 +74,15 @@ public sealed class SidecarSupervisor : IDisposable
     /// <param name="logLevel">pino level handed to the child.</param>
     /// <param name="options">Timing knobs; production uses the defaults.</param>
     /// <param name="log">Log sink (level, message); defaults to <see cref="Log"/>. Injectable for tests/demos.</param>
+    /// <param name="extraEnv">Additional environment for the child (e.g. <c>HTPC_BRIDGE_DEVICE_NAMES</c>, BLUEPRINT §2.3). Applied before the fixed contract variables, which therefore can never be overridden.</param>
     public SidecarSupervisor(
         SidecarSpec spec,
         int ipcPort,
         string storageDir,
         string logLevel = "info",
         SupervisorOptions? options = null,
-        Action<string, string>? log = null)
+        Action<string, string>? log = null,
+        IReadOnlyDictionary<string, string>? extraEnv = null)
     {
         _spec = spec;
         _ipcPort = ipcPort;
@@ -87,6 +90,7 @@ public sealed class SidecarSupervisor : IDisposable
         _logLevel = logLevel;
         _options = options ?? new SupervisorOptions();
         _log = log ?? DefaultLog;
+        _extraEnv = extraEnv;
         IpcToken = GenerateToken();
     }
 
@@ -306,7 +310,16 @@ public sealed class SidecarSupervisor : IDisposable
             startInfo.ArgumentList.Add(arg);
         }
 
-        // Environment contract, BLUEPRINT §2.3 (fixed there so S1-5 reads the same names).
+        // Environment contract, BLUEPRINT §2.3 (fixed there so S1-5 reads the
+        // same names). Extras first: the four core variables always win.
+        if (_extraEnv is not null)
+        {
+            foreach ((string key, string value) in _extraEnv)
+            {
+                startInfo.Environment[key] = value;
+            }
+        }
+
         startInfo.Environment["HTPC_BRIDGE_IPC_PORT"] = _ipcPort.ToString(CultureInfo.InvariantCulture);
         startInfo.Environment["HTPC_BRIDGE_IPC_TOKEN"] = IpcToken;
         startInfo.Environment["HTPC_BRIDGE_STORAGE_DIR"] = _storageDir;

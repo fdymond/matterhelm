@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using HtpcMatterBridge.Actions;
 using HtpcMatterBridge.Sidecar;
 
@@ -273,12 +274,39 @@ public sealed class BridgeHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Non-core env vars for the sidecar child (BLUEPRINT §2.3): endpoint
+    /// display names as camelCase JSON, and the optional mDNS interface pin.
+    /// </summary>
+    private static Dictionary<string, string> BuildSidecarExtraEnv(BridgeConfig config)
+    {
+        var extra = new Dictionary<string, string>
+        {
+            ["HTPC_BRIDGE_DEVICE_NAMES"] = JsonSerializer.Serialize(
+                new
+                {
+                    speaker = config.DeviceNames.Speaker,
+                    playPause = config.DeviceNames.PlayPause,
+                    next = config.DeviceNames.Next,
+                    previous = config.DeviceNames.Previous,
+                    power = config.DeviceNames.Power,
+                }),
+        };
+        if (!string.IsNullOrWhiteSpace(config.MdnsInterface))
+        {
+            extra["HTPC_BRIDGE_MDNS_INTERFACE"] = config.MdnsInterface;
+        }
+
+        return extra;
+    }
+
     /// <summary>Caller must hold <c>_gate</c>. Returns false (fully torn down, still disabled) when the port cannot be bound.</summary>
     private bool StartLocked()
     {
         int port = _config.Current.IpcPort;
         var supervisor = new SidecarSupervisor(
-            _sidecarSpec, port, _storageDir, _config.Current.LogLevel, _supervisorOptions, _log);
+            _sidecarSpec, port, _storageDir, _config.Current.LogLevel, _supervisorOptions, _log,
+            BuildSidecarExtraEnv(_config.Current));
         var server = new IpcServer(port, supervisor.IpcToken, log: _log);
         server.ActionReceived += OnActionReceived;
         server.PairingReceived += OnPairingReceived;

@@ -48,7 +48,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 ## Proposed (from agent reports, integrator-triaged)
 
-- **P-1**: SidecarSupervisor must pass `HTPC_BRIDGE_DEVICE_NAMES` + `HTPC_BRIDGE_MDNS_INTERFACE` env vars (BLUEPRINT §2.3) — needed when S1-5's real sidecar consumes them; fold into S1-5 integration or a small S story.
+- ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.
 - **P-2**: additive protocol signal for commissioned/uncommissioned so tray green can mean "fabric joined" rather than "sidecar link up" (needs `v` bump, both sides).
 - **P-3**: "Factory reset bridge" tray action (delete matter storage; BLUEPRINT §2.5) — schedule with S3-2 unpair flow.
 
