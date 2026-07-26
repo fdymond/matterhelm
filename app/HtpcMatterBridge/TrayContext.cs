@@ -31,8 +31,9 @@ public enum BridgeState
 /// Tray icon, context menu, and pairing-window lifecycle (BLUEPRINT §2.4).
 /// Deliberately dumb UI: menu actions surface as events (or are handled
 /// directly when they are pure UI/config concerns, e.g. "Reload config"),
-/// with no sidecar/IPC/executor logic here — S2-5 wires this to the
-/// supervisor, IPC server, and action executor.
+/// with no sidecar/IPC/executor logic here — <c>Program</c> wires the events
+/// to <see cref="BridgeHost"/>, which owns the supervisor, IPC server, and
+/// action executor.
 /// </summary>
 public sealed class TrayContext : ApplicationContext
 {
@@ -72,7 +73,11 @@ public sealed class TrayContext : ApplicationContext
             [BridgeState.Faulted] = CreateSolidCircleIcon(Color.FromArgb(213, 48, 48)),
         };
 
-        _enableBridgeItem = new ToolStripMenuItem("Enable bridge") { CheckOnClick = true, Checked = true };
+        _enableBridgeItem = new ToolStripMenuItem("Enable bridge")
+        {
+            CheckOnClick = true,
+            Checked = Config.Current.BridgeEnabled,
+        };
         _enableBridgeItem.CheckedChanged += OnEnableBridgeCheckedChanged;
 
         // BLUEPRINT §2.4: amber's parenthetical is "shows 'Pair…' menu item" —
@@ -131,13 +136,13 @@ public sealed class TrayContext : ApplicationContext
         Log.Info("TrayContext started; icon visible.");
     }
 
-    /// <summary>"Enable bridge" was toggled; payload is the new checked state. S2-5 starts/stops the sidecar supervisor.</summary>
+    /// <summary>"Enable bridge" was toggled (already persisted to <see cref="Config"/> by the time this fires); payload is the new checked state. <c>Program</c> starts/stops the <see cref="BridgeHost"/>.</summary>
     public event EventHandler<bool>? EnableBridgeChanged;
 
-    /// <summary>"Pair with Google Home…" was clicked. S2-5 may use this to ensure the sidecar/commissioning window is active.</summary>
+    /// <summary>"Pair with Google Home…" was clicked (the cached pairing window is shown either way).</summary>
     public event EventHandler? PairRequested;
 
-    /// <summary>"Overlay pop-ups" was toggled (already persisted to <see cref="Config"/> by the time this fires); S2-5 flips the live <c>OverlayHud</c>.</summary>
+    /// <summary>"Overlay pop-ups" was toggled (already persisted to <see cref="Config"/> by the time this fires); <c>Program</c> flips the live <c>OverlayHud</c>.</summary>
     public event EventHandler<bool>? OverlayEnabledChanged;
 
     /// <summary>"Exit" was clicked, before teardown; subscribers should synchronously stop anything they own (e.g. the sidecar).</summary>
@@ -211,7 +216,15 @@ public sealed class TrayContext : ApplicationContext
     private void OnEnableBridgeCheckedChanged(object? sender, EventArgs e)
     {
         bool enabled = _enableBridgeItem.Checked;
-        Log.Info($"Tray: 'Enable bridge' set to {enabled} (S2-5 wires the actual sidecar start/stop).");
+        if (!_applyingConfigChange)
+        {
+            // A user click persists; a Config.Changed sync must not re-save
+            // what the file already says.
+            Config.Current.BridgeEnabled = enabled;
+            Config.Save();
+        }
+
+        Log.Info($"Tray: 'Enable bridge' set to {enabled}.");
         if (!enabled)
         {
             // The one state transition this class can assert on its own
@@ -244,15 +257,16 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnOverlayCheckedChanged(object? sender, EventArgs e)
     {
-        if (_applyingConfigChange)
+        bool enabled = _overlayItem.Checked;
+        if (!_applyingConfigChange)
         {
-            return; // Programmatic sync from Config.Changed, not a user click.
+            // A user click persists; a Config.Changed sync must not re-save
+            // what the file already says.
+            Config.Current.OverlayEnabled = enabled;
+            Config.Save();
         }
 
-        bool enabled = _overlayItem.Checked;
-        Config.Current.OverlayEnabled = enabled;
-        Config.Save();
-        Log.Info($"Tray: overlay pop-ups set to {enabled} and saved to config.");
+        Log.Info($"Tray: overlay pop-ups set to {enabled}.");
         OverlayEnabledChanged?.Invoke(this, enabled);
     }
 
@@ -264,11 +278,15 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnConfigChanged(object? sender, ConfigChangedEventArgs e)
     {
-        // Keep the checkbox honest if the file was hand-edited before Reload.
+        // Keep the checkboxes honest if the file was hand-edited before
+        // Reload. An actual flip still raises the corresponding *Changed
+        // event (CheckedChanged fires), so the live bridge/overlay follow the
+        // file — the guard only suppresses the redundant re-save.
         _applyingConfigChange = true;
         try
         {
             _overlayItem.Checked = e.NewConfig.OverlayEnabled;
+            _enableBridgeItem.Checked = e.NewConfig.BridgeEnabled;
         }
         finally
         {

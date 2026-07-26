@@ -54,6 +54,13 @@ public sealed class BridgeConfig
     /// <summary>Whether the overlay HUD flashes on commands.</summary>
     public bool OverlayEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Whether the bridge (sidecar + IPC server) runs — the tray "Enable
+    /// bridge" checkbox, persisted. Defaults to <c>false</c>: on first run the
+    /// user enables the bridge explicitly.
+    /// </summary>
+    public bool BridgeEnabled { get; set; }
+
     /// <summary>mDNS interface pin for multi-NIC hosts (maps to matter.js <c>mdns.networkInterface</c>); <c>null</c> = auto-detect.</summary>
     public string? MdnsInterface { get; set; }
 
@@ -228,6 +235,7 @@ public sealed class Config
             ApplyIpcPort(root, result);
             ApplyPowerOffAction(root, result);
             ApplyOverlayEnabled(root, result);
+            ApplyBridgeEnabled(root, result);
             ApplyMdnsInterface(root, result);
             ApplyLogLevel(root, result);
         }
@@ -335,6 +343,22 @@ public sealed class Config
         }
 
         _log("WARN", $"config.json \"overlayEnabled\" must be a boolean; using default {result.OverlayEnabled}.");
+    }
+
+    private void ApplyBridgeEnabled(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("bridgeEnabled", out JsonElement element))
+        {
+            return;
+        }
+
+        if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            result.BridgeEnabled = element.GetBoolean();
+            return;
+        }
+
+        _log("WARN", $"config.json \"bridgeEnabled\" must be a boolean; using default {result.BridgeEnabled}.");
     }
 
     private void ApplyMdnsInterface(JsonElement root, BridgeConfig result)

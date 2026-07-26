@@ -242,6 +242,40 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void BridgeEnabledDefaultsToFalseSoFirstRunNeedsAnExplicitEnable()
+    {
+        Config config = NewConfig();
+
+        Assert.False(config.Current.BridgeEnabled);
+    }
+
+    [Fact]
+    public void BridgeEnabledRoundTripsThroughSaveAndIsWrittenCamelCase()
+    {
+        Config config = NewConfig();
+        config.Current.BridgeEnabled = true;
+        config.Save();
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_path));
+        Assert.True(document.RootElement.TryGetProperty("bridgeEnabled", out JsonElement bridgeEnabled));
+        Assert.True(bridgeEnabled.GetBoolean());
+
+        Config reloaded = NewConfig();
+        Assert.True(reloaded.Current.BridgeEnabled);
+    }
+
+    [Fact]
+    public void NonBooleanBridgeEnabledFallsBackToDefaultAndWarns()
+    {
+        File.WriteAllText(_path, """{"bridgeEnabled": "on"}""");
+
+        Config config = NewConfig();
+
+        Assert.False(config.Current.BridgeEnabled);
+        Assert.True(_log.Contains("WARN", "bridgeEnabled"));
+    }
+
+    [Fact]
     public void ReloadAfterMalformedEditFallsBackToDefaultsWithoutCrashing()
     {
         Config config = NewConfig();
