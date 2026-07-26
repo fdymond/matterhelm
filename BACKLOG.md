@@ -13,7 +13,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S0-2 | CI: GitHub Actions `verify` (bridge) on windows-latest + ubuntu-latest | Green run demonstrated | S | S0-1 | impl (Sonnet) |
 | S0-3 | **SPIKE**: minimal OnOff virtual device (matter.js example) pairs with the real Google Home; answer the hub/border-router question | Result documented in `docs/spikes/S0-3-pairing.md` with log evidence + the hub answer; **needs the human** for the phone/Home-app steps | M | S0-1 | impl (Fable) + human |
 | S0-4 | **SPIKE**: momentary-switch UX — auto-reset 800 ms endpoint; verify Home-app taps and voice register cleanly | Findings + chosen reset interval in `docs/spikes/S0-4-momentary.md` | S | S0-3 | impl (Fable) + human |
-| S0-5 | `app/` scaffold: `HtpcMatterBridge.csproj` (net8.0-windows, WinForms, single-instance Program.cs, Log.cs, empty TrayContext showing an icon), builds with warnings-as-errors | `dotnet build -c Release` 0 warnings; exe shows tray icon; report screenshot/log | S | — | impl (Sonnet) |
+| S0-5 ✅ | `app/` scaffold: `HtpcMatterBridge.csproj` (net8.0-windows, WinForms, single-instance Program.cs, Log.cs, empty TrayContext showing an icon), builds with warnings-as-errors | `dotnet build -c Release` 0 warnings; exe shows tray icon; report screenshot/log | S | — | impl (Sonnet) |
 
 ## Sprint 1 — the bridge (`bridge/`)
 
