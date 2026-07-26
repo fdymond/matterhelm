@@ -33,3 +33,4 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release
+      - run: dotnet test app/HtpcMatterBridge.Tests/HtpcMatterBridge.Tests.csproj -c Release

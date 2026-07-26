@@ -28,6 +28,14 @@ internal static class Program
             return;
         }
 
+        // S2-1 acceptance demo: sidecar crash/auto-restart backoff plus the
+        // wrong-token socket close, with objective PASS/FAIL output.
+        if (args.Contains("--demo-sidecar-chaos"))
+        {
+            Environment.ExitCode = Sidecar.SidecarChaosDemo.Run();
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, name: MutexName, createdNew: out bool createdNew);
         if (!createdNew)
         {
