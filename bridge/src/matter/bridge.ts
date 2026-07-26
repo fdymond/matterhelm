@@ -68,6 +68,8 @@ export interface BridgeOptions {
   port?: number;
   /** Display names — the Google voice targets (BLUEPRINT §2.2). */
   deviceNames: DeviceNames;
+  /** Pins the mDNS interface for multi-NIC hosts; see `./adapter.js`. */
+  mdnsInterface?: string;
   /** Defaults to {@link DEFAULT_VENDOR_ID} (test VID, ADR-002). */
   vendorId?: number;
   /** Defaults to {@link DEFAULT_PRODUCT_ID} (test PID, ADR-002). */
@@ -226,6 +228,7 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     id: NODE_ID,
     storageDir: options.storageDir,
     ...(options.port === undefined ? {} : { port: options.port }),
+    ...(options.mdnsInterface === undefined ? {} : { mdnsInterface: options.mdnsInterface }),
     vendorId: options.vendorId ?? DEFAULT_VENDOR_ID,
     productId: options.productId ?? DEFAULT_PRODUCT_ID,
     vendorName: VENDOR_NAME,

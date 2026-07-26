@@ -50,6 +50,12 @@ export interface MatterNodeOptions {
   storageDir: string;
   /** Matter UDP/TCP port; matter.js defaults to 5540 when omitted. */
   port?: number;
+  /**
+   * Pins the mDNS interface for multi-NIC hosts (maps to matter.js
+   * `mdns.networkInterface`, BLUEPRINT §2.1 Windows notes). Unset = matter.js
+   * auto-detects the primary LAN adapter.
+   */
+  mdnsInterface?: string;
   /** Vendor id (test VID per ADR-002 unless overridden). */
   vendorId: number;
   /** Product id (test PID per ADR-002 unless overridden). */
@@ -212,6 +218,9 @@ export class MatterNode {
     }
     Environment.default.vars.set("storage.path", options.storageDir);
     Environment.default.vars.set("runtime.signals", false);
+    if (options.mdnsInterface !== undefined) {
+      Environment.default.vars.set("mdns.networkInterface", options.mdnsInterface);
+    }
     const server = await ServerNode.create({
       id: options.id,
       ...(options.port === undefined ? {} : { network: { port: options.port } }),
