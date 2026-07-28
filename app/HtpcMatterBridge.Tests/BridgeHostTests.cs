@@ -47,7 +47,7 @@ public static class BridgeHostTests
         private readonly Config _config;
         private readonly TestSupport.LogCapture _log = new();
         private readonly FakeExecutor _executor = new();
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
         private readonly List<(string Primary, string Pill, bool IsError)> _overlay = [];
         private readonly List<BridgeState> _states = [];
         private readonly List<PairingFrame> _pairings = [];
@@ -405,7 +405,7 @@ public static class BridgeHostTests
         /// <summary>Thread-safe no-side-effect <see cref="IActionExecutor"/> with scriptable results and volume state.</summary>
         private sealed class FakeExecutor : IActionExecutor
         {
-            private readonly object _gate = new();
+            private readonly Lock _gate = new();
             private readonly List<(string Name, object? Value)> _calls = [];
 
             public event EventHandler<VolumeState>? VolumeChanged;

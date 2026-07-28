@@ -43,7 +43,7 @@ public sealed class ActionExecutorAdapter : IActionExecutor
 
     /// <inheritdoc />
     public bool Execute(string name, object? value = null) =>
-        name == "sleep" ? _displayPower.Sleep() : _executor.Execute(name, value);
+        name == "sleep" ? DisplayPower.Sleep() : _executor.Execute(name, value);
 
     /// <inheritdoc />
     public VolumeState GetVolumeState() => _executor.Volume.GetState();
@@ -100,6 +100,25 @@ public static class SidecarLaunchSpec
     }
 }
 
+/// <summary>One built-in endpoint's entry in the <c>HTPC_BRIDGE_ENDPOINTS</c> contract: display name + whether the bridge publishes it.</summary>
+internal sealed record SidecarEndpointEntry(string Name, bool Enabled);
+
+/// <summary>One enabled custom endpoint's entry in <c>HTPC_BRIDGE_ENDPOINTS</c>: stable key + display name (never its action — the sidecar must not know what commands do).</summary>
+internal sealed record SidecarCustomEndpointEntry(string Key, string Name);
+
+/// <summary>
+/// Wire shape of <c>HTPC_BRIDGE_ENDPOINTS</c> (BLUEPRINT §2.3 as amended by
+/// ADR-004 §2), serialized via <see cref="SidecarEnvJsonContext"/>; property
+/// declaration order is the wire order.
+/// </summary>
+internal sealed record SidecarEndpointsEnv(
+    SidecarEndpointEntry Speaker,
+    SidecarEndpointEntry PlayPause,
+    SidecarEndpointEntry Next,
+    SidecarEndpointEntry Previous,
+    SidecarEndpointEntry Power,
+    SidecarCustomEndpointEntry[] Custom);
+
 /// <summary>
 /// S2-5 composition root for the running bridge: owns the
 /// <see cref="IpcServer"/> + <see cref="SidecarSupervisor"/> pair per enabled
@@ -148,7 +167,7 @@ public sealed class BridgeHost : IDisposable
     private readonly string _storageDir;
 
     /// <summary>Guards lifecycle (_server/_supervisor/_running/_disposed) and state-derivation fields; events always fire outside it.</summary>
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
 
     private IpcServer? _server;
     private SidecarSupervisor? _supervisor;
@@ -159,7 +178,7 @@ public sealed class BridgeHost : IDisposable
     private bool _disposed;
 
     /// <summary>Serializes StateChanged delivery; see RecomputeState. Never taken while holding _gate.</summary>
-    private readonly object _notifyGate = new();
+    private readonly Lock _notifyGate = new();
     private BridgeState _notifiedState = BridgeState.Disabled;
 
     /// <summary>Creates the host (nothing starts until <see cref="SetEnabled"/>).</summary>
@@ -318,18 +337,16 @@ public sealed class BridgeHost : IDisposable
         var extra = new Dictionary<string, string>
         {
             ["HTPC_BRIDGE_ENDPOINTS"] = JsonSerializer.Serialize(
-                new
-                {
-                    speaker = new { name = commands.Speaker.Name, enabled = commands.Speaker.Enabled },
-                    playPause = new { name = commands.PlayPause.Name, enabled = commands.PlayPause.Enabled },
-                    next = new { name = commands.Next.Name, enabled = commands.Next.Enabled },
-                    previous = new { name = commands.Previous.Name, enabled = commands.Previous.Enabled },
-                    power = new { name = commands.Power.Name, enabled = commands.Power.Enabled },
-                    custom = commands.Custom
+                new SidecarEndpointsEnv(
+                    Speaker: new SidecarEndpointEntry(commands.Speaker.Name, commands.Speaker.Enabled),
+                    PlayPause: new SidecarEndpointEntry(commands.PlayPause.Name, commands.PlayPause.Enabled),
+                    Next: new SidecarEndpointEntry(commands.Next.Name, commands.Next.Enabled),
+                    Previous: new SidecarEndpointEntry(commands.Previous.Name, commands.Previous.Enabled),
+                    Power: new SidecarEndpointEntry(commands.Power.Name, commands.Power.Enabled),
+                    Custom: [.. commands.Custom
                         .Where(c => c.Enabled)
-                        .Select(c => new { key = c.Key, name = c.Name })
-                        .ToArray(),
-                }),
+                        .Select(c => new SidecarCustomEndpointEntry(c.Key, c.Name))]),
+                SidecarEnvJsonContext.Default.SidecarEndpointsEnv),
         };
         if (!string.IsNullOrWhiteSpace(config.MdnsInterface))
         {

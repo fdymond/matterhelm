@@ -14,7 +14,7 @@ namespace HtpcMatterBridge.Ui;
 /// no absolute pixel positions) and theme-safe (system colors only, so
 /// <c>Application.SetColorMode</c> dark rendering works).
 /// </summary>
-public sealed class SettingsWindow : Form
+public sealed partial class SettingsWindow : Form
 {
     private const int NavItemHeightLogical = 34;
 
@@ -377,7 +377,7 @@ public sealed class SettingsWindow : Form
 
     // ---- content construction ---------------------------------------------
 
-    private Control BuildCategoryPanel(SettingsCategory category)
+    private TableLayoutPanel BuildCategoryPanel(SettingsCategory category)
     {
         var panel = new TableLayoutPanel
         {
@@ -404,7 +404,7 @@ public sealed class SettingsWindow : Form
         return panel;
     }
 
-    private Control BuildSettingRow(SettingDescriptor setting)
+    private TableLayoutPanel BuildSettingRow(SettingDescriptor setting)
     {
         var row = new TableLayoutPanel
         {
@@ -426,7 +426,7 @@ public sealed class SettingsWindow : Form
         return row;
     }
 
-    private Control BuildTextStack(SettingDescriptor setting)
+    private TableLayoutPanel BuildTextStack(SettingDescriptor setting)
     {
         var stack = new TableLayoutPanel
         {
@@ -483,7 +483,7 @@ public sealed class SettingsWindow : Form
         _ => throw new ArgumentOutOfRangeException(nameof(setting), setting.Kind, "no editor for kind"),
     };
 
-    private Control BuildToggle(SettingDescriptor setting)
+    private CheckBox BuildToggle(SettingDescriptor setting)
     {
         var check = new CheckBox { AutoSize = true };
         check.CheckedChanged += (_, _) => OnEdited(setting, check.Checked);
@@ -491,7 +491,7 @@ public sealed class SettingsWindow : Form
         return check;
     }
 
-    private Control BuildPort(SettingDescriptor setting)
+    private NumericUpDown BuildPort(SettingDescriptor setting)
     {
         var number = new NumericUpDown { Minimum = 1, Maximum = 65535, Width = S(110) };
         number.ValueChanged += (_, _) => OnEdited(setting, (int)number.Value);
@@ -499,7 +499,7 @@ public sealed class SettingsWindow : Form
         return number;
     }
 
-    private Control BuildTextBox(SettingDescriptor setting)
+    private TextBox BuildTextBox(SettingDescriptor setting)
     {
         var box = new TextBox { Width = S(200) };
         box.TextChanged += (_, _) => OnEdited(setting, box.Text);
@@ -507,7 +507,7 @@ public sealed class SettingsWindow : Form
         return box;
     }
 
-    private Control BuildChoice(SettingDescriptor setting)
+    private ComboBox BuildChoice(SettingDescriptor setting)
     {
         var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(180) };
         IReadOnlyList<string> labels = setting.ChoiceLabels.Count > 0 ? setting.ChoiceLabels : setting.Choices;
@@ -533,7 +533,7 @@ public sealed class SettingsWindow : Form
         return combo;
     }
 
-    private Control BuildReadOnly(SettingDescriptor setting)
+    private TextBox BuildReadOnly(SettingDescriptor setting)
     {
         var box = new TextBox
         {
@@ -598,7 +598,7 @@ public sealed class SettingsWindow : Form
 
     // ---- custom commands ---------------------------------------------------
 
-    private Control BuildCustomCommandsBlock(SettingDescriptor setting)
+    private TableLayoutPanel BuildCustomCommandsBlock(SettingDescriptor setting)
     {
         var block = new TableLayoutPanel
         {
@@ -778,6 +778,6 @@ public sealed class SettingsWindow : Form
     /// <summary>Logical (96-dpi) padding → device padding.</summary>
     private Padding SP(int left, int top, int right, int bottom) => new(S(left), S(top), S(right), S(bottom));
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, nint wParam, string lParam);
+    [LibraryImport("user32.dll", EntryPoint = "SendMessageW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial IntPtr SendMessage(IntPtr hWnd, int msg, nint wParam, string lParam);
 }

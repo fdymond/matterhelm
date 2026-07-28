@@ -166,7 +166,7 @@ public sealed class SettingsViewModel
     /// <summary>Validates the working copy; empty = saveable.</summary>
     public IReadOnlyList<SettingsValidationError> Validate()
     {
-        var errors = new List<SettingsValidationError>();
+        List<SettingsValidationError> errors = [];
         if (Working.IpcPort is < 1 or > 65535)
         {
             errors.Add(new SettingsValidationError("ipc-port", "Port must be between 1 and 65535."));
@@ -306,7 +306,7 @@ public sealed class SettingsViewModel
         Revert();
     }
 
-    private void ValidateBuiltinName(List<SettingsValidationError> errors, string settingId, string name)
+    private static void ValidateBuiltinName(List<SettingsValidationError> errors, string settingId, string name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -316,10 +316,11 @@ public sealed class SettingsViewModel
 
     /// <summary>Deep copy via a JSON round-trip — the config DTOs are exactly the JSON document, so this is lossless (incl. the polymorphic actions).</summary>
     private static BridgeConfig Clone(BridgeConfig source) =>
-        JsonSerializer.Deserialize<BridgeConfig>(JsonSerializer.Serialize(source))!;
+        JsonSerializer.Deserialize(Snapshot(source), ConfigJsonContext.Default.BridgeConfig)!;
 
     /// <summary>Canonical serialized form used for dirty comparison (property order is fixed by the DTO declarations, so equality is well-defined).</summary>
-    private static string Snapshot(BridgeConfig config) => JsonSerializer.Serialize(config);
+    private static string Snapshot(BridgeConfig config) =>
+        JsonSerializer.Serialize(config, ConfigJsonContext.Default.BridgeConfig);
 
     private static void CopyInto(BridgeConfig from, BridgeConfig into)
     {

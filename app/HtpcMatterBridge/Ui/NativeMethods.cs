@@ -6,9 +6,11 @@ namespace HtpcMatterBridge.Ui;
 /// P/Invoke surface for the layered-window overlay technique (ADR-003 item 5:
 /// <c>WS_EX_LAYERED</c> + <c>UpdateLayeredWindow</c>) and the objective
 /// non-activation / click-through checks used by <see cref="OverlayHudDemo"/>.
-/// The only place these user32/gdi32 signatures are declared.
+/// The only place these user32/gdi32 signatures are declared. Declared with
+/// <see cref="LibraryImportAttribute"/> (ADR-005: compile-time marshalling for
+/// all non-COM P/Invoke).
 /// </summary>
-internal static class NativeMethods
+internal static partial class NativeMethods
 {
     internal const int GwlExstyle = -20;
     internal const int WsExLayered = 0x00080000;
@@ -27,8 +29,9 @@ internal static class NativeMethods
     internal const uint SwpNoSize = 0x0001;
 
     /// <summary>Destroys a native HICON (used by <see cref="TrayIcons"/> after cloning into a managed Icon).</summary>
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool DestroyIcon(IntPtr hIcon);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DestroyIcon(IntPtr hIcon);
 
     // The one flag that matters here: without it, SetWindowPos(HWND_TOPMOST, ...)
     // activates the window as a side effect of the z-order change — independent
@@ -89,8 +92,9 @@ internal static class NativeMethods
         public uint biClrImportant;
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool UpdateLayeredWindow(
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UpdateLayeredWindow(
         IntPtr hwnd,
         IntPtr hdcDst,
         ref Point32 pptDst,
@@ -101,8 +105,8 @@ internal static class NativeMethods
         ref BlendFunction pblend,
         uint dwFlags);
 
-    [DllImport("gdi32.dll", SetLastError = true)]
-    internal static extern IntPtr CreateDIBSection(
+    [LibraryImport("gdi32.dll", SetLastError = true)]
+    internal static partial IntPtr CreateDIBSection(
         IntPtr hdc,
         ref BitmapInfoHeader bmi,
         uint usage,
@@ -110,42 +114,42 @@ internal static class NativeMethods
         IntPtr hSection,
         uint offset);
 
-    [DllImport("gdi32.dll")]
-    internal static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [LibraryImport("gdi32.dll")]
+    internal static partial IntPtr CreateCompatibleDC(IntPtr hdc);
 
-    [DllImport("gdi32.dll")]
-    internal static extern bool DeleteDC(IntPtr hdc);
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteDC(IntPtr hdc);
 
-    [DllImport("gdi32.dll")]
-    internal static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiObj);
+    [LibraryImport("gdi32.dll")]
+    internal static partial IntPtr SelectObject(IntPtr hdc, IntPtr hgdiObj);
 
-    [DllImport("gdi32.dll")]
-    internal static extern bool DeleteObject(IntPtr hObject);
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteObject(IntPtr hObject);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
-    [DllImport("user32.dll")]
-    internal static extern IntPtr GetForegroundWindow();
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetForegroundWindow();
 
     // Thread/queue-scoped "active window" — unlike GetForegroundWindow, this is
     // not subject to the OS anti-focus-stealing lock, so it is a meaningful
     // signal even when the calling process cannot win the desktop-wide
     // foreground (e.g. launched non-interactively by CI/automation).
-    [DllImport("user32.dll")]
-    internal static extern IntPtr GetActiveWindow();
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetActiveWindow();
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    internal static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr WindowFromPoint(Point32 point);
 
-    [DllImport("user32.dll")]
-    internal static extern IntPtr WindowFromPoint(Point32 point);
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    private static partial IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
 
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
-    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
-    private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+    private static partial int GetWindowLong32(IntPtr hWnd, int nIndex);
 
     /// <summary>
     /// Bitness-safe style read-back: <c>GetWindowLongPtr</c> does not exist on

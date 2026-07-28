@@ -183,16 +183,6 @@ public sealed class ConfigChangedEventArgs : EventArgs
 /// </summary>
 public sealed class Config
 {
-    private static readonly JsonSerializerOptions _writeOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        // Options-level (not attribute-level) so the camelCase naming policy
-        // applies to enum member names too ("pauseAndDisplaysOff", not
-        // "PauseAndDisplaysOff") — the wire format the file schema promises.
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
     private readonly string _path;
     private readonly Action<string, string> _log;
 
@@ -287,7 +277,10 @@ public sealed class Config
                 Directory.CreateDirectory(dir);
             }
 
-            string json = JsonSerializer.Serialize(config, _writeOptions);
+            // Source-generated contract (ADR-005): camelCase properties and
+            // camelCase enum member names ("pauseAndDisplaysOff", not
+            // "PauseAndDisplaysOff") — the wire format the file schema promises.
+            string json = JsonSerializer.Serialize(config, ConfigJsonContext.Default.BridgeConfig);
 
             // Write-then-move: a crash mid-write leaves the previous file intact
             // rather than a half-written config.json.

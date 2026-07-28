@@ -10,7 +10,7 @@ using HtpcMatterBridge.Ui;
 namespace HtpcMatterBridge;
 
 /// <summary>Composition root: enforces single instance, then wires <see cref="TrayContext"/> to <see cref="BridgeHost"/> and runs the tray.</summary>
-internal static class Program
+internal static partial class Program
 {
     // Session-local (not "Global\") mutex is sufficient: this app is per-user,
     // per-session tray tooling, not a service shared across RDP sessions.
@@ -188,9 +188,9 @@ internal static class Program
         _ = AttachConsole(AttachParentProcess); // WinExe has no console; borrow the parent's if present.
         ApplicationConfiguration.Initialize();
 
-        var gate = new object();
-        var lines = new List<string>();
-        var log = new List<(string Level, string Message)>();
+        var gate = new Lock();
+        List<string> lines = [];
+        List<(string Level, string Message)> log = [];
         bool allPassed = true;
 
         void Emit(string line)
@@ -281,9 +281,9 @@ internal static class Program
 
         Emit($"original state: volume {original.VolumePercent} %, muted {original.Muted}");
 
-        var overlayCalls = new List<(string Primary, string Pill, bool IsError)>();
-        var pairingFrames = new List<PairingFrame>();
-        var states = new List<BridgeState>();
+        List<(string Primary, string Pill, bool IsError)> overlayCalls = [];
+        List<PairingFrame> pairingFrames = [];
+        List<BridgeState> states = [];
         using var hud = new OverlayHud();
         using var host = new BridgeHost(
             config,
@@ -723,7 +723,7 @@ internal static class Program
     /// <summary>True iff a sampled grid of pixels contains at least <paramref name="minDistinctColors"/> distinct ARGB values — evidence of an actually-rendered QR rather than a blank/uniform box.</summary>
     private static bool HasPixelVariance(Bitmap bitmap, int minDistinctColors)
     {
-        var distinctColors = new HashSet<int>();
+        HashSet<int> distinctColors = [];
         int stepX = Math.Max(1, bitmap.Width / 100);
         int stepY = Math.Max(1, bitmap.Height / 100);
         for (int y = 0; y < bitmap.Height; y += stepY)
@@ -737,6 +737,7 @@ internal static class Program
         return distinctColors.Count >= minDistinctColors;
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool AttachConsole(int processId);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AttachConsole(int processId);
 }
