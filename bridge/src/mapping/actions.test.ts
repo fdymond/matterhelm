@@ -144,6 +144,50 @@ describe("clusterWriteToAction — momentary switches (playPause/next/previous)"
   });
 });
 
+describe("clusterWriteToAction — custom commands (ADR-004 momentary plugs)", () => {
+  it("dispatches a custom action carrying the command's key on the `on` write", () => {
+    const write: ClusterWrite = {
+      endpoint: "custom",
+      key: "movie-mode",
+      cluster: "onOff",
+      on: true,
+    };
+    expect(clusterWriteToAction(write, id)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "action",
+      id,
+      name: "custom",
+      key: "movie-mode",
+    });
+  });
+
+  it("passes the key through verbatim for a different command", () => {
+    const write: ClusterWrite = {
+      endpoint: "custom",
+      key: "stop-media",
+      cluster: "onOff",
+      on: true,
+    };
+    const action = clusterWriteToAction(write, id);
+    expect(action).not.toBeNull();
+    if (action?.name === "custom") {
+      expect(action.key).toBe("stop-media");
+    } else {
+      expect.fail("expected a custom action frame");
+    }
+  });
+
+  it("returns null for the auto-reset `off` write (no action, like built-in momentaries)", () => {
+    const write: ClusterWrite = {
+      endpoint: "custom",
+      key: "movie-mode",
+      cluster: "onOff",
+      on: false,
+    };
+    expect(clusterWriteToAction(write, id)).toBeNull();
+  });
+});
+
 describe("clusterWriteToAction — power endpoint", () => {
   it("maps On (true) to powerOn", () => {
     const write: ClusterWrite = { endpoint: "power", cluster: "onOff", on: true };

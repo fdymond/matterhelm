@@ -1,117 +1,213 @@
 /**
  * Specification tests for matter/devices.ts (docs/BLUEPRINT.md §2.2 table +
- * the identity rules in the module doc). Pure — no matter.js loaded.
+ * ADR-004 endpoint-set derivation + the identity rules in the module doc).
+ * Pure — no matter.js loaded.
  */
 import { describe, expect, it } from "vitest";
 
 import {
+  BUILTIN_ENDPOINT_KEYS,
   MOMENTARY_ENDPOINT_KEYS,
   bridgeIdentity,
   endpointSpecs,
-  type DeviceNames,
-  type EndpointKey,
+  isMomentary,
+  type EndpointsConfig,
   type EndpointSpec,
 } from "./devices.js";
 
-const names: DeviceNames = {
-  speaker: "HTPC Speaker",
-  playPause: "HTPC Play Pause",
-  next: "HTPC Next",
-  previous: "HTPC Previous",
-  power: "HTPC Power",
+const allEnabled: EndpointsConfig = {
+  speaker: { name: "HTPC Speaker", enabled: true },
+  playPause: { name: "HTPC Play Pause", enabled: true },
+  next: { name: "HTPC Next", enabled: true },
+  previous: { name: "HTPC Previous", enabled: true },
+  power: { name: "HTPC Power", enabled: true },
+  custom: [],
 };
 
 const seed = "test-seed";
 
-const allKeys: readonly EndpointKey[] = ["speaker", "playPause", "next", "previous", "power"];
-
-function allSpecs(): EndpointSpec[] {
-  const specs = endpointSpecs(names, seed);
-  return allKeys.map((key) => specs[key]);
+function withCustom(...custom: { key: string; name: string }[]): EndpointsConfig {
+  return { ...allEnabled, custom };
 }
 
-describe("endpointSpecs — §2.2 device table", () => {
-  it("builds all five endpoints of the table", () => {
-    expect(Object.keys(endpointSpecs(names, seed)).sort()).toEqual([...allKeys].sort());
+function roles(specs: readonly EndpointSpec[]): string[] {
+  return specs.map((spec) => (spec.role === "custom" ? `custom:${spec.key}` : spec.role));
+}
+
+describe("endpointSpecs — endpoint-set derivation (ADR-004)", () => {
+  it("derives all five §2.2 endpoints, in table order, when everything is enabled", () => {
+    expect(roles(endpointSpecs(allEnabled, seed))).toEqual([...BUILTIN_ENDPOINT_KEYS]);
   });
 
-  it("models the speaker as the one Speaker device and the rest as plugs", () => {
-    const specs = endpointSpecs(names, seed);
-    expect(specs.speaker.kind).toBe("speaker");
-    expect(specs.playPause.kind).toBe("onOffPlug");
-    expect(specs.next.kind).toBe("onOffPlug");
-    expect(specs.previous.kind).toBe("onOffPlug");
-    expect(specs.power.kind).toBe("onOffPlug");
+  it("omits a disabled built-in entirely", () => {
+    const config = { ...allEnabled, playPause: { name: "HTPC Play Pause", enabled: false } };
+    expect(roles(endpointSpecs(config, seed))).toEqual(["speaker", "next", "previous", "power"]);
   });
 
-  it("keys each spec by its own role", () => {
-    const specs = endpointSpecs(names, seed);
-    for (const key of allKeys) {
-      expect(specs[key].key).toBe(key);
+  it("omits a disabled speaker (no speaker endpoint at all)", () => {
+    const config = { ...allEnabled, speaker: { name: "HTPC Speaker", enabled: false } };
+    const specs = endpointSpecs(config, seed);
+    expect(specs.some((spec) => spec.kind === "speaker")).toBe(false);
+    expect(roles(specs)).toEqual(["playPause", "next", "previous", "power"]);
+  });
+
+  it("derives an empty set when every built-in is disabled and no custom exists", () => {
+    const config: EndpointsConfig = {
+      speaker: { name: "S", enabled: false },
+      playPause: { name: "P", enabled: false },
+      next: { name: "N", enabled: false },
+      previous: { name: "V", enabled: false },
+      power: { name: "W", enabled: false },
+      custom: [],
+    };
+    expect(endpointSpecs(config, seed)).toEqual([]);
+  });
+
+  it("appends custom commands after the built-ins, in config order", () => {
+    const config = withCustom(
+      { key: "movie-mode", name: "Movie Mode" },
+      { key: "stop-media", name: "HTPC Stop" },
+    );
+    expect(roles(endpointSpecs(config, seed))).toEqual([
+      ...BUILTIN_ENDPOINT_KEYS,
+      "custom:movie-mode",
+      "custom:stop-media",
+    ]);
+  });
+
+  it("models the speaker as the one Speaker device and everything else as plugs", () => {
+    const specs = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+    for (const spec of specs) {
+      expect(spec.kind).toBe(spec.role === "speaker" ? "speaker" : "onOffPlug");
     }
   });
 
   it("uses the configured display name as the endpoint name (voice target)", () => {
-    const specs = endpointSpecs(names, seed);
-    for (const key of allKeys) {
-      expect(specs[key].info.name).toBe(names[key]);
-    }
+    const specs = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+    const nameOf = (id: string): string | undefined =>
+      specs.find((spec) => spec.info.id === id)?.info.name;
+    expect(nameOf("speaker")).toBe("HTPC Speaker");
+    expect(nameOf("power")).toBe("HTPC Power");
+    expect(nameOf("custom-movie-mode")).toBe("Movie Mode");
   });
 
-  it("classifies exactly playPause/next/previous as momentary", () => {
+  it("classifies exactly playPause/next/previous as built-in momentaries", () => {
     expect(MOMENTARY_ENDPOINT_KEYS).toEqual(["playPause", "next", "previous"]);
+  });
+});
+
+describe("isMomentary — §2.2/ADR-004 auto-reset semantics", () => {
+  const specs = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+
+  it("marks playPause/next/previous and every custom command as momentary", () => {
+    const momentaryIds = specs.filter(isMomentary).map((spec) => spec.info.id);
+    expect(momentaryIds).toEqual(["playpause", "next", "previous", "custom-movie-mode"]);
+  });
+
+  it("marks the speaker and the stateful power toggle as non-momentary", () => {
+    const stateful = specs.filter((spec) => !isMomentary(spec)).map((spec) => spec.info.id);
+    expect(stateful).toEqual(["speaker", "power"]);
   });
 });
 
 describe("endpointSpecs — stable identity", () => {
   it("derives fixed lowercase endpoint ids from the role, not the name", () => {
-    const specs = endpointSpecs(names, seed);
-    expect(specs.speaker.info.id).toBe("speaker");
-    expect(specs.playPause.info.id).toBe("playpause");
-    expect(specs.next.info.id).toBe("next");
-    expect(specs.previous.info.id).toBe("previous");
-    expect(specs.power.info.id).toBe("power");
+    const ids = endpointSpecs(allEnabled, seed).map((spec) => spec.info.id);
+    expect(ids).toEqual(["speaker", "playpause", "next", "previous", "power"]);
+  });
+
+  it("gives a custom command the endpoint id custom-<key>", () => {
+    const specs = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+    expect(specs.at(-1)?.info.id).toBe("custom-movie-mode");
   });
 
   it("is deterministic: the same seed always yields the same identity", () => {
-    expect(endpointSpecs(names, seed)).toEqual(endpointSpecs(names, seed));
+    const config = withCustom({ key: "movie-mode", name: "Movie Mode" });
+    expect(endpointSpecs(config, seed)).toEqual(endpointSpecs(config, seed));
   });
 
-  it("keeps identity unchanged when a device is renamed", () => {
-    const renamed = endpointSpecs({ ...names, playPause: "Media Toggle" }, seed);
-    const original = endpointSpecs(names, seed);
-    expect(renamed.playPause.info.id).toBe(original.playPause.info.id);
-    expect(renamed.playPause.info.serialNumber).toBe(original.playPause.info.serialNumber);
-    expect(renamed.playPause.info.uniqueId).toBe(original.playPause.info.uniqueId);
+  it("keeps a built-in's identity unchanged when it is renamed", () => {
+    const find = (specs: readonly EndpointSpec[]): EndpointSpec | undefined =>
+      specs.find((spec) => spec.info.id === "playpause");
+    const renamed = find(
+      endpointSpecs({ ...allEnabled, playPause: { name: "Media Toggle", enabled: true } }, seed),
+    );
+    const original = find(endpointSpecs(allEnabled, seed));
+    expect(renamed).toBeDefined();
+    expect(renamed?.info.serialNumber).toBe(original?.info.serialNumber);
+    expect(renamed?.info.uniqueId).toBe(original?.info.uniqueId);
+  });
+
+  it("keeps a custom command's identity unchanged when its display name changes (ADR-004)", () => {
+    const before = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+    const after = endpointSpecs(withCustom({ key: "movie-mode", name: "Cinema Time" }), seed);
+    expect(after.at(-1)?.info.id).toBe(before.at(-1)?.info.id);
+    expect(after.at(-1)?.info.serialNumber).toBe(before.at(-1)?.info.serialNumber);
+    expect(after.at(-1)?.info.uniqueId).toBe(before.at(-1)?.info.uniqueId);
+  });
+
+  it("keeps built-in identities unchanged by the presence of custom commands", () => {
+    const plain = endpointSpecs(allEnabled, seed);
+    const withOne = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+    for (let i = 0; i < plain.length; i += 1) {
+      expect(withOne[i]).toEqual(plain[i]);
+    }
   });
 
   it("changes every serialNumber and uniqueId when the seed changes", () => {
-    const other = endpointSpecs(names, "other-seed");
-    const original = endpointSpecs(names, seed);
-    for (const key of allKeys) {
-      expect(other[key].info.serialNumber).not.toBe(original[key].info.serialNumber);
-      expect(other[key].info.uniqueId).not.toBe(original[key].info.uniqueId);
+    const config = withCustom({ key: "movie-mode", name: "Movie Mode" });
+    const original = endpointSpecs(config, seed);
+    const other = endpointSpecs(config, "other-seed");
+    for (let i = 0; i < original.length; i += 1) {
+      expect(other[i]?.info.serialNumber).not.toBe(original[i]?.info.serialNumber);
+      expect(other[i]?.info.uniqueId).not.toBe(original[i]?.info.uniqueId);
     }
   });
 
   it("gives every endpoint a distinct serialNumber and a distinct uniqueId", () => {
-    const serials = allSpecs().map((spec) => spec.info.serialNumber);
-    const uniqueIds = allSpecs().map((spec) => spec.info.uniqueId);
-    expect(new Set(serials).size).toBe(allKeys.length);
-    expect(new Set(uniqueIds).size).toBe(allKeys.length);
+    const specs = endpointSpecs(
+      withCustom({ key: "movie-mode", name: "Movie Mode" }, { key: "stop-media", name: "Stop" }),
+      seed,
+    );
+    expect(new Set(specs.map((spec) => spec.info.serialNumber)).size).toBe(specs.length);
+    expect(new Set(specs.map((spec) => spec.info.uniqueId)).size).toBe(specs.length);
+  });
+
+  it("keeps a custom key spelling a built-in role (e.g. 'next') fully distinct in identity", () => {
+    const specs = endpointSpecs(withCustom({ key: "next", name: "Custom Next" }), seed);
+    const builtinNext = specs.find((spec) => spec.info.id === "next");
+    const customNext = specs.find((spec) => spec.info.id === "custom-next");
+    expect(builtinNext).toBeDefined();
+    expect(customNext).toBeDefined();
+    expect(customNext?.info.serialNumber).not.toBe(builtinNext?.info.serialNumber);
+    expect(customNext?.info.uniqueId).not.toBe(builtinNext?.info.uniqueId);
   });
 
   it("never reuses a serialNumber as a uniqueId (matter.js warns on equality)", () => {
-    for (const spec of allSpecs()) {
+    const specs = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+    for (const spec of specs) {
       expect(spec.info.uniqueId).not.toBe(spec.info.serialNumber);
     }
   });
 
-  it("fits Matter's 32-character limits for serialNumber and uniqueId", () => {
-    for (const spec of allSpecs()) {
+  it("fits Matter's 32-character limits even for a maximum-length custom key", () => {
+    const longKey = `${"k".repeat(31)}-${"m".repeat(32)}`; // 64 chars, valid slug
+    const specs = endpointSpecs(withCustom({ key: longKey, name: "Long" }), seed);
+    for (const spec of specs) {
       expect(spec.info.serialNumber.length).toBeLessThanOrEqual(32);
       expect(spec.info.uniqueId.length).toBeLessThanOrEqual(32);
     }
+  });
+
+  it("keeps two long custom keys sharing a serial prefix distinct via the digest", () => {
+    const base = "k".repeat(40);
+    const specs = endpointSpecs(
+      withCustom({ key: `${base}-a`, name: "A" }, { key: `${base}-b`, name: "B" }),
+      seed,
+    );
+    const [a, b] = specs.slice(-2);
+    expect(a?.info.serialNumber).not.toBe(b?.info.serialNumber);
+    expect(a?.info.uniqueId).not.toBe(b?.info.uniqueId);
   });
 });
 
@@ -122,7 +218,8 @@ describe("bridgeIdentity — root node identity", () => {
 
   it("differs from every bridged endpoint's identity", () => {
     const bridge = bridgeIdentity(seed);
-    for (const spec of allSpecs()) {
+    const specs = endpointSpecs(withCustom({ key: "bridge", name: "Sneaky" }), seed);
+    for (const spec of specs) {
       expect(spec.info.serialNumber).not.toBe(bridge.serialNumber);
       expect(spec.info.uniqueId).not.toBe(bridge.uniqueId);
     }

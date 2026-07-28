@@ -16,7 +16,8 @@ import { PROTOCOL_VERSION, type ActionFrame } from "../ipc/protocol.js";
 
 /**
  * A single cluster write observed on an endpoint, as a plain descriptor.
- * Mirrors docs/BLUEPRINT.md §2.2's endpoint table:
+ * Mirrors docs/BLUEPRINT.md §2.2's endpoint table plus ADR-004's custom
+ * commands:
  * - `speaker` / `onOff`: the Speaker endpoint's OnOff cluster, used as mute
  *   control (not power) — see {@link onOffToMuted} for the polarity.
  * - `speaker` / `levelControl`: the Speaker endpoint's LevelControl
@@ -26,12 +27,16 @@ import { PROTOCOL_VERSION, type ActionFrame } from "../ipc/protocol.js";
  *   to `off` 800ms later — that reset write also flows through here, see
  *   {@link clusterWriteToAction}).
  * - `power`: the stateful On/Off Plug-in Unit endpoint.
+ * - `custom`: a user-defined command's momentary On/Off plug (ADR-004);
+ *   `key` is the command's slug, and the auto-reset `off` echo maps to no
+ *   action exactly like the built-in momentaries.
  */
 export type ClusterWrite =
   | { endpoint: "speaker"; cluster: "onOff"; on: boolean }
   | { endpoint: "speaker"; cluster: "levelControl"; level: number }
   | { endpoint: "playPause" | "next" | "previous"; cluster: "onOff"; on: boolean }
-  | { endpoint: "power"; cluster: "onOff"; on: boolean };
+  | { endpoint: "power"; cluster: "onOff"; on: boolean }
+  | { endpoint: "custom"; key: string; cluster: "onOff"; on: boolean };
 
 /**
  * Converts a Matter LevelControl `currentLevel` (0-254) to the protocol's
@@ -68,10 +73,10 @@ export function onOffToMuted(on: boolean): boolean {
  * sidecar should send to the tray app, or `null` when the write is not a
  * user-initiated action.
  *
- * The only `null` case is a momentary switch's auto-reset `off` write
- * (BLUEPRINT §2.2: the endpoint resets itself 800ms after `on` so voice/app
- * taps/routines read as one button press) — that echo must not be
- * double-dispatched as an action.
+ * The only `null` case is a momentary switch's auto-reset `off` write —
+ * built-in or custom (BLUEPRINT §2.2 / ADR-004: the endpoint resets itself
+ * 800ms after `on` so voice/app taps/routines read as one button press) —
+ * that echo must not be double-dispatched as an action.
  *
  * `id` is the frame's uuid, supplied by the caller (this function is pure).
  */
@@ -94,6 +99,12 @@ export function clusterWriteToAction(write: ClusterWrite, id: string): ActionFra
         return null;
       }
       return { v, type: "action", id, name: write.endpoint };
+    }
+    case "custom": {
+      if (!write.on) {
+        return null;
+      }
+      return { v, type: "action", id, name: "custom", key: write.key };
     }
   }
 }

@@ -1,9 +1,10 @@
 /**
- * Bridge assembly (docs/BLUEPRINT.md §2.1/§2.2): ServerNode + Aggregator +
- * the five endpoints, matter events translated into plain `ClusterWrite`
- * descriptors for the composition root. This module's exported surface
- * (`createBridge`, `BridgeOptions`, `BridgeHandle`) is plain data — matter.js
- * stays behind ./adapter.js, the only module importing `@matter/*`.
+ * Bridge assembly (docs/BLUEPRINT.md §2.1/§2.2 + ADR-004): ServerNode +
+ * Aggregator + the config-derived endpoint set (enabled built-ins, then one
+ * momentary plug per custom command), matter events translated into plain
+ * `ClusterWrite` descriptors for the composition root. This module's exported
+ * surface (`createBridge`, `BridgeOptions`, `BridgeHandle`) is plain data —
+ * matter.js stays behind ./adapter.js, the only module importing `@matter/*`.
  *
  * Echo suppression (local-write loop): matter.js fires `$Changed` for local
  * attribute writes exactly like remote ones, so applying tray-app state via
@@ -22,23 +23,24 @@
  * their `false` change event flows to `onClusterWrite`, and
  * `mapping/actions.ts` maps it to `null` (no action) by design.
  *
- * Momentary auto-reset (§2.2): a momentary endpoint's `on` write schedules a
- * write of `off` {@link MOMENTARY_RESET_MS} later, so voice, app taps, and
- * routines behave as one button press. A second `on` before the reset
- * restarts the window (last tap wins — matter.js emits no event for a
- * value-unchanged write, so consecutive `on` events imply an interleaved
- * `off`); an `off` from the controller cancels it. Timers are per endpoint
- * and cleared on {@link BridgeHandle.close}.
+ * Momentary auto-reset (§2.2, custom plugs included per ADR-004): a
+ * momentary endpoint's `on` write schedules a write of `off`
+ * {@link MOMENTARY_RESET_MS} later, so voice, app taps, and routines behave
+ * as one button press. A second `on` before the reset restarts the window
+ * (last tap wins — matter.js emits no event for a value-unchanged write, so
+ * consecutive `on` events imply an interleaved `off`); an `off` from the
+ * controller cancels it. Timers are keyed by Matter endpoint id and cleared
+ * on {@link BridgeHandle.close}.
  */
 import type { ClusterWrite } from "../mapping/actions.js";
 
 import { MatterNode } from "./adapter.js";
 import type { PairingCodes, PlugHandle, SpeakerHandle } from "./adapter.js";
-import { MOMENTARY_ENDPOINT_KEYS, bridgeIdentity, endpointSpecs } from "./devices.js";
-import type { DeviceNames, EndpointKey, MomentaryEndpointKey } from "./devices.js";
+import { bridgeIdentity, endpointSpecs } from "./devices.js";
+import type { BridgedDeviceKind, BuiltinEndpointKey, EndpointsConfig } from "./devices.js";
 
 export type { PairingCodes } from "./adapter.js";
-export type { DeviceNames, EndpointKey, MomentaryEndpointKey } from "./devices.js";
+export type { BuiltinEndpointKey, EndpointsConfig, MomentaryEndpointKey } from "./devices.js";
 
 /** §2.2: momentary endpoints auto-reset to `off` this long after `on`. */
 export const MOMENTARY_RESET_MS = 800;
@@ -66,8 +68,8 @@ export interface BridgeOptions {
   storageDir: string;
   /** Matter UDP/TCP port; matter.js defaults to 5540 when omitted. */
   port?: number;
-  /** Display names — the Google voice targets (BLUEPRINT §2.2). */
-  deviceNames: DeviceNames;
+  /** Endpoint set + display names (ADR-004 §2; `config.ts` parses this). */
+  endpoints: EndpointsConfig;
   /** Pins the mDNS interface for multi-NIC hosts; see `./adapter.js`. */
   mdnsInterface?: string;
   /** Defaults to {@link DEFAULT_VENDOR_ID} (test VID, ADR-002). */
@@ -84,11 +86,22 @@ export interface BridgeOptions {
   onClusterWrite: (write: ClusterWrite) => void;
 }
 
+/** One constructed endpoint, as plain data (startup logging/diagnostics). */
+export interface ConstructedEndpoint {
+  /** Matter endpoint id: a built-in role or `custom-<key>`. */
+  id: string;
+  /** Display name — the Google voice target. */
+  name: string;
+  kind: BridgedDeviceKind;
+}
+
 export interface BridgeHandle {
   /** Brings the node online (network + mDNS). Call once. */
   start(): Promise<void>;
   /** Cancels reset timers and shuts the node down. Idempotent, terminal. */
   close(): Promise<void>;
+  /** The endpoint set actually constructed, in add (endpoint-number) order. */
+  readonly endpoints: readonly ConstructedEndpoint[];
   /** Null until started, and null once commissioned (spike semantics). */
   readonly pairingCodes: PairingCodes | null;
   readonly isCommissioned: boolean;
@@ -97,11 +110,17 @@ export interface BridgeHandle {
   /**
    * Applies tray-app state (`mapping/state.ts` output) to the Speaker
    * endpoint: LevelControl currentLevel 0-254 + OnOff (true = unmuted).
-   * Echo-suppressed — does not re-emit `onClusterWrite`.
+   * Echo-suppressed — does not re-emit `onClusterWrite`. A no-op when the
+   * speaker endpoint is disabled (ADR-004: state frames stay tolerated).
    */
   setSpeakerState(level0to254: number, onOff: boolean): Promise<void>;
-  /** Writes a momentary endpoint's OnOff back to `false` (§2.2 reset). */
-  resetMomentary(endpoint: MomentaryEndpointKey): Promise<void>;
+  /**
+   * Writes a momentary endpoint's OnOff back to `false` (§2.2 reset).
+   * `endpointId` is the Matter endpoint id (e.g. `playpause`,
+   * `custom-movie-mode`); an id that names no momentary endpoint throws —
+   * that is an internal bug, not an input.
+   */
+  resetMomentary(endpointId: string): Promise<void>;
 }
 
 /**
@@ -141,21 +160,22 @@ export class EchoSuppressor {
 }
 
 /**
- * Per-endpoint reset timers for the momentary switches. Pure scheduling —
- * the actual `off` write happens in the injected `onReset` callback.
+ * Per-endpoint reset timers for the momentary plugs (built-in and custom),
+ * keyed by Matter endpoint id. Pure scheduling — the actual `off` write
+ * happens in the injected `onReset` callback.
  */
-export class MomentaryResetScheduler {
+export class MomentaryResetScheduler<K extends string = string> {
   readonly #delayMs: number;
-  readonly #onReset: (endpoint: MomentaryEndpointKey) => void;
-  readonly #timers = new Map<MomentaryEndpointKey, NodeJS.Timeout>();
+  readonly #onReset: (endpoint: K) => void;
+  readonly #timers = new Map<K, NodeJS.Timeout>();
 
-  constructor(delayMs: number, onReset: (endpoint: MomentaryEndpointKey) => void) {
+  constructor(delayMs: number, onReset: (endpoint: K) => void) {
     this.#delayMs = delayMs;
     this.#onReset = onReset;
   }
 
   /** An `on` write: (re)starts the endpoint's reset window (last tap wins). */
-  noteOn(endpoint: MomentaryEndpointKey): void {
+  noteOn(endpoint: K): void {
     this.noteOff(endpoint);
     this.#timers.set(
       endpoint,
@@ -167,7 +187,7 @@ export class MomentaryResetScheduler {
   }
 
   /** An `off` write (controller or our own reset): cancels a pending reset. */
-  noteOff(endpoint: MomentaryEndpointKey): void {
+  noteOff(endpoint: K): void {
     const timer = this.#timers.get(endpoint);
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -186,8 +206,9 @@ export class MomentaryResetScheduler {
 
 /** A change event observed on one of our endpoints, as plain data. */
 export type EndpointEvent =
-  | { key: EndpointKey; attribute: "onOff"; on: boolean }
-  | { key: "speaker"; attribute: "level"; level: number | null };
+  | { key: BuiltinEndpointKey; attribute: "onOff"; on: boolean }
+  | { key: "speaker"; attribute: "level"; level: number | null }
+  | { key: "custom"; customKey: string; attribute: "onOff"; on: boolean };
 
 /**
  * Translates an observed endpoint event into the `ClusterWrite` descriptor
@@ -213,13 +234,16 @@ export function endpointEventToClusterWrite(event: EndpointEvent): ClusterWrite 
     case "previous": {
       return { endpoint: event.key, cluster: "onOff", on: event.on };
     }
+    case "custom": {
+      return { endpoint: "custom", key: event.customKey, cluster: "onOff", on: event.on };
+    }
   }
 }
 
 /**
- * Builds the whole §2.2 bridge: node + aggregator + Speaker + three
- * momentary switches + power toggle, wired per the module doc. The returned
- * handle is the matter/ package's entire outward API.
+ * Builds the whole bridge: node + aggregator + the config-derived endpoint
+ * set (§2.2 order, then custom commands), wired per the module doc. The
+ * returned handle is the matter/ package's entire outward API.
  */
 export async function createBridge(options: BridgeOptions): Promise<BridgeHandle> {
   const seed = options.uniqueIdSeed ?? DEFAULT_UNIQUE_ID_SEED;
@@ -237,16 +261,6 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     uniqueId: identity.uniqueId,
   });
 
-  // §2.2 table order — endpoint numbers are assigned in add order.
-  const specs = endpointSpecs(options.deviceNames, seed);
-  const speaker: SpeakerHandle = await node.addSpeaker(specs.speaker.info);
-  const momentary: Record<MomentaryEndpointKey, PlugHandle> = {
-    playPause: await node.addPlug(specs.playPause.info),
-    next: await node.addPlug(specs.next.info),
-    previous: await node.addPlug(specs.previous.info),
-  };
-  const power: PlugHandle = await node.addPlug(specs.power.info);
-
   const suppressor = new EchoSuppressor();
 
   const emit = (event: EndpointEvent): void => {
@@ -256,43 +270,98 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     }
   };
 
-  const resetMomentary = async (endpoint: MomentaryEndpointKey): Promise<void> => {
-    await momentary[endpoint].setOnOff(false);
+  /** Momentary plugs by Matter endpoint id — the reset targets. */
+  const momentaryPlugs = new Map<string, PlugHandle>();
+
+  const resetMomentary = async (endpointId: string): Promise<void> => {
+    const plug = momentaryPlugs.get(endpointId);
+    if (plug === undefined) {
+      // Fail loud: only this module schedules resets, so an unknown id is a bug.
+      throw new Error(
+        `resetMomentary: no momentary endpoint with id ${JSON.stringify(endpointId)}`,
+      );
+    }
+    await plug.setOnOff(false);
   };
 
-  const scheduler = new MomentaryResetScheduler(MOMENTARY_RESET_MS, (endpoint) => {
+  const scheduler = new MomentaryResetScheduler<string>(MOMENTARY_RESET_MS, (endpointId) => {
     // A failed write to our own endpoint is an internal invariant violation;
     // the floating promise surfaces it as an unhandled rejection (fail loud,
     // docs/ENGINEERING-STANDARDS.md). close() clears timers first, so this
     // cannot fire against a closed node.
-    void resetMomentary(endpoint);
+    void resetMomentary(endpointId);
   });
 
-  speaker.onOnOffChanged((on) => {
-    if (suppressor.check(SPEAKER_ONOFF, on)) {
-      return;
-    }
-    emit({ key: "speaker", attribute: "onOff", on });
-  });
-  speaker.onLevelChanged((level) => {
-    if (level !== null && suppressor.check(SPEAKER_LEVEL, level)) {
-      return;
-    }
-    emit({ key: "speaker", attribute: "level", level });
-  });
-  for (const key of MOMENTARY_ENDPOINT_KEYS) {
-    momentary[key].onOnOffChanged((on) => {
+  // Config-derived endpoint set: enabled built-ins in §2.2 order, then one
+  // momentary plug per custom command (endpoint numbers follow add order).
+  const specs = endpointSpecs(options.endpoints, seed);
+  const constructed: ConstructedEndpoint[] = [];
+  let speaker: SpeakerHandle | undefined;
+
+  const wireMomentary = (
+    plug: PlugHandle,
+    id: string,
+    event: (on: boolean) => EndpointEvent,
+  ): void => {
+    plug.onOnOffChanged((on) => {
       if (on) {
-        scheduler.noteOn(key);
+        scheduler.noteOn(id);
       } else {
-        scheduler.noteOff(key);
+        scheduler.noteOff(id);
       }
-      emit({ key, attribute: "onOff", on });
+      emit(event(on));
     });
+  };
+
+  for (const spec of specs) {
+    if (spec.role === "speaker") {
+      const speakerHandle = await node.addSpeaker(spec.info);
+      speaker = speakerHandle;
+      speakerHandle.onOnOffChanged((on) => {
+        if (suppressor.check(SPEAKER_ONOFF, on)) {
+          return;
+        }
+        emit({ key: "speaker", attribute: "onOff", on });
+      });
+      speakerHandle.onLevelChanged((level) => {
+        if (level !== null && suppressor.check(SPEAKER_LEVEL, level)) {
+          return;
+        }
+        emit({ key: "speaker", attribute: "level", level });
+      });
+    } else {
+      const plug = await node.addPlug(spec.info);
+      switch (spec.role) {
+        case "custom": {
+          const customKey = spec.key;
+          momentaryPlugs.set(spec.info.id, plug);
+          wireMomentary(plug, spec.info.id, (on) => ({
+            key: "custom",
+            customKey,
+            attribute: "onOff",
+            on,
+          }));
+          break;
+        }
+        case "playPause":
+        case "next":
+        case "previous": {
+          const key = spec.role;
+          momentaryPlugs.set(spec.info.id, plug);
+          wireMomentary(plug, spec.info.id, (on) => ({ key, attribute: "onOff", on }));
+          break;
+        }
+        case "power": {
+          // The stateful power toggle: no reset window, every write dispatches.
+          plug.onOnOffChanged((on) => {
+            emit({ key: "power", attribute: "onOff", on });
+          });
+          break;
+        }
+      }
+    }
+    constructed.push({ id: spec.info.id, name: spec.info.name, kind: spec.kind });
   }
-  power.onOnOffChanged((on) => {
-    emit({ key: "power", attribute: "onOff", on });
-  });
 
   let closed = false;
 
@@ -306,6 +375,7 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
       scheduler.clear();
       await node.close();
     },
+    endpoints: constructed,
     get pairingCodes(): PairingCodes | null {
       return node.pairingCodes;
     },
@@ -321,6 +391,9 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
         throw new RangeError(
           `setSpeakerState: level must be an integer 0-254, got ${String(level0to254)}`,
         );
+      }
+      if (speaker === undefined) {
+        return; // speaker disabled (ADR-004): tolerate state, apply nothing
       }
       const patch: { level?: number; onOff?: boolean } = {};
       if (speaker.getLevel() !== level0to254) {

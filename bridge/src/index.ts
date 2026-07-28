@@ -73,7 +73,7 @@ async function main(): Promise<void> {
 
   const bridgeHandle = await createBridge({
     storageDir: config.storageDir,
-    deviceNames: config.deviceNames,
+    endpoints: config.endpoints,
     ...(config.matterPort === undefined ? {} : { port: config.matterPort }),
     ...(config.mdnsInterface === undefined ? {} : { mdnsInterface: config.mdnsInterface }),
     onClusterWrite: (write) => {
@@ -84,6 +84,16 @@ async function main(): Promise<void> {
     },
   });
 
+  // One line per constructed endpoint: the audit trail that the ADR-004
+  // config produced exactly the intended endpoint set (disabled built-ins
+  // never appear here — they were never constructed).
+  for (const endpoint of bridgeHandle.endpoints) {
+    logger.info(
+      { evt: "matter.endpoint", id: endpoint.id, kind: endpoint.kind, name: endpoint.name },
+      "endpoint constructed",
+    );
+  }
+
   function maybeEmitPairing(): void {
     const codes = bridgeHandle.pairingCodes;
     if (codes === null) {
@@ -92,8 +102,22 @@ async function main(): Promise<void> {
     client.send({ v: PROTOCOL_VERSION, type: "pairing", ...codes });
   }
 
+  // ADR-004: with the speaker endpoint disabled, tray state frames stay
+  // tolerated but apply to nothing — logged at debug exactly once.
+  let speakerDisabledLogged = false;
+
   handlers.onFrame = (frame) => {
     if (frame.type === "state") {
+      if (!config.endpoints.speaker.enabled) {
+        if (!speakerDisabledLogged) {
+          speakerDisabledLogged = true;
+          logger.debug(
+            { evt: "ipc.state.ignored" },
+            "speaker endpoint disabled; ignoring tray state frames",
+          );
+        }
+        return;
+      }
       const attrs = stateFrameToSpeakerAttributes(frame);
       logger.debug(
         { evt: "ipc.state", volume: frame.volume, muted: frame.muted, ...attrs },

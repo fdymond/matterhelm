@@ -63,11 +63,17 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     vi.useRealTimers();
   });
 
-  function makeScheduler(): { scheduler: MomentaryResetScheduler; resets: MomentaryEndpointKey[] } {
+  function makeScheduler(): {
+    scheduler: MomentaryResetScheduler<MomentaryEndpointKey>;
+    resets: MomentaryEndpointKey[];
+  } {
     const resets: MomentaryEndpointKey[] = [];
-    const scheduler = new MomentaryResetScheduler(MOMENTARY_RESET_MS, (endpoint) => {
-      resets.push(endpoint);
-    });
+    const scheduler = new MomentaryResetScheduler<MomentaryEndpointKey>(
+      MOMENTARY_RESET_MS,
+      (endpoint) => {
+        resets.push(endpoint);
+      },
+    );
     return { scheduler, resets };
   }
 
@@ -137,6 +143,19 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
   it("uses the §2.2 reset delay of 800 ms", () => {
     expect(MOMENTARY_RESET_MS).toBe(800);
   });
+
+  it("schedules custom-plug endpoint ids exactly like built-in keys (ADR-004)", () => {
+    const resets: string[] = [];
+    const scheduler = new MomentaryResetScheduler(MOMENTARY_RESET_MS, (endpoint: string) => {
+      resets.push(endpoint);
+    });
+    scheduler.noteOn("custom-movie-mode");
+    scheduler.noteOn("playpause");
+    scheduler.noteOff("playpause");
+    vi.advanceTimersByTime(MOMENTARY_RESET_MS);
+    expect(resets).toEqual(["custom-movie-mode"]);
+    scheduler.clear();
+  });
 });
 
 describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
@@ -188,5 +207,27 @@ describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
       cluster: "onOff",
       on: false,
     });
+  });
+
+  it("maps a custom plug's on write to a custom write carrying its key (ADR-004)", () => {
+    expect(
+      endpointEventToClusterWrite({
+        key: "custom",
+        customKey: "movie-mode",
+        attribute: "onOff",
+        on: true,
+      }),
+    ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true });
+  });
+
+  it("passes a custom plug's off write through (mapping/actions.ts drops it)", () => {
+    expect(
+      endpointEventToClusterWrite({
+        key: "custom",
+        customKey: "movie-mode",
+        attribute: "onOff",
+        on: false,
+      }),
+    ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: false });
   });
 });

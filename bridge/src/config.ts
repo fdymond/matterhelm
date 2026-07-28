@@ -1,6 +1,7 @@
 /**
- * Environment/config parsing (docs/BLUEPRINT.md §2.3's env contract table is
- * normative — this module is its executable form for the sidecar side).
+ * Environment/config parsing (docs/BLUEPRINT.md §2.3's env contract table,
+ * as amended by ADR-004 §2, is normative — this module is its executable
+ * form for the sidecar side).
  *
  * `parseConfig` is pure: given a plain env record it returns a validated
  * {@link Config} or throws a plain `Error` with a message naming the bad
@@ -18,14 +19,16 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
-import type { DeviceNames } from "./matter/devices.js";
+import { CustomCommandKeySchema } from "./ipc/protocol.js";
+import type { BuiltinEndpointKey, EndpointsConfig } from "./matter/devices.js";
 
 const PORT_MIN = 1024;
 const PORT_MAX = 65535;
 const DEFAULT_IPC_PORT = 39531;
 const DEFAULT_LOG_LEVEL = "info";
 
-const DEFAULT_DEVICE_NAMES: DeviceNames = {
+/** Built-in display-name defaults (BLUEPRINT §2.2's "HTPC …" voice targets). */
+const DEFAULT_BUILTIN_NAMES: Readonly<Record<BuiltinEndpointKey, string>> = {
   speaker: "HTPC Speaker",
   playPause: "HTPC Play Pause",
   next: "HTPC Next",
@@ -37,13 +40,36 @@ const DEFAULT_DEVICE_NAMES: DeviceNames = {
 const LogLevelSchema = z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
 export type PinoLevel = z.infer<typeof LogLevelSchema>;
 
-/** `HTPC_BRIDGE_DEVICE_NAMES` shape: all fields optional, unknown keys rejected. */
-const DeviceNamesSchema = z.strictObject({
-  speaker: z.string().min(1).optional(),
-  playPause: z.string().min(1).optional(),
-  next: z.string().min(1).optional(),
-  previous: z.string().min(1).optional(),
-  power: z.string().min(1).optional(),
+/**
+ * One built-in entry inside `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2). The tray
+ * app always sends both fields; each is still individually defaulted here
+ * (name -> the "HTPC …" default, enabled -> true) so a hand-written partial
+ * env keeps the pre-ADR-004 `HTPC_BRIDGE_DEVICE_NAMES` leniency. Unknown
+ * keys and wrong types stay fatal.
+ */
+const BuiltinEndpointSchema = z.strictObject({
+  name: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+});
+
+/**
+ * One custom command entry (ADR-004 §2): names + existence only — the
+ * sidecar never learns what a command *does*, and disabled customs are
+ * omitted by the tray app, so no `enabled`/`action` field is legal here.
+ */
+const CustomEndpointSchema = z.strictObject({
+  key: CustomCommandKeySchema,
+  name: z.string().min(1),
+});
+
+/** `HTPC_BRIDGE_ENDPOINTS` shape (ADR-004 §2): built-ins + `custom` list. */
+const EndpointsSchema = z.strictObject({
+  speaker: BuiltinEndpointSchema.optional(),
+  playPause: BuiltinEndpointSchema.optional(),
+  next: BuiltinEndpointSchema.optional(),
+  previous: BuiltinEndpointSchema.optional(),
+  power: BuiltinEndpointSchema.optional(),
+  custom: z.array(CustomEndpointSchema).optional(),
 });
 
 /** Validated, defaulted bridge configuration — §2.3's env contract table. */
@@ -56,8 +82,11 @@ export interface Config {
   storageDir: string;
   /** `HTPC_BRIDGE_LOG_LEVEL`; default `"info"`. */
   logLevel: PinoLevel;
-  /** `HTPC_BRIDGE_DEVICE_NAMES`; defaults to the built-in "HTPC …" names. */
-  deviceNames: DeviceNames;
+  /**
+   * `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2); default: every built-in enabled
+   * with its "HTPC …" name, no custom commands.
+   */
+  endpoints: EndpointsConfig;
   /** `HTPC_BRIDGE_MDNS_INTERFACE`; unset = matter.js auto-detects. */
   mdnsInterface?: string;
   /**
@@ -125,38 +154,69 @@ function parseLogLevel(raw: string | undefined): PinoLevel {
   return result.data;
 }
 
-/** Unset/empty = built-in defaults; malformed JSON or shape is fatal, not silent. */
-function parseDeviceNames(raw: string | undefined): DeviceNames {
+/** Every built-in enabled under its default name, no custom commands. */
+function defaultEndpoints(): EndpointsConfig {
+  return {
+    speaker: { name: DEFAULT_BUILTIN_NAMES.speaker, enabled: true },
+    playPause: { name: DEFAULT_BUILTIN_NAMES.playPause, enabled: true },
+    next: { name: DEFAULT_BUILTIN_NAMES.next, enabled: true },
+    previous: { name: DEFAULT_BUILTIN_NAMES.previous, enabled: true },
+    power: { name: DEFAULT_BUILTIN_NAMES.power, enabled: true },
+    custom: [],
+  };
+}
+
+/**
+ * Unset/empty = built-in defaults (all enabled, no custom); malformed JSON,
+ * a bad shape, an invalid custom key slug, or duplicate custom keys are all
+ * fatal, never silent (ADR-004 §2).
+ */
+function parseEndpoints(raw: string | undefined): EndpointsConfig {
   if (raw === undefined || raw === "") {
-    return DEFAULT_DEVICE_NAMES;
+    return defaultEndpoints();
   }
   let json: unknown;
   try {
     json = JSON.parse(raw);
   } catch {
-    throw new Error("HTPC_BRIDGE_DEVICE_NAMES is not valid JSON");
+    throw new Error("HTPC_BRIDGE_ENDPOINTS is not valid JSON");
   }
-  const result = DeviceNamesSchema.safeParse(json);
+  const result = EndpointsSchema.safeParse(json);
   if (!result.success) {
     const issues = result.error.issues
       .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
       .join("; ");
     throw new Error(
-      "HTPC_BRIDGE_DEVICE_NAMES must be a JSON object with optional non-empty string fields " +
-        `speaker/playPause/next/previous/power: ${issues}`,
+      "HTPC_BRIDGE_ENDPOINTS must be the ADR-004 §2 JSON object " +
+        "(built-ins {name, enabled} + custom [{key, name}]): " +
+        issues,
     );
   }
-  // Field-by-field merge (not `{...DEFAULT_DEVICE_NAMES, ...result.data}`):
-  // zod's `.optional()` types each field `string | undefined`, and spreading
-  // that in would give the result the same `| undefined` type even though no
-  // key is ever actually absent — incompatible with `DeviceNames`'s required
-  // `string` fields under `exactOptionalPropertyTypes`.
+  const custom = result.data.custom ?? [];
+  const seen = new Set<string>();
+  for (const entry of custom) {
+    if (seen.has(entry.key)) {
+      throw new Error(
+        `HTPC_BRIDGE_ENDPOINTS custom keys must be unique; duplicate key ${JSON.stringify(entry.key)}`,
+      );
+    }
+    seen.add(entry.key);
+  }
+  // Field-by-field defaulting (not object spread): zod's `.optional()` types
+  // each field `T | undefined`, and spreading that in would leak the
+  // `| undefined` into the required `EndpointsConfig` fields under
+  // exactOptionalPropertyTypes.
+  const builtin = (key: BuiltinEndpointKey): { name: string; enabled: boolean } => ({
+    name: result.data[key]?.name ?? DEFAULT_BUILTIN_NAMES[key],
+    enabled: result.data[key]?.enabled ?? true,
+  });
   return {
-    speaker: result.data.speaker ?? DEFAULT_DEVICE_NAMES.speaker,
-    playPause: result.data.playPause ?? DEFAULT_DEVICE_NAMES.playPause,
-    next: result.data.next ?? DEFAULT_DEVICE_NAMES.next,
-    previous: result.data.previous ?? DEFAULT_DEVICE_NAMES.previous,
-    power: result.data.power ?? DEFAULT_DEVICE_NAMES.power,
+    speaker: builtin("speaker"),
+    playPause: builtin("playPause"),
+    next: builtin("next"),
+    previous: builtin("previous"),
+    power: builtin("power"),
+    custom,
   };
 }
 
@@ -178,7 +238,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     ipcToken: parseToken(env.HTPC_BRIDGE_IPC_TOKEN),
     storageDir: parseStorageDir(env.HTPC_BRIDGE_STORAGE_DIR, env.APPDATA),
     logLevel: parseLogLevel(env.HTPC_BRIDGE_LOG_LEVEL),
-    deviceNames: parseDeviceNames(env.HTPC_BRIDGE_DEVICE_NAMES),
+    endpoints: parseEndpoints(env.HTPC_BRIDGE_ENDPOINTS),
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),
   };

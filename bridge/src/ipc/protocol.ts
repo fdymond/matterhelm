@@ -12,6 +12,10 @@
  * - Breaking changes (removing/renaming a field, changing a field's type or
  *   meaning) are NOT expressed via `v` — they bump `protocol` in the `hello`
  *   frame instead, and require an ADR in docs/adr/ before landing.
+ * - Worked example (ADR-004): adding the `custom` action variant was
+ *   additive, so `v` bumped 1 → 2 while `hello.protocol` stayed 1. Both ends
+ *   ship from one dist, so parsers accept ONLY the current `v` — an old peer
+ *   is drift, and drift must fail loudly, not half-work.
  *
  * This module is pure: no matter.js, no `ws`, no I/O. `parseSidecarFrame`
  * and `parseTrayFrame` are the trust boundary for their respective
@@ -22,7 +26,22 @@
 import { z } from "zod";
 
 /** Current per-message revision. Bump additively only — see module doc. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
+
+/** Upper length bound for a custom-command key (ADR-004 §3). */
+export const CUSTOM_KEY_MAX_LENGTH = 64;
+
+/**
+ * Custom-command key: the wire identifier AND Matter endpoint identity of a
+ * user-defined command (ADR-004). A kebab-case slug — lowercase alphanumeric
+ * runs separated by single hyphens, no leading/trailing hyphen, ≤ 64 chars.
+ * Shared with `config.ts` so the env contract and the wire contract can
+ * never drift on what a valid key is.
+ */
+export const CustomCommandKeySchema = z
+  .string()
+  .max(CUSTOM_KEY_MAX_LENGTH)
+  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "must be a kebab-case slug (lowercase a-z0-9, hyphens)");
 
 /** Shared `v` field: every frame, both directions, carries this literal. */
 const vField = z.literal(PROTOCOL_VERSION);
@@ -71,6 +90,14 @@ const ActionSetVolumeSchema = actionFrameBase
 const ActionSetMutedSchema = actionFrameBase
   .extend({ name: z.literal("setMuted"), value: z.boolean() })
   .strict();
+/**
+ * A user-defined command's momentary plug was switched on (ADR-004 §3);
+ * `key` identifies which one. Custom endpoints carry no payload — like the
+ * built-in momentaries, the auto-reset off-echo never reaches the wire.
+ */
+const ActionCustomSchema = actionFrameBase
+  .extend({ name: z.literal("custom"), key: CustomCommandKeySchema })
+  .strict();
 
 export const ActionFrameSchema = z.discriminatedUnion("name", [
   ActionPlayPauseSchema,
@@ -80,6 +107,7 @@ export const ActionFrameSchema = z.discriminatedUnion("name", [
   ActionPowerOffSchema,
   ActionSetVolumeSchema,
   ActionSetMutedSchema,
+  ActionCustomSchema,
 ]);
 export type ActionFrame = z.infer<typeof ActionFrameSchema>;
 
