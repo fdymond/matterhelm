@@ -6,12 +6,32 @@ using System.Runtime.InteropServices;
 namespace HtpcMatterBridge.Ui;
 
 /// <summary>
+/// One overlay flash's content. <see cref="VolumePercent"/> non-null (and not
+/// an error) switches the result pill to a horizontal volume bar showing the
+/// resulting level (S4-5); <see cref="Muted"/> dims that bar and replaces the
+/// percent label with "muted". Everything else renders the classic text pill.
+/// </summary>
+public sealed record OverlayContent(string Primary, string Pill, bool IsError)
+{
+    /// <summary>Resulting volume level 0–100 to render as a fill bar, or null for the plain text pill.</summary>
+    public int? VolumePercent { get; init; }
+
+    /// <summary>True renders the volume bar dimmed with a "muted" label. Only meaningful when <see cref="VolumePercent"/> is set.</summary>
+    public bool Muted { get; init; }
+}
+
+/// <summary>
 /// Persistent, click-through, non-activating flash overlay (BLUEPRINT §2.4,
-/// ADR-003 item 5). <see cref="Show"/> updates the same window in place:
-/// primary line = incoming command ("Google Home → volume 40 %"), pill =
-/// executed action/failure. Content snaps to full alpha, holds ~2.5 s, then
-/// fades ~300 ms. Thread-safe: callers may invoke <see cref="Show"/> from any
-/// thread — it marshals to the HUD's own UI thread.
+/// ADR-003 item 5). <see cref="Show(OverlayContent)"/> updates the same window
+/// in place: primary line = incoming command ("Google Home → volume 40 %"),
+/// pill = executed action/failure — or, for volume actions, a percentage fill
+/// bar. Content snaps to full alpha, holds ~2.5 s, then fades ~300 ms. All
+/// geometry and fonts scale with the window's startup DPI (S4-5) — the HUD is
+/// re-created only with the app, so a mid-session DPI change is deliberately
+/// not handled (note: startup DPI is fine per story; the window never moves
+/// off the primary monitor). Thread-safe: callers may invoke
+/// <see cref="Show(OverlayContent)"/> from any thread — it marshals to the
+/// HUD's own UI thread.
 /// </summary>
 public sealed class OverlayHud : IDisposable
 {
@@ -26,8 +46,8 @@ public sealed class OverlayHud : IDisposable
 
     /// <summary>
     /// Enables or disables the overlay pop-ups feature (bridge for the future
-    /// tray "Overlay pop-ups" toggle). When <c>false</c>, <see cref="Show"/> is
-    /// a no-op. This is unrelated to the underlying window's OS-level
+    /// tray "Overlay pop-ups" toggle). When <c>false</c>, <see cref="Show(OverlayContent)"/>
+    /// is a no-op. This is unrelated to the underlying window's OS-level
     /// visibility, which stays alive (at alpha 0) for the HUD's whole lifetime
     /// to avoid Show/Hide flicker.
     /// </summary>
@@ -39,12 +59,21 @@ public sealed class OverlayHud : IDisposable
     /// <summary>Current on-screen rectangle, exposed only for demo/E2E objective verification.</summary>
     public Rectangle Bounds => _window.Bounds;
 
+    /// <summary>Canvas-relative bounds of the volume bar's track, exposed only for demo/E2E objective verification (pixel sampling).</summary>
+    public Rectangle VolumeTrackBounds => _window.VolumeTrackBounds;
+
+    /// <summary>Copies the HUD's current canvas bitmap, exposed only for demo/E2E objective verification. Call on the HUD's UI thread after a <see cref="Show(OverlayContent)"/>.</summary>
+    public Bitmap CaptureCanvas() => _window.CaptureCanvas();
+
+    /// <summary>Text-pill convenience overload of <see cref="Show(OverlayContent)"/>.</summary>
+    public void Show(string primary, string pill, bool isError) => Show(new OverlayContent(primary, pill, isError));
+
     /// <summary>
     /// Displays (or updates in place) the primary command line and result
-    /// pill. Resets the hold timer and snaps to full alpha even if a fade was
-    /// already in progress, so rapid-fire calls never flicker.
+    /// pill/volume bar. Resets the hold timer and snaps to full alpha even if
+    /// a fade was already in progress, so rapid-fire calls never flicker.
     /// </summary>
-    public void Show(string primary, string pill, bool isError)
+    public void Show(OverlayContent content)
     {
         if (!Visible)
         {
@@ -53,11 +82,11 @@ public sealed class OverlayHud : IDisposable
 
         if (_window.InvokeRequired)
         {
-            _window.BeginInvoke(new Action(() => _window.ShowContent(primary, pill, isError)));
+            _window.BeginInvoke(new Action(() => _window.ShowContent(content)));
             return;
         }
 
-        _window.ShowContent(primary, pill, isError);
+        _window.ShowContent(content);
     }
 
     /// <inheritdoc />
@@ -70,18 +99,32 @@ public sealed class OverlayHud : IDisposable
     /// <summary>The actual layered top-level window; kept private so callers only ever see the <see cref="OverlayHud"/> surface.</summary>
     private sealed class HudWindow : Form
     {
-        private const int CanvasWidth = 460;
-        private const int CanvasHeight = 104;
-        private const int ShadowMargin = 10;
-        private const float PanelRadius = 14f;
+        // Logical (96-dpi) design units; every use goes through S()/SF() so the
+        // canvas renders at the window's startup DPI (S4-5 — at 200 % the old
+        // fixed 460×104 bitmap appeared half-size).
+        private const int CanvasWidthLogical = 460;
+        private const int CanvasHeightLogical = 104;
+        private const float ShadowMarginLogical = 10f;
+        private const float PanelRadiusLogical = 14f;
+        private const int BottomMarginLogical = 48;
+        private const float PillRowFromBottomLogical = 38f;
+        private const float PillRowHeightLogical = 24f;
+        private const float ContentInsetLogical = 18f;
+        private const float VolumeTrackWidthLogical = 150f;
+        private const float VolumeTrackHeightLogical = 10f;
+        private const float PrimaryFontPxLogical = 15.33f; // 11.5 pt at 96 dpi
+        private const float PillFontPxLogical = 12.67f; // 9.5 pt at 96 dpi
+
         private const int HoldMilliseconds = 2500;
         private const int FadeMilliseconds = 300;
         private const int FadeTimerIntervalMs = 15;
-        private const int BottomMargin = 48;
 
         private const int WmMouseActivate = 0x0021;
         private const int MaNoActivate = 3;
 
+        private readonly float _scale;
+        private readonly int _canvasWidth;
+        private readonly int _canvasHeight;
         private readonly System.Windows.Forms.Timer _holdTimer;
         private readonly System.Windows.Forms.Timer _fadeTimer;
         private readonly Bitmap _canvas;
@@ -89,9 +132,7 @@ public sealed class OverlayHud : IDisposable
         private readonly IntPtr _dibSection;
         private readonly IntPtr _oldDibSelection;
 
-        private string? _lastPrimary;
-        private string? _lastPill;
-        private bool _lastIsError;
+        private OverlayContent? _last;
         private long _fadeStartTicks;
 
         internal HudWindow()
@@ -99,14 +140,20 @@ public sealed class OverlayHud : IDisposable
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
-            ClientSize = new Size(CanvasWidth, CanvasHeight);
+
+            // Startup DPI of the primary monitor (the HUD's home); see the
+            // OverlayHud class doc for why a live DPI change is not handled.
+            _scale = DeviceDpi / 96f;
+            _canvasWidth = S(CanvasWidthLogical);
+            _canvasHeight = S(CanvasHeightLogical);
+            ClientSize = new Size(_canvasWidth, _canvasHeight);
 
             Rectangle working = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
             Location = new Point(
-                working.Left + ((working.Width - CanvasWidth) / 2),
-                working.Bottom - CanvasHeight - BottomMargin);
+                working.Left + ((working.Width - _canvasWidth) / 2),
+                working.Bottom - _canvasHeight - S(BottomMarginLogical));
 
-            (_memDc, _dibSection, _oldDibSelection, _canvas) = CreateLayeredCanvas(CanvasWidth, CanvasHeight);
+            (_memDc, _dibSection, _oldDibSelection, _canvas) = CreateLayeredCanvas(_canvasWidth, _canvasHeight);
 
             _holdTimer = new System.Windows.Forms.Timer { Interval = HoldMilliseconds };
             _holdTimer.Tick += OnHoldElapsed;
@@ -130,6 +177,10 @@ public sealed class OverlayHud : IDisposable
         // Paired with WS_EX_NOACTIVATE: this is what lets Show() present the
         // window without WinForms calling SW_SHOW (which would activate it).
         protected override bool ShowWithoutActivation => true;
+
+        internal Rectangle VolumeTrackBounds => Rectangle.Round(VolumeTrackRect());
+
+        internal Bitmap CaptureCanvas() => new(_canvas);
 
         protected override void WndProc(ref Message m)
         {
@@ -166,15 +217,12 @@ public sealed class OverlayHud : IDisposable
             PushToScreen(alpha: 0);
         }
 
-        internal void ShowContent(string primary, string pill, bool isError)
+        internal void ShowContent(OverlayContent content)
         {
-            bool contentChanged = primary != _lastPrimary || pill != _lastPill || isError != _lastIsError;
-            if (contentChanged)
+            if (content != _last)
             {
-                _lastPrimary = primary;
-                _lastPill = pill;
-                _lastIsError = isError;
-                Render(primary, pill, isError);
+                _last = content;
+                Render(content);
             }
 
             // Rapid-fire calls must never flicker: cancel any in-flight fade and
@@ -209,49 +257,101 @@ public sealed class OverlayHud : IDisposable
             PushToScreen(alpha: (byte)Math.Clamp(remaining * 255.0, 0, 255));
         }
 
-        private void Render(string primary, string pill, bool isError)
+        /// <summary>Logical (96-dpi) design units → device pixels (rounded).</summary>
+        private int S(int logical) => (int)Math.Round(logical * _scale);
+
+        /// <summary>Logical (96-dpi) design units → device pixels (exact).</summary>
+        private float SF(float logical) => logical * _scale;
+
+        private RectangleF PanelRect() => new(
+            SF(ShadowMarginLogical),
+            SF(ShadowMarginLogical),
+            _canvasWidth - (SF(ShadowMarginLogical) * 2),
+            _canvasHeight - (SF(ShadowMarginLogical) * 2));
+
+        /// <summary>The pill/bar row: bottom strip of the panel where the result renders.</summary>
+        private RectangleF PillRowRect()
+        {
+            RectangleF panel = PanelRect();
+            return new RectangleF(
+                panel.X + SF(ContentInsetLogical),
+                panel.Bottom - SF(PillRowFromBottomLogical),
+                panel.Width - (SF(ContentInsetLogical) * 2),
+                SF(PillRowHeightLogical));
+        }
+
+        /// <summary>The volume bar's track, vertically centered in the pill row (single source for Render and the demo's pixel sampling).</summary>
+        private RectangleF VolumeTrackRect()
+        {
+            RectangleF row = PillRowRect();
+            return new RectangleF(
+                row.X,
+                row.Y + ((row.Height - SF(VolumeTrackHeightLogical)) / 2f),
+                SF(VolumeTrackWidthLogical),
+                SF(VolumeTrackHeightLogical));
+        }
+
+        private void Render(OverlayContent content)
         {
             using Graphics g = Graphics.FromImage(_canvas);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.Clear(Color.Transparent);
 
-            var panelRect = new RectangleF(
-                ShadowMargin,
-                ShadowMargin,
-                CanvasWidth - (ShadowMargin * 2),
-                CanvasHeight - (ShadowMargin * 2));
+            RectangleF panelRect = PanelRect();
 
             // Cheap blur substitute: stacked translucent silhouettes give soft
             // edges without a real Gaussian blur pass.
             for (int i = 4; i >= 1; i--)
             {
-                float expand = i * 2f;
-                using GraphicsPath shadowPath = RoundedRect(RectangleF.Inflate(panelRect, expand, expand), PanelRadius + expand);
+                float expand = i * SF(2f);
+                using GraphicsPath shadowPath = RoundedRect(
+                    RectangleF.Inflate(panelRect, expand, expand), SF(PanelRadiusLogical) + expand);
                 using var shadowBrush = new SolidBrush(Color.FromArgb(12, 0, 0, 0));
                 g.FillPath(shadowBrush, shadowPath);
             }
 
-            using GraphicsPath panelPath = RoundedRect(panelRect, PanelRadius);
+            using GraphicsPath panelPath = RoundedRect(panelRect, SF(PanelRadiusLogical));
             using var panelBrush = new SolidBrush(Color.FromArgb(235, 26, 26, 30));
             g.FillPath(panelBrush, panelPath);
 
-            using var primaryFont = new Font("Segoe UI", 11.5f, FontStyle.Regular, GraphicsUnit.Point);
+            // Pixel-unit fonts: point units would rescale with the process's
+            // DPI context too (Graphics.FromImage inherits the desktop DPI in
+            // a DPI-aware process), double-applying _scale. Explicit pixels
+            // keep the canvas render deterministic at any DPI.
+            using var primaryFont = new Font("Segoe UI", SF(PrimaryFontPxLogical), FontStyle.Regular, GraphicsUnit.Pixel);
             using var primaryBrush = new SolidBrush(Color.White);
             using var primaryFormat = new StringFormat
             {
                 Trimming = StringTrimming.EllipsisCharacter,
                 FormatFlags = StringFormatFlags.NoWrap,
             };
-            var primaryRect = new RectangleF(panelRect.X + 18, panelRect.Y + 14, panelRect.Width - 36, 26);
-            g.DrawString(primary, primaryFont, primaryBrush, primaryRect, primaryFormat);
+            var primaryRect = new RectangleF(
+                panelRect.X + SF(ContentInsetLogical),
+                panelRect.Y + SF(14f),
+                panelRect.Width - (SF(ContentInsetLogical) * 2),
+                SF(26f));
+            g.DrawString(content.Primary, primaryFont, primaryBrush, primaryRect, primaryFormat);
 
+            using var pillFont = new Font("Segoe UI", SF(PillFontPxLogical), FontStyle.Bold, GraphicsUnit.Pixel);
+            if (content is { VolumePercent: int volumePercent, IsError: false })
+            {
+                RenderVolumeBar(g, pillFont, Math.Clamp(volumePercent, 0, 100), content.Muted);
+            }
+            else
+            {
+                RenderTextPill(g, pillFont, content.Pill, content.IsError);
+            }
+        }
+
+        private void RenderTextPill(Graphics g, Font pillFont, string pill, bool isError)
+        {
+            RectangleF row = PillRowRect();
             Color pillColor = isError ? Color.FromArgb(230, 196, 60, 58) : Color.FromArgb(230, 55, 158, 96);
-            using var pillFont = new Font("Segoe UI", 9.5f, FontStyle.Bold, GraphicsUnit.Point);
             SizeF pillTextSize = g.MeasureString(pill, pillFont);
-            float pillWidth = Math.Min(panelRect.Width - 36, pillTextSize.Width + 28);
-            var pillRect = new RectangleF(panelRect.X + 18, panelRect.Bottom - 38, pillWidth, 24);
-            using GraphicsPath pillPath = RoundedRect(pillRect, 12f);
+            float pillWidth = Math.Min(row.Width, pillTextSize.Width + SF(28f));
+            var pillRect = new RectangleF(row.X, row.Y, pillWidth, row.Height);
+            using GraphicsPath pillPath = RoundedRect(pillRect, row.Height / 2f);
             using var pillBrush = new SolidBrush(pillColor);
             g.FillPath(pillBrush, pillPath);
 
@@ -264,6 +364,49 @@ public sealed class OverlayHud : IDisposable
             g.DrawString(pill, pillFont, pillTextBrush, pillRect, pillFormat);
         }
 
+        /// <summary>
+        /// S4-5 volume bar: a rounded track (dim white over the dark panel)
+        /// with an accent fill whose width is proportional to
+        /// <paramref name="percent"/>, and the "NN %" label beside it — HUD
+        /// palette: fill = the success-pill green, muted = dimmed gray fill
+        /// with a "muted" label (the level stays visible so unmute expectations
+        /// are clear).
+        /// </summary>
+        private void RenderVolumeBar(Graphics g, Font labelFont, int percent, bool muted)
+        {
+            RectangleF row = PillRowRect();
+            RectangleF track = VolumeTrackRect();
+
+            using GraphicsPath trackPath = RoundedRect(track, track.Height / 2f);
+            using var trackBrush = new SolidBrush(Color.FromArgb(45, 255, 255, 255));
+            g.FillPath(trackBrush, trackPath);
+
+            float fillWidth = track.Width * (percent / 100f);
+            if (fillWidth >= 1f)
+            {
+                var fill = new RectangleF(track.X, track.Y, fillWidth, track.Height);
+                Color fillColor = muted
+                    ? Color.FromArgb(200, 128, 128, 136) // dimmed: level kept, accent dropped
+                    : Color.FromArgb(230, 55, 158, 96); // the success-pill green
+                using GraphicsPath fillPath = RoundedRect(fill, Math.Min(track.Height / 2f, fillWidth / 2f));
+                using var fillBrush = new SolidBrush(fillColor);
+                g.FillPath(fillBrush, fillPath);
+            }
+
+            string label = muted ? "muted" : $"{percent} %";
+            using var labelBrush = new SolidBrush(muted ? Color.FromArgb(255, 176, 176, 184) : Color.White);
+            using var labelFormat = new StringFormat
+            {
+                Alignment = StringAlignment.Near,
+                LineAlignment = StringAlignment.Center,
+                Trimming = StringTrimming.EllipsisCharacter,
+                FormatFlags = StringFormatFlags.NoWrap,
+            };
+            var labelRect = new RectangleF(
+                track.Right + SF(10f), row.Y, row.Right - track.Right - SF(10f), row.Height);
+            g.DrawString(label, labelFont, labelBrush, labelRect, labelFormat);
+        }
+
         private void PushToScreen(byte alpha)
         {
             if (!IsHandleCreated)
@@ -271,7 +414,7 @@ public sealed class OverlayHud : IDisposable
                 return;
             }
 
-            var size = new NativeMethods.Size32(CanvasWidth, CanvasHeight);
+            var size = new NativeMethods.Size32(_canvasWidth, _canvasHeight);
             var srcPoint = new NativeMethods.Point32(0, 0);
             var dstPoint = new NativeMethods.Point32(Location.X, Location.Y);
             var blend = new NativeMethods.BlendFunction

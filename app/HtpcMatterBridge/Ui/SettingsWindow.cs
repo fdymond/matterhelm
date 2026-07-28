@@ -202,6 +202,21 @@ public sealed partial class SettingsWindow : Form
     /// <summary>Sets the search filter text (same as typing into the box). Public for demo/E2E walks.</summary>
     public void SetSearchQuery(string query) => _searchBox.Text = query;
 
+    /// <summary>Selects the left-nav category by index (same as clicking it). Public for demo/E2E walks.</summary>
+    public void SelectCategory(int index) => _navList.SelectedIndex = index;
+
+    /// <summary>Scrolls the selected category page so its last row is in view; true iff it actually scrolled (page taller than the viewport). Public for demo/E2E screenshot coverage of long pages.</summary>
+    public bool ScrollCurrentCategoryToEnd()
+    {
+        if (_categoryPanels[CurrentCategoryId] is not ScrollableControl panel || panel.Controls.Count == 0)
+        {
+            return false;
+        }
+
+        panel.ScrollControlIntoView(panel.Controls[^1]);
+        return panel.VerticalScroll.Value > 0;
+    }
+
     /// <summary>True iff the given setting's row is currently visible in the window (its category selected and not filtered out by search). Public for demo/E2E objective checks.</summary>
     public bool IsSettingRowVisible(string settingId) => _settingRows[settingId].Visible;
 

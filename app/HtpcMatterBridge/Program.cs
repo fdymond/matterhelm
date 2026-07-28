@@ -55,6 +55,10 @@ internal static partial class Program
         // steals focus or blocks clicks. Not part of the production tray flow.
         if (args.Contains("--demo-overlay"))
         {
+            // Same DPI context as production (PerMonitorV2): without this the
+            // demo ran DPI-unaware, so the HUD's S4-5 DPI scaling (and the
+            // volume-bar pixel sampling) would silently verify at 96 dpi only.
+            ApplicationConfiguration.Initialize();
             Environment.ExitCode = Ui.OverlayHudDemo.Run();
             return;
         }
@@ -281,7 +285,7 @@ internal static partial class Program
 
         Emit($"original state: volume {original.VolumePercent} %, muted {original.Muted}");
 
-        List<(string Primary, string Pill, bool IsError)> overlayCalls = [];
+        List<Ui.OverlayContent> overlayCalls = [];
         List<PairingFrame> pairingFrames = [];
         List<BridgeState> states = [];
         using var hud = new OverlayHud();
@@ -289,14 +293,14 @@ internal static partial class Program
             config,
             executor,
             new SidecarSpec(node, [stubPath], AppContext.BaseDirectory),
-            overlaySink: (primary, pill, isError) =>
+            overlaySink: content =>
             {
                 lock (gate)
                 {
-                    overlayCalls.Add((primary, pill, isError));
+                    overlayCalls.Add(content);
                 }
 
-                hud.Show(primary, pill, isError); // The real HUD runs too; marshals internally.
+                hud.Show(content); // The real HUD runs too; marshals internally.
             },
             log: Sink,
             storageDir: Path.Combine(tempRoot, "matter"));
@@ -373,7 +377,7 @@ internal static partial class Program
                 "Google Home → play/pause",
                 $"Google Home → {WiredDemoCustomName}",
             ];
-            List<(string Primary, string Pill, bool IsError)> overlaySnapshot;
+            List<Ui.OverlayContent> overlaySnapshot;
             lock (gate)
             {
                 overlaySnapshot = [.. overlayCalls];
@@ -386,6 +390,13 @@ internal static partial class Program
                     overlaySnapshot.Any(c => c.Primary == primary && !c.IsError),
                     $"overlay Show invoked with primary \"{primary}\" (no error pill)");
             }
+
+            // S4-5: the setVolume flash must carry the resulting level so the
+            // HUD renders the percentage bar instead of the text pill.
+            Check(
+                overlaySnapshot.Any(c => c.Primary == $"Google Home → volume {WiredDemoStubVolume} %"
+                    && c.VolumePercent == WiredDemoStubVolume && !c.Muted),
+                $"setVolume overlay content carries VolumePercent {WiredDemoStubVolume} (volume-bar pill)");
 
             PairingFrame? pairing;
             lock (gate)
@@ -561,13 +572,22 @@ internal static partial class Program
 
         Pump(DemoDisplayMilliseconds);
 
-        using var windowBitmap = new Bitmap(window.ClientSize.Width, window.ClientSize.Height);
-        window.DrawToBitmap(windowBitmap, new Rectangle(Point.Empty, window.ClientSize));
+        // Full window Size, not ClientSize: Form.DrawToBitmap renders the
+        // whole window frame (title bar included), so a ClientSize-tall bitmap
+        // silently cuts the bottom of the client area off (S4-5 finding — the
+        // old capture chopped ~the title bar's height off the instructions).
+        using var windowBitmap = new Bitmap(window.Width, window.Height);
+        window.DrawToBitmap(windowBitmap, new Rectangle(Point.Empty, window.Size));
 
         string outputPath = Path.Combine(AppContext.BaseDirectory, "pairing-window-demo.png");
         windowBitmap.Save(outputPath, ImageFormat.Png);
 
-        using Bitmap qrBitmap = windowBitmap.Clone(window.QrImageBounds, windowBitmap.PixelFormat);
+        // QrImageBounds is client-relative; shift by the client area's offset
+        // inside the full window (borders + caption) before sampling.
+        Point clientOrigin = window.PointToScreen(Point.Empty);
+        Rectangle qrBounds = window.QrImageBounds;
+        qrBounds.Offset(clientOrigin.X - window.Left, clientOrigin.Y - window.Top);
+        using Bitmap qrBitmap = windowBitmap.Clone(qrBounds, windowBitmap.PixelFormat);
         bool hasVariance = HasPixelVariance(qrBitmap, MinDistinctSampledColors);
 
         Console.WriteLine($"[{(hasVariance ? "PASS" : "FAIL")}] QR image rendered with non-trivial pixel variance.");
@@ -676,8 +696,56 @@ internal static partial class Program
         SaveWindowScreenshot(window, "settings-window-search.png");
         window.SetSearchQuery("");
         Pump(100);
+
+        // S4-5 DPI audit evidence: every category page as its own screenshot
+        // (the "light" shot above only covers the first page), captured at
+        // whatever DPI the demo actually runs at (200 % on the dev display).
+        for (int i = 0; i < Ui.SettingsViewModel.Categories.Count; i++)
+        {
+            string categoryId = Ui.SettingsViewModel.Categories[i].Id;
+            window.SelectCategory(i);
+            Pump(150);
+            SaveWindowScreenshot(window, $"settings-window-page-{categoryId}.png");
+            if (window.ScrollCurrentCategoryToEnd())
+            {
+                // Long pages (Devices & Commands) hide their tail — capture it too.
+                Pump(150);
+                SaveWindowScreenshot(window, $"settings-window-page-{categoryId}-bottom.png");
+            }
+        }
+
+        window.SelectCategory(0);
+        Pump(100);
         window.Close();
         Pump(100);
+
+        // S4-5 DPI audit evidence: the custom-command dialog in both action
+        // modes (media key / launch). Shown modeless purely for capture — the
+        // production path is ShowDialog from the settings window.
+        using (var mediaDialog = new Ui.CustomCommandDialog(vm, existing: null))
+        {
+            mediaDialog.StartPosition = FormStartPosition.Manual;
+            mediaDialog.Location = new Point(60, 60);
+            mediaDialog.Show();
+            Pump(300);
+            SaveWindowScreenshot(mediaDialog, "custom-command-mediakey.png");
+            mediaDialog.Close();
+        }
+
+        using (var launchDialog = new Ui.CustomCommandDialog(vm, existing: new CustomCommandConfig
+        {
+            Key = "demo-launch",
+            Name = "Demo Launch",
+            Action = new LaunchActionConfig { Path = Environment.ProcessPath ?? "", Args = "--demo" },
+        }))
+        {
+            launchDialog.StartPosition = FormStartPosition.Manual;
+            launchDialog.Location = new Point(60, 60);
+            launchDialog.Show();
+            Pump(300);
+            SaveWindowScreenshot(launchDialog, "custom-command-launch.png");
+            launchDialog.Close();
+        }
 
         // Dark rendering can't be flipped mid-process, so a second invocation
         // of this exe produces the dark screenshot (see the method doc).
@@ -695,7 +763,8 @@ internal static partial class Program
 
         Check(darkOk, "second process (--dark) wrote settings-window-dark.png and exited 0");
 
-        Console.WriteLine($"screenshots: {AppContext.BaseDirectory}settings-window-{{light,dark,search}}.png");
+        Console.WriteLine(
+            $"screenshots: {AppContext.BaseDirectory}settings-window-{{light,dark,search,page-*}}.png + custom-command-{{mediakey,launch}}.png");
         Console.WriteLine($"OVERALL: {(allPassed ? "PASS" : "FAIL")}");
         return allPassed ? 0 : 1;
     }
