@@ -122,7 +122,13 @@ public sealed class OverlayHud : IDisposable
         // Logical (96-dpi) design units; every use goes through S()/SF() so the
         // canvas renders at the window's startup DPI (S4-5 — at 200 % the old
         // fixed 460×104 bitmap appeared half-size).
-        private const int CanvasWidthLogical = 460;
+        // Width is dynamic (owner request: the panel hugs its content — a
+        // fixed width left a large blank area right of short text): measured
+        // per content, clamped to [min, max], and quantized so tiny text
+        // differences during rapid-fire updates don't thrash the canvas.
+        private const int MinCanvasWidthLogical = 280;
+        private const int MaxCanvasWidthLogical = 680;
+        private const int CanvasWidthStepLogical = 8;
         private const int CanvasHeightLogical = 110;
         private const float ShadowMarginLogical = 10f;
         private const float PanelRadiusLogical = 14f;
@@ -145,14 +151,17 @@ public sealed class OverlayHud : IDisposable
         private const int MaNoActivate = 3;
 
         private readonly float _scale;
-        private readonly int _canvasWidth;
         private readonly int _canvasHeight;
         private readonly System.Windows.Forms.Timer _holdTimer;
         private readonly System.Windows.Forms.Timer _fadeTimer;
-        private readonly Bitmap _canvas;
-        private readonly IntPtr _memDc;
-        private readonly IntPtr _dibSection;
-        private readonly IntPtr _oldDibSelection;
+
+        // Mutable as a set: the canvas is torn down and re-created whenever
+        // the measured content width changes (see EnsureCanvasWidth).
+        private int _canvasWidth;
+        private Bitmap _canvas;
+        private IntPtr _memDc;
+        private IntPtr _dibSection;
+        private IntPtr _oldDibSelection;
 
         private OverlayContent? _last;
         private long _fadeStartTicks;
@@ -214,7 +223,7 @@ public sealed class OverlayHud : IDisposable
             // Startup DPI of the primary monitor (the HUD's home); see the
             // OverlayHud class doc for why a live DPI change is not handled.
             _scale = DeviceDpi / 96f;
-            _canvasWidth = S(CanvasWidthLogical);
+            _canvasWidth = S(MinCanvasWidthLogical);
             _canvasHeight = S(CanvasHeightLogical);
             ClientSize = new Size(_canvasWidth, _canvasHeight);
 
@@ -289,6 +298,7 @@ public sealed class OverlayHud : IDisposable
             if (content != _last)
             {
                 _last = content;
+                EnsureCanvasWidth(MeasureDesiredCanvasWidth(content));
                 Render(content);
             }
 
@@ -502,6 +512,61 @@ public sealed class OverlayHud : IDisposable
 
             NativeMethods.UpdateLayeredWindow(
                 Handle, IntPtr.Zero, ref dstPoint, ref size, _memDc, ref srcPoint, 0, ref blend, NativeMethods.UlwAlpha);
+        }
+
+        /// <summary>
+        /// The canvas width (device px) whose panel hugs <paramref name="content"/>:
+        /// max of the primary line and the pill/bar row, plus insets and
+        /// shadow, quantized to <see cref="CanvasWidthStepLogical"/> and
+        /// clamped — longer primaries ellipsize at the max instead of growing
+        /// without bound.
+        /// </summary>
+        private int MeasureDesiredCanvasWidth(OverlayContent content)
+        {
+            using Graphics g = Graphics.FromImage(_canvas);
+            using var primaryFont = new Font("Segoe UI", SF(PrimaryFontPxLogical), FontStyle.Regular, GraphicsUnit.Pixel);
+            using var pillFont = new Font("Segoe UI", SF(PillFontPxLogical), FontStyle.Bold, GraphicsUnit.Pixel);
+
+            float primaryWidth = g.MeasureString(content.Primary, primaryFont).Width;
+            float rowWidth;
+            if (content is { VolumePercent: int percent, IsError: false })
+            {
+                string label = content.Muted ? "muted" : $"{Math.Clamp(percent, 0, 100)} %";
+                rowWidth = SF(VolumeTrackWidthLogical) + SF(10f) + g.MeasureString(label, pillFont).Width;
+            }
+            else
+            {
+                rowWidth = g.MeasureString(content.Pill, pillFont).Width + SF(32f);
+            }
+
+            float total = Math.Max(primaryWidth, rowWidth)
+                + (SF(ContentInsetLogical) * 2) + (SF(ShadowMarginLogical) * 2);
+            int step = Math.Max(1, S(CanvasWidthStepLogical));
+            int desired = (int)Math.Ceiling(total / step) * step;
+            return Math.Clamp(desired, S(MinCanvasWidthLogical), S(MaxCanvasWidthLogical));
+        }
+
+        /// <summary>
+        /// Re-creates the layered canvas at <paramref name="width"/> when it
+        /// differs, resizing the window and re-anchoring (a width change moves
+        /// every non-left-anchored position).
+        /// </summary>
+        private void EnsureCanvasWidth(int width)
+        {
+            if (width == _canvasWidth)
+            {
+                return;
+            }
+
+            _canvas.Dispose();
+            NativeMethods.SelectObject(_memDc, _oldDibSelection);
+            NativeMethods.DeleteObject(_dibSection);
+            NativeMethods.DeleteDC(_memDc);
+
+            _canvasWidth = width;
+            (_memDc, _dibSection, _oldDibSelection, _canvas) = CreateLayeredCanvas(_canvasWidth, _canvasHeight);
+            ClientSize = new Size(_canvasWidth, _canvasHeight);
+            ApplyPosition();
         }
 
         private static (IntPtr memDc, IntPtr dib, IntPtr oldSelection, Bitmap canvas) CreateLayeredCanvas(int width, int height)
