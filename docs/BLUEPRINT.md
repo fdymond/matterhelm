@@ -132,7 +132,7 @@ implement the same names):
 | `HTPC_BRIDGE_IPC_TOKEN` | per-session auth token for `hello` | required, no default |
 | `HTPC_BRIDGE_STORAGE_DIR` | matter.js `storage.path` | `%APPDATA%\HtpcMatterBridge\matter` |
 | `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
-| `HTPC_BRIDGE_DEVICE_NAMES` | JSON object `{speaker, playPause, next, previous, power}` → display names (the Google voice targets) | built-in "HTPC …" names |
+| `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
 
 The token is never logged and never persisted (either side). One JSON object per message; additive
