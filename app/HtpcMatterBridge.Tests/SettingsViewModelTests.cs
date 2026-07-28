@@ -460,6 +460,7 @@ public sealed class SettingsViewModelTests : IDisposable
             ["power-enabled"] = false,
             ["power-off-action"] = "sleep",
             ["overlay-enabled"] = false,
+            ["overlay-position"] = "topRight",
             ["mdns-interface"] = "Ethernet",
         };
 

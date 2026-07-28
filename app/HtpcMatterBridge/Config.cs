@@ -108,6 +108,37 @@ public sealed class CommandsConfig
     public List<CustomCommandConfig> Custom { get; set; } = [];
 }
 
+/// <summary>
+/// The eight standard screen placements for the overlay HUD, relative to the
+/// primary screen's working area (so the taskbar is never covered).
+/// </summary>
+public enum OverlayPosition
+{
+    /// <summary>Top-left corner.</summary>
+    TopLeft,
+
+    /// <summary>Top edge, horizontally centered.</summary>
+    TopCenter,
+
+    /// <summary>Top-right corner.</summary>
+    TopRight,
+
+    /// <summary>Left edge, vertically centered.</summary>
+    MiddleLeft,
+
+    /// <summary>Right edge, vertically centered.</summary>
+    MiddleRight,
+
+    /// <summary>Bottom-left corner.</summary>
+    BottomLeft,
+
+    /// <summary>Bottom edge, horizontally centered (the default).</summary>
+    BottomCenter,
+
+    /// <summary>Bottom-right corner.</summary>
+    BottomRight,
+}
+
 /// <summary>What the stateful power endpoint does on an "off" write (BLUEPRINT §2.2 power row).</summary>
 public enum PowerOffAction
 {
@@ -139,6 +170,9 @@ public sealed class BridgeConfig
 
     /// <summary>Whether the overlay HUD flashes on commands.</summary>
     public bool OverlayEnabled { get; set; } = true;
+
+    /// <summary>Where the overlay HUD sits on the primary screen's working area.</summary>
+    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
 
     /// <summary>
     /// Whether the bridge (sidecar + IPC server) runs — the tray "Enable
@@ -330,6 +364,7 @@ public sealed class Config
             ApplyIpcPort(root, result);
             ApplyPowerOffAction(root, result);
             ApplyOverlayEnabled(root, result);
+            ApplyOverlayPosition(root, result);
             ApplyBridgeEnabled(root, result);
             ApplyMdnsInterface(root, result);
             ApplyLogLevel(root, result);
@@ -655,6 +690,28 @@ public sealed class Config
         }
 
         _log("WARN", $"config.json \"powerOffAction\" must be one of displaysOff/pauseAndDisplaysOff/sleep; using default {ToWireName(result.PowerOffAction)}.");
+    }
+
+    private void ApplyOverlayPosition(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("overlayPosition", out JsonElement element))
+        {
+            return;
+        }
+
+        // Digit guard: Enum.TryParse accepts numeric strings ("5" would parse
+        // as the underlying value) — only member names are valid wire forms.
+        if (element.ValueKind == JsonValueKind.String
+            && element.GetString() is { Length: > 0 } raw
+            && !char.IsAsciiDigit(raw[0])
+            && Enum.TryParse(raw, ignoreCase: true, out OverlayPosition position)
+            && Enum.IsDefined(position))
+        {
+            result.OverlayPosition = position;
+            return;
+        }
+
+        _log("WARN", "config.json \"overlayPosition\" must be one of topLeft/topCenter/topRight/middleLeft/middleRight/bottomLeft/bottomCenter/bottomRight; using default bottomCenter.");
     }
 
     private void ApplyOverlayEnabled(JsonElement root, BridgeConfig result)

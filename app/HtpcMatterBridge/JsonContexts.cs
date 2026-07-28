@@ -14,6 +14,9 @@ internal sealed class PowerOffActionJsonConverter() : JsonStringEnumConverter<Po
 /// <summary>Same camelCase enum treatment for <see cref="MediaKeyName"/> ("stop", "volumeUp", …).</summary>
 internal sealed class MediaKeyNameJsonConverter() : JsonStringEnumConverter<MediaKeyName>(JsonNamingPolicy.CamelCase);
 
+/// <summary>Same camelCase enum treatment for <see cref="OverlayPosition"/> ("bottomCenter", "topRight", …).</summary>
+internal sealed class OverlayPositionJsonConverter() : JsonStringEnumConverter<OverlayPosition>(JsonNamingPolicy.CamelCase);
+
 /// <summary>
 /// Source-generated serialization contract (ADR-005 §2) for the
 /// <c>config.json</c> document shape: camelCase properties, indented output,
@@ -26,7 +29,7 @@ internal sealed class MediaKeyNameJsonConverter() : JsonStringEnumConverter<Medi
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     WriteIndented = true,
-    Converters = new[] { typeof(PowerOffActionJsonConverter), typeof(MediaKeyNameJsonConverter) })]
+    Converters = new[] { typeof(PowerOffActionJsonConverter), typeof(MediaKeyNameJsonConverter), typeof(OverlayPositionJsonConverter) })]
 [JsonSerializable(typeof(BridgeConfig))]
 internal sealed partial class ConfigJsonContext : JsonSerializerContext;
 

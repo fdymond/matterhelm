@@ -466,6 +466,27 @@ public sealed class SettingsViewModel
                 },
                 new SettingDescriptor
                 {
+                    Id = "overlay-position",
+                    Label = "Overlay position",
+                    Description = "Where the overlay appears on the screen.",
+                    Kind = SettingKind.Choice,
+                    Choices =
+                    [
+                        "topLeft", "topCenter", "topRight",
+                        "middleLeft", "middleRight",
+                        "bottomLeft", "bottomCenter", "bottomRight",
+                    ],
+                    ChoiceLabels =
+                    [
+                        "Top left", "Top center", "Top right",
+                        "Middle left", "Middle right",
+                        "Bottom left", "Bottom center", "Bottom right",
+                    ],
+                    Get = c => OverlayPositionToWire(c.OverlayPosition),
+                    Set = (c, v) => c.OverlayPosition = OverlayPositionFromWire((string)v!),
+                },
+                new SettingDescriptor
+                {
                     Id = "overlay-preview",
                     Label = "Preview",
                     Description = "Show a sample overlay pop-up now.",
@@ -568,4 +589,15 @@ public sealed class SettingsViewModel
         "sleep" => PowerOffAction.Sleep,
         _ => throw new ArgumentOutOfRangeException(nameof(wireName), wireName, null),
     };
+
+    // camelCase of the enum member name — the exact wire form
+    // OverlayPositionJsonConverter writes and Config's parser accepts.
+    private static string OverlayPositionToWire(OverlayPosition position)
+    {
+        string name = position.ToString();
+        return char.ToLowerInvariant(name[0]) + name[1..];
+    }
+
+    private static OverlayPosition OverlayPositionFromWire(string wireName) =>
+        Enum.Parse<OverlayPosition>(wireName, ignoreCase: true);
 }

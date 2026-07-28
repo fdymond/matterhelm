@@ -53,6 +53,26 @@ public sealed class OverlayHud : IDisposable
     /// </summary>
     public bool Visible { get; set; } = true;
 
+    /// <summary>
+    /// Screen placement of the HUD (owner setting; default bottom-center).
+    /// Safe to set from any thread — the window move marshals to its UI
+    /// thread and applies immediately, even mid-flash.
+    /// </summary>
+    public OverlayPosition Position
+    {
+        get => _window.Position;
+        set
+        {
+            if (_window.InvokeRequired)
+            {
+                _window.BeginInvoke(new Action(() => _window.Position = value));
+                return;
+            }
+
+            _window.Position = value;
+        }
+    }
+
     /// <summary>Native window handle, exposed only for demo/E2E objective verification (see <see cref="OverlayHudDemo"/>).</summary>
     public IntPtr WindowHandle => _window.Handle;
 
@@ -136,6 +156,54 @@ public sealed class OverlayHud : IDisposable
 
         private OverlayContent? _last;
         private long _fadeStartTicks;
+        private OverlayPosition _position = OverlayPosition.BottomCenter;
+
+        /// <summary>Screen placement; setting re-anchors the window immediately.</summary>
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        internal OverlayPosition Position
+        {
+            get => _position;
+            set
+            {
+                if (_position == value)
+                {
+                    return;
+                }
+
+                _position = value;
+                ApplyPosition();
+            }
+        }
+
+        /// <summary>
+        /// Anchors the window to <see cref="_position"/> within the primary
+        /// screen's working area (taskbar never covered), with the same edge
+        /// margin the HUD has always used at the bottom.
+        /// </summary>
+        private void ApplyPosition()
+        {
+            Rectangle working = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
+            int margin = S(BottomMarginLogical);
+
+            int x = _position switch
+            {
+                OverlayPosition.TopLeft or OverlayPosition.MiddleLeft or OverlayPosition.BottomLeft =>
+                    working.Left + margin,
+                OverlayPosition.TopRight or OverlayPosition.MiddleRight or OverlayPosition.BottomRight =>
+                    working.Right - _canvasWidth - margin,
+                _ => working.Left + ((working.Width - _canvasWidth) / 2),
+            };
+            int y = _position switch
+            {
+                OverlayPosition.TopLeft or OverlayPosition.TopCenter or OverlayPosition.TopRight =>
+                    working.Top + margin,
+                OverlayPosition.MiddleLeft or OverlayPosition.MiddleRight =>
+                    working.Top + ((working.Height - _canvasHeight) / 2),
+                _ => working.Bottom - _canvasHeight - margin,
+            };
+            Location = new Point(x, y);
+        }
 
         internal HudWindow()
         {
@@ -150,10 +218,7 @@ public sealed class OverlayHud : IDisposable
             _canvasHeight = S(CanvasHeightLogical);
             ClientSize = new Size(_canvasWidth, _canvasHeight);
 
-            Rectangle working = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
-            Location = new Point(
-                working.Left + ((working.Width - _canvasWidth) / 2),
-                working.Bottom - _canvasHeight - S(BottomMarginLogical));
+            ApplyPosition();
 
             (_memDc, _dibSection, _oldDibSelection, _canvas) = CreateLayeredCanvas(_canvasWidth, _canvasHeight);
 
