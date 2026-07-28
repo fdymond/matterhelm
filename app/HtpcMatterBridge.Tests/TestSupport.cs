@@ -80,7 +80,7 @@ internal static class TestSupport
     /// <summary>Thread-safe log capture to inject as a supervisor/server log sink.</summary>
     internal sealed class LogCapture
     {
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
         private readonly List<(string Level, string Message)> _entries = [];
 
         internal void Sink(string level, string message)

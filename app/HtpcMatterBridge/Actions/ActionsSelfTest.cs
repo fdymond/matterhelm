@@ -11,7 +11,7 @@ namespace HtpcMatterBridge.Actions;
 /// exercised. Results go to stdout (parent console, if any) and to
 /// <c>selftest-actions-results.txt</c> next to the exe.
 /// </summary>
-internal static class ActionsSelfTest
+internal static partial class ActionsSelfTest
 {
     private const int AttachParentProcess = -1;
 
@@ -19,7 +19,7 @@ internal static class ActionsSelfTest
     public static int Run(bool includeDisplayTests)
     {
         _ = AttachConsole(AttachParentProcess); // WinExe has no console; borrow the parent's if present.
-        var lines = new List<string>();
+        List<string> lines = [];
         bool allPassed = true;
 
         void Emit(string line)
@@ -134,6 +134,7 @@ internal static class ActionsSelfTest
         }
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool AttachConsole(int processId);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AttachConsole(int processId);
 }

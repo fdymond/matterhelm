@@ -9,7 +9,7 @@ namespace HtpcMatterBridge.Actions;
 /// and suspends the machine via WinForms <see cref="Application.SetSuspendState"/>
 /// (which handles enabling the shutdown privilege).
 /// </summary>
-public sealed class DisplayPower : IDisposable
+public sealed partial class DisplayPower : IDisposable
 {
     private const int WmSysCommand = 0x0112;
     private const int ScMonitorPower = 0xF170;
@@ -27,7 +27,7 @@ public sealed class DisplayPower : IDisposable
     }
 
     /// <summary>Wakes displays with a +1/-1 relative mouse nudge (cursor ends where it started).</summary>
-    public bool WakeDisplays()
+    public static bool WakeDisplays()
     {
         var inputs = new NativeInput.Input[2];
         inputs[0].Type = NativeInput.InputMouse;
@@ -41,7 +41,7 @@ public sealed class DisplayPower : IDisposable
     }
 
     /// <summary>Suspends the machine (sleep). Returns false if the system rejected the request.</summary>
-    public bool Sleep()
+    public static bool Sleep()
     {
         bool ok = Application.SetSuspendState(PowerState.Suspend, force: false, disableWakeEvent: false);
         if (!ok)
@@ -55,8 +55,8 @@ public sealed class DisplayPower : IDisposable
     /// <summary>Destroys the message-only window.</summary>
     public void Dispose() => _window.DestroyHandle();
 
-    [DllImport("user32.dll")]
-    private static extern nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
+    [LibraryImport("user32.dll")]
+    private static partial nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 
     /// <summary>Invisible message-only window; exists only as a SendMessage target.</summary>
     private sealed class MessageOnlyWindow : NativeWindow

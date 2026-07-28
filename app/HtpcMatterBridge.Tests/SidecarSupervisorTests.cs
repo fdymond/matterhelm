@@ -143,7 +143,7 @@ public static class SidecarSupervisorTests
         {
             string node = TestSupport.RequireNodeExe();
             var capture = new TestSupport.LogCapture();
-            var gate = new object();
+            var gate = new Lock();
             var delays = new List<int>();
             int starts = 0;
             using (var supervisor = new SidecarSupervisor(
@@ -201,7 +201,7 @@ public static class SidecarSupervisorTests
         {
             string node = TestSupport.RequireNodeExe();
             var capture = new TestSupport.LogCapture();
-            var gate = new object();
+            var gate = new Lock();
             var delays = new List<int>();
             string counterFile = Path.Combine(Path.GetTempPath(), $"htpc-backoff-reset-{Guid.NewGuid():N}.txt");
             // Runs 1 and 2 crash instantly (attempt climbs); run 3 survives
@@ -302,7 +302,7 @@ public static class SidecarSupervisorTests
         {
             string node = TestSupport.RequireNodeExe();
             var capture = new TestSupport.LogCapture();
-            var gate = new object();
+            var gate = new Lock();
             int starts = 0;
             int delayCount = 0;
             using (var supervisor = new SidecarSupervisor(

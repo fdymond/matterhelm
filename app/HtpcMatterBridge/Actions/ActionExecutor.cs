@@ -53,7 +53,7 @@ public sealed class ActionExecutor : IDisposable
                 // For now power maps straight to the displays; S2-4 layers the
                 // configurable powerOff behavior (displays off vs. sleep) on top.
                 case "powerOn":
-                    return _displayPower.WakeDisplays();
+                    return DisplayPower.WakeDisplays();
                 case "powerOff":
                     return _displayPower.DisplaysOff();
                 default:

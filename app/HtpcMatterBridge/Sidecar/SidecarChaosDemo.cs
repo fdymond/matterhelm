@@ -17,7 +17,7 @@ namespace HtpcMatterBridge.Sidecar;
 /// to the exe; exit code 0 iff every check passed. Uses its own log sink —
 /// never the %APPDATA% file log. Not part of the production tray flow.
 /// </summary>
-internal static class SidecarChaosDemo
+internal static partial class SidecarChaosDemo
 {
     private const string ResultsFileName = "sidecar-chaos-demo-results.txt";
     private const int AttachParentProcess = -1;
@@ -26,8 +26,8 @@ internal static class SidecarChaosDemo
     internal static int Run()
     {
         _ = AttachConsole(AttachParentProcess); // WinExe has no console; borrow the parent's if present.
-        var gate = new object();
-        var lines = new List<string>();
+        var gate = new Lock();
+        List<string> lines = [];
         bool allPassed = true;
 
         void Emit(string line)
@@ -73,10 +73,10 @@ internal static class SidecarChaosDemo
         return allPassed ? 0 : 1;
     }
 
-    private static void RunCrashRestartPart(string node, Action<string> emit, Action<bool, string> check, object gate)
+    private static void RunCrashRestartPart(string node, Action<string> emit, Action<bool, string> check, Lock gate)
     {
         emit("--- part 1: kill sidecar -> auto-restart with backoff (production constants) ---");
-        var restartDelays = new List<int>();
+        List<int> restartDelays = [];
         var startCount = 0;
         const string script =
             "let n = 0;" +
@@ -238,6 +238,7 @@ internal static class SidecarChaosDemo
         return port;
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool AttachConsole(int processId);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AttachConsole(int processId);
 }

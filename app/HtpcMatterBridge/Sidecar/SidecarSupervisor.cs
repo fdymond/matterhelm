@@ -59,9 +59,10 @@ public sealed class SidecarSupervisor : IDisposable
     private readonly SupervisorOptions _options;
     private readonly Action<string, string> _log;
     private readonly IReadOnlyDictionary<string, string>? _extraEnv;
-    private readonly object _gate = new();
+    private readonly TimeProvider _timeProvider;
+    private readonly Lock _gate = new();
     private Process? _child;
-    private System.Threading.Timer? _restartTimer;
+    private ITimer? _restartTimer;
     private int _attempt;
     private long _childStartedAt;
     private bool _started;
@@ -75,6 +76,7 @@ public sealed class SidecarSupervisor : IDisposable
     /// <param name="options">Timing knobs; production uses the defaults.</param>
     /// <param name="log">Log sink (level, message); defaults to <see cref="Log"/>. Injectable for tests/demos.</param>
     /// <param name="extraEnv">Additional environment for the child (e.g. <c>HTPC_BRIDGE_ENDPOINTS</c>, BLUEPRINT §2.3 as amended by ADR-004 §2). Applied before the fixed contract variables, which therefore can never be overridden.</param>
+    /// <param name="timeProvider">Clock for the restart timer and the healthy-uptime reset (ADR-005); defaults to <see cref="TimeProvider.System"/>.</param>
     public SidecarSupervisor(
         SidecarSpec spec,
         int ipcPort,
@@ -82,7 +84,8 @@ public sealed class SidecarSupervisor : IDisposable
         string logLevel = "info",
         SupervisorOptions? options = null,
         Action<string, string>? log = null,
-        IReadOnlyDictionary<string, string>? extraEnv = null)
+        IReadOnlyDictionary<string, string>? extraEnv = null,
+        TimeProvider? timeProvider = null)
     {
         _spec = spec;
         _ipcPort = ipcPort;
@@ -91,6 +94,7 @@ public sealed class SidecarSupervisor : IDisposable
         _options = options ?? new SupervisorOptions();
         _log = log ?? DefaultLog;
         _extraEnv = extraEnv;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         IpcToken = GenerateToken();
     }
 
@@ -344,7 +348,7 @@ public sealed class SidecarSupervisor : IDisposable
         child.BeginOutputReadLine();
         child.BeginErrorReadLine();
         _child = child;
-        _childStartedAt = Environment.TickCount64;
+        _childStartedAt = _timeProvider.GetTimestamp();
         _log("INFO", $"sidecar started (pid {child.Id}, attempt {_attempt}).");
         RaiseOnPool(() => ChildStarted?.Invoke(this, EventArgs.Empty));
     }
@@ -371,7 +375,7 @@ public sealed class SidecarSupervisor : IDisposable
                     return; // Stop() reports and disposes.
                 }
 
-                long uptimeMs = Environment.TickCount64 - _childStartedAt;
+                long uptimeMs = (long)_timeProvider.GetElapsedTime(_childStartedAt).TotalMilliseconds;
                 if (uptimeMs >= _options.BackoffResetMs && _attempt > 0)
                 {
                     _attempt = 0;
@@ -413,7 +417,8 @@ public sealed class SidecarSupervisor : IDisposable
         _log("INFO", $"sidecar restart in {delayMs} ms (attempt {_attempt}).");
         RaiseOnPool(() => RestartScheduled?.Invoke(this, delayMs));
         _restartTimer?.Dispose();
-        _restartTimer = new System.Threading.Timer(_ => OnRestartDue(), null, delayMs, Timeout.Infinite);
+        _restartTimer = _timeProvider.CreateTimer(
+            _ => OnRestartDue(), null, TimeSpan.FromMilliseconds(delayMs), Timeout.InfiniteTimeSpan);
     }
 
     private void OnRestartDue()

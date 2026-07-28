@@ -8,7 +8,7 @@ namespace HtpcMatterBridge.Actions;
 /// union layout must match the native definition exactly and duplicating it
 /// invites drift.
 /// </summary>
-internal static class NativeInput
+internal static partial class NativeInput
 {
     public const uint InputMouse = 0;
     public const uint InputKeyboard = 1;
@@ -58,8 +58,8 @@ internal static class NativeInput
         public nint ExtraInfo;
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern uint SendInput(uint inputCount, Input[] inputs, int inputSize);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial uint SendInput(uint inputCount, Input[] inputs, int inputSize);
 
     /// <summary>
     /// Sends the given events, returning true iff all were injected.

@@ -23,7 +23,7 @@ public sealed class SystemVolume : IDisposable
     private const uint ClsctxAll = 0x17;
 
     /// <summary>Guards endpoint acquire/release/use; the endpoint can be swapped by a device-change notification.</summary>
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
 
     private readonly IMMDeviceEnumerator _deviceEnumerator;
 

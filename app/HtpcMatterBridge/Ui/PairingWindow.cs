@@ -108,8 +108,8 @@ public sealed class PairingWindow : Form
         _codeBox.Text = manualCode;
     }
 
-    /// <summary>Renders a QR payload string to a GDI+ <see cref="Image"/> via QRCoder's <see cref="PngByteQRCode"/> (no System.Drawing coupling in the renderer itself).</summary>
-    private static Image RenderQrImage(string payload)
+    /// <summary>Renders a QR payload string to a GDI+ <see cref="Bitmap"/> via QRCoder's <see cref="PngByteQRCode"/> (no System.Drawing coupling in the renderer itself).</summary>
+    private static Bitmap RenderQrImage(string payload)
     {
         using QRCodeGenerator generator = new();
         using QRCodeData data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.Q);

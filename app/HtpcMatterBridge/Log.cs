@@ -9,7 +9,7 @@ namespace HtpcMatterBridge;
 public static class Log
 {
     private const int RetentionDays = 7;
-    private static readonly object _gate = new();
+    private static readonly Lock _gate = new();
     private static readonly string _logDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "HtpcMatterBridge",
@@ -57,7 +57,7 @@ public static class Log
             lock (_gate)
             {
                 Directory.CreateDirectory(_logDir);
-                File.AppendAllLines(path, new[] { line });
+                File.AppendAllLines(path, [line]);
             }
         }
         catch
