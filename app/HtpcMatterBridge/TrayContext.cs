@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Reflection;
@@ -46,6 +45,7 @@ public sealed class TrayContext : ApplicationContext
 
     private bool _applyingConfigChange;
     private PairingWindow? _pairingWindow;
+    private SettingsWindow? _settingsWindow;
     private (string QrPayload, string ManualCode)? _lastPairingInfo;
     private BridgeState _state = BridgeState.Disabled;
 
@@ -89,11 +89,11 @@ public sealed class TrayContext : ApplicationContext
         };
         _overlayItem.CheckedChanged += OnOverlayCheckedChanged;
 
-        var deviceNamesItem = new ToolStripMenuItem("Device names…");
-        deviceNamesItem.Click += (_, _) => OpenConfigFile();
-
-        var openConfigItem = new ToolStripMenuItem("Open config");
-        openConfigItem.Click += (_, _) => OpenConfigFolder();
+        // S4-3: "Settings…" replaces "Device names…"/"Open config" — both
+        // actions live inside the settings window's Advanced page now
+        // (ADR-004 §4); "Reload config" stays for parity with the window.
+        var settingsItem = new ToolStripMenuItem("Settings…");
+        settingsItem.Click += (_, _) => ShowOrFocusSettingsWindow();
 
         var reloadConfigItem = new ToolStripMenuItem("Reload config");
         reloadConfigItem.Click += OnReloadConfigClicked;
@@ -109,8 +109,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(_pairItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_overlayItem);
-        menu.Items.Add(deviceNamesItem);
-        menu.Items.Add(openConfigItem);
+        menu.Items.Add(settingsItem);
         menu.Items.Add(reloadConfigItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(aboutItem);
@@ -139,6 +138,9 @@ public sealed class TrayContext : ApplicationContext
 
     /// <summary>"Overlay pop-ups" was toggled (already persisted to <see cref="Config"/> by the time this fires); <c>Program</c> flips the live <c>OverlayHud</c>.</summary>
     public event EventHandler<bool>? OverlayEnabledChanged;
+
+    /// <summary>The settings window's "Preview" button was clicked; <c>Program</c> shows a sample overlay pop-up (the HUD lives there, not here).</summary>
+    public event EventHandler? OverlayPreviewRequested;
 
     /// <summary>"Exit" was clicked, before teardown; subscribers should synchronously stop anything they own (e.g. the sidecar).</summary>
     public event EventHandler? ExitRequested;
@@ -257,6 +259,20 @@ public sealed class TrayContext : ApplicationContext
         _pairingWindow.Activate();
     }
 
+    /// <summary>Same single-instance pattern as the pairing window: recreate only when never opened or closed (disposed), else focus. A fresh window per open also means a fresh staged copy of the config.</summary>
+    private void ShowOrFocusSettingsWindow()
+    {
+        if (_settingsWindow is null || _settingsWindow.IsDisposed)
+        {
+            _settingsWindow = new SettingsWindow(
+                new SettingsViewModel(Config),
+                overlayPreview: () => OverlayPreviewRequested?.Invoke(this, EventArgs.Empty));
+        }
+
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
     private void OnOverlayCheckedChanged(object? sender, EventArgs e)
     {
         bool enabled = _overlayItem.Checked;
@@ -296,32 +312,6 @@ public sealed class TrayContext : ApplicationContext
         }
     }
 
-    private void OpenConfigFile()
-    {
-        OpenWithShell(Config.DefaultPath, "config.json");
-    }
-
-    private void OpenConfigFolder()
-    {
-        string? dir = Path.GetDirectoryName(Config.DefaultPath);
-        if (dir is not null)
-        {
-            OpenWithShell(dir, "config folder");
-        }
-    }
-
-    private static void OpenWithShell(string path, string what)
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Tray: failed to open {what} ('{path}'): {ex.Message}");
-        }
-    }
-
     private static void OnAboutClicked(object? sender, EventArgs e)
     {
         Version? version = Assembly.GetExecutingAssembly().GetName().Version;
@@ -339,6 +329,7 @@ public sealed class TrayContext : ApplicationContext
 
         Config.Changed -= OnConfigChanged;
         _pairingWindow?.Dispose();
+        _settingsWindow?.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _uiThreadMarshal.Dispose();
