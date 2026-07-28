@@ -719,12 +719,25 @@ public sealed class Config
 
         if (element.ValueKind == JsonValueKind.String && element.GetString() is { Length: > 0 } value)
         {
-            result.LogLevel = value;
+            // S4-R RISK-2: the bridge's config parser is strict and treats an
+            // unknown level as FATAL — an unvalidated value here would load
+            // fine in the tray app and then crash-loop the sidecar (red icon,
+            // no visible reason). Same fallback discipline as every field.
+            if (KnownLogLevels.Contains(value))
+            {
+                result.LogLevel = value;
+                return;
+            }
+
+            _log("WARN", $"config.json \"logLevel\" \"{value}\" is not a pino level ({string.Join("/", KnownLogLevels)}); using default \"{result.LogLevel}\".");
             return;
         }
 
         _log("WARN", $"config.json \"logLevel\" must be a non-empty string; using default \"{result.LogLevel}\".");
     }
+
+    /// <summary>The pino levels the bridge sidecar accepts (its parser is strict — bridge/src/config.ts).</summary>
+    private static readonly string[] KnownLogLevels = ["trace", "debug", "info", "warn", "error", "fatal", "silent"];
 
     private static string ToWireName(PowerOffAction action) => action switch
     {

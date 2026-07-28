@@ -52,6 +52,7 @@ public sealed partial class SettingsWindow : Form
 
     private SettingsSearchResult _search;
     private bool _refreshing;
+    private bool _applyingSave;
 
     /// <summary>Builds the window over <paramref name="viewModel"/>.</summary>
     /// <param name="viewModel">The staged settings state and rules.</param>
@@ -163,6 +164,12 @@ public sealed partial class SettingsWindow : Form
         };
 
         FormClosing += OnFormClosingPrompt;
+
+        // S4-R RISK-1: this window is non-modal, so tray toggles and "Reload
+        // config" mutate the live config while it is open — reconcile instead
+        // of letting a later Save write the stale staged copy back.
+        _vm.Config.Changed += OnLiveConfigChanged;
+        FormClosed += (_, _) => _vm.Config.Changed -= OnLiveConfigChanged;
 
         _navList.SelectedIndex = 0;
         RefreshFromViewModel();
@@ -290,12 +297,41 @@ public sealed partial class SettingsWindow : Form
             return false;
         }
 
-        _vm.Apply();
+        // Apply() reloads the config, which fires Config.Changed synchronously
+        // on this thread — the guard keeps OnLiveConfigChanged from treating
+        // our own save as an external change.
+        _applyingSave = true;
+        try
+        {
+            _vm.Apply();
+        }
+        finally
+        {
+            _applyingSave = false;
+        }
+
         RefreshFromViewModel();
         _savedFlash.Visible = true;
         _savedFlashTimer.Stop();
         _savedFlashTimer.Start();
         return true;
+    }
+
+    private void OnLiveConfigChanged(object? sender, ConfigChangedEventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(() => OnLiveConfigChanged(sender, e)));
+            return;
+        }
+
+        if (_applyingSave)
+        {
+            return;
+        }
+
+        _vm.AbsorbExternalConfigChange();
+        RefreshFromViewModel();
     }
 
     // ---- search / nav ------------------------------------------------------

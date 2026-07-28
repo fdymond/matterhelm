@@ -173,6 +173,30 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Theory]
+    [InlineData("verbose")]
+    [InlineData("INFO")]
+    [InlineData("2")]
+    public void UnknownLogLevelFallsBackToDefaultWithAWarn(string level)
+    {
+        // S4-R RISK-2: the bridge's parser treats an unknown level as fatal —
+        // the tray app must never hand one over (sidecar crash-loop).
+        File.WriteAllText(_path, $$"""{"logLevel":"{{level}}"}""");
+        Config config = NewConfig();
+        Assert.Equal("info", config.Current.LogLevel);
+        Assert.True(_log.Contains("WARN", "logLevel"), "expected a WARN naming logLevel");
+    }
+
+    [Theory]
+    [InlineData("silent")]
+    [InlineData("trace")]
+    [InlineData("fatal")]
+    public void EveryPinoLevelTheBridgeAcceptsLoads(string level)
+    {
+        File.WriteAllText(_path, $$"""{"logLevel":"{{level}}"}""");
+        Assert.Equal(level, NewConfig().Current.LogLevel);
+    }
+
+    [Theory]
     [InlineData("not json at all")]
     [InlineData("{ this is broken json")]
     [InlineData("[1,2,3]")]
