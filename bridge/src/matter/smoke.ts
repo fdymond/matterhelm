@@ -1,13 +1,14 @@
 /**
- * S1-3 boot smoke script — proves, without a Matter controller, that the
- * bridge constructs the aggregator + all five §2.2 endpoints, exposes
- * pairing codes after start, suppresses local-write echoes, and closes
- * cleanly. Not part of `npm run verify` (it binds real network resources);
- * run it manually from bridge/:
+ * S1-3 boot smoke script (extended for ADR-004 in S4-1) — proves, without a
+ * Matter controller, that the bridge constructs the aggregator + the
+ * config-derived endpoint set (§2.2 built-ins plus a custom momentary plug,
+ * minus a disabled built-in), exposes pairing codes after start, suppresses
+ * local-write echoes, and closes cleanly. Not part of `npm run verify` (it
+ * binds real network resources); run it manually from bridge/:
  *
  *   npx tsx src/matter/smoke.ts
  *
- * Uses a throwaway storage dir (deleted afterwards) and port 5541 so it can
+ * Uses a throwaway storage dir (deleted afterwards) and port 5543 so it can
  * never collide with a real bridge on the default 5540 or its fabric storage.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -35,13 +36,14 @@ const writes: ClusterWrite[] = [];
 
 const bridge = await createBridge({
   storageDir,
-  port: 5541,
-  deviceNames: {
-    speaker: "HTPC Speaker",
-    playPause: "HTPC Play Pause",
-    next: "HTPC Next",
-    previous: "HTPC Previous",
-    power: "HTPC Power",
+  port: 5543,
+  endpoints: {
+    speaker: { name: "HTPC Speaker", enabled: true },
+    playPause: { name: "HTPC Play Pause", enabled: true },
+    next: { name: "HTPC Next", enabled: false }, // disabled built-in: omitted
+    previous: { name: "HTPC Previous", enabled: true },
+    power: { name: "HTPC Power", enabled: true },
+    custom: [{ key: "movie-mode", name: "Movie Mode" }],
   },
   onClusterWrite: (write) => {
     writes.push(write);
@@ -49,7 +51,11 @@ const bridge = await createBridge({
 });
 
 try {
-  ok(true, "bridge constructed: aggregator + speaker/playpause/next/previous/power endpoints");
+  const ids = bridge.endpoints.map((endpoint) => endpoint.id);
+  ok(
+    ids.join(",") === "speaker,playpause,previous,power,custom-movie-mode",
+    `bridge constructed the ADR-004 endpoint set (no disabled 'next'): ${ids.join(",")}`,
+  );
   ok(bridge.pairingCodes === null, "pairingCodes is null before start");
   await bridge.start();
   ok(!bridge.isCommissioned, "isCommissioned is false on fresh storage");
@@ -64,9 +70,9 @@ try {
   await bridge.setSpeakerState(127, true);
   await bridge.setSpeakerState(200, false);
   // Momentary endpoints exist and accept writes; already-off resets are no-ops.
-  await bridge.resetMomentary("playPause");
-  await bridge.resetMomentary("next");
+  await bridge.resetMomentary("playpause");
   await bridge.resetMomentary("previous");
+  await bridge.resetMomentary("custom-movie-mode");
   await delay(250); // let any (erroneous) change events drain
   ok(
     writes.length === 0,

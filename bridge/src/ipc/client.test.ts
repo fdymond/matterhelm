@@ -20,7 +20,7 @@ import type { TrayFrame } from "./protocol.js";
 
 const TOKEN = "test-session-token";
 const UUID = "123e4567-e89b-12d3-a456-426614174000";
-const STATE_ON_CONNECT = { v: 1, type: "state", volume: 40, muted: false };
+const STATE_ON_CONNECT = { v: 2, type: "state", volume: 40, muted: false };
 
 /** Rejects `promise` after 5 real seconds even under fake timers. */
 function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
@@ -194,7 +194,7 @@ const invalidFrameWarns = (calls: { warn: LogCall[] }): LogCall[] =>
 const count = (states: IpcClientState[], state: IpcClientState): number =>
   states.filter((s) => s === state).length;
 
-const playPause: OutboundFrame = { v: 1, type: "action", id: UUID, name: "playPause" };
+const playPause: OutboundFrame = { v: 2, type: "action", id: UUID, name: "playPause" };
 
 describe("backoffDelayMs", () => {
   it("doubles per attempt from the 500 ms base with neutral jitter", () => {
@@ -271,19 +271,19 @@ describe("IpcClient (integration, real ws mock server)", () => {
     c.start();
 
     await waiter.until(() => server.frames.length >= 1, "hello frame");
-    expect(server.frames[0]).toEqual({ v: 1, type: "hello", token: TOKEN, protocol: 1 });
+    expect(server.frames[0]).toEqual({ v: 2, type: "hello", token: TOKEN, protocol: 1 });
 
     await waiter.until(() => frames.length >= 1, "state-on-connect frame");
     expect(frames[0]).toEqual(STATE_ON_CONNECT);
 
-    const action: OutboundFrame = { v: 1, type: "action", id: UUID, name: "setVolume", value: 40 };
+    const action: OutboundFrame = { v: 2, type: "action", id: UUID, name: "setVolume", value: 40 };
     expect(c.send(action)).toBe(true);
     await waiter.until(() => server.frames.length >= 2, "action frame at server");
     expect(server.frames[1]).toEqual(action);
 
-    server.sendRaw(JSON.stringify({ v: 1, type: "ack", id: UUID, ok: true }));
+    server.sendRaw(JSON.stringify({ v: 2, type: "ack", id: UUID, ok: true }));
     await waiter.until(() => frames.length >= 2, "ack frame at client");
-    expect(frames[1]).toEqual({ v: 1, type: "ack", id: UUID, ok: true });
+    expect(frames[1]).toEqual({ v: 2, type: "ack", id: UUID, ok: true });
 
     expect(dropWarns(calls)).toHaveLength(0);
     // Security invariant: the session token is never logged.
@@ -297,9 +297,9 @@ describe("IpcClient (integration, real ws mock server)", () => {
     await waiter.until(() => frames.length >= 1, "state-on-connect frame");
 
     server.sendRaw("this is not json");
-    server.sendRaw(JSON.stringify({ v: 1, type: "state", volume: 400, muted: false }));
+    server.sendRaw(JSON.stringify({ v: 2, type: "state", volume: 400, muted: false }));
     server.sendBinary(Buffer.from([1, 2, 3]));
-    server.sendRaw(JSON.stringify({ v: 1, type: "ack", id: UUID, ok: false, error: "nope" }));
+    server.sendRaw(JSON.stringify({ v: 2, type: "ack", id: UUID, ok: false, error: "nope" }));
 
     await waiter.until(() => frames.length >= 2, "valid ack after garbage");
     expect(frames).toHaveLength(2); // only the valid frames surfaced

@@ -21,12 +21,13 @@ describe("parseConfig", () => {
       ipcToken: TOKEN,
       storageDir: `${APPDATA}\\HtpcMatterBridge\\matter`,
       logLevel: "info",
-      deviceNames: {
-        speaker: "HTPC Speaker",
-        playPause: "HTPC Play Pause",
-        next: "HTPC Next",
-        previous: "HTPC Previous",
-        power: "HTPC Power",
+      endpoints: {
+        speaker: { name: "HTPC Speaker", enabled: true },
+        playPause: { name: "HTPC Play Pause", enabled: true },
+        next: { name: "HTPC Next", enabled: true },
+        previous: { name: "HTPC Previous", enabled: true },
+        power: { name: "HTPC Power", enabled: true },
+        custom: [],
       },
     });
     expect(config.mdnsInterface).toBeUndefined();
@@ -144,68 +145,163 @@ describe("parseConfig", () => {
     });
   });
 
-  describe("HTPC_BRIDGE_DEVICE_NAMES", () => {
-    it("overrides only the given fields, defaulting the rest", () => {
-      const config = parseConfig(
-        baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: JSON.stringify({ speaker: "Living Room Speaker" }) }),
-      );
-      expect(config.deviceNames).toEqual({
-        speaker: "Living Room Speaker",
-        playPause: "HTPC Play Pause",
-        next: "HTPC Next",
-        previous: "HTPC Previous",
-        power: "HTPC Power",
-      });
+  describe("HTPC_BRIDGE_ENDPOINTS (ADR-004 §2)", () => {
+    /** The full shape the tray app sends (ADR-004's worked example). */
+    const fullShape = {
+      speaker: { name: "HTPC Speaker", enabled: true },
+      playPause: { name: "HTPC Play Pause", enabled: false },
+      next: { name: "HTPC Next", enabled: true },
+      previous: { name: "HTPC Previous", enabled: true },
+      power: { name: "HTPC Power", enabled: true },
+      custom: [{ key: "movie-mode", name: "Movie Mode" }],
+    };
+
+    const withEndpoints = (value: unknown): Record<string, string | undefined> =>
+      baseEnv({ HTPC_BRIDGE_ENDPOINTS: JSON.stringify(value) });
+
+    it("parses the full ADR-004 shape verbatim", () => {
+      expect(parseConfig(withEndpoints(fullShape)).endpoints).toEqual(fullShape);
     });
 
-    it("accepts a full override of every field", () => {
-      const names = { speaker: "S", playPause: "P", next: "N", previous: "V", power: "W" };
-      const config = parseConfig(baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: JSON.stringify(names) }));
-      expect(config.deviceNames).toEqual(names);
+    it("treats an empty string like unset (all defaults)", () => {
+      const config = parseConfig(baseEnv({ HTPC_BRIDGE_ENDPOINTS: "" }));
+      expect(config.endpoints).toEqual(parseConfig(baseEnv()).endpoints);
     });
 
-    it("defaults speaker specifically when every other field is overridden", () => {
+    it("carries a disabled built-in through as enabled:false (bridge omits it)", () => {
+      expect(parseConfig(withEndpoints(fullShape)).endpoints.playPause.enabled).toBe(false);
+    });
+
+    it("defaults an omitted built-in to enabled with its HTPC name", () => {
       const config = parseConfig(
-        baseEnv({
-          HTPC_BRIDGE_DEVICE_NAMES: JSON.stringify({
-            playPause: "P",
-            next: "N",
-            previous: "V",
-            power: "W",
-          }),
-        }),
+        withEndpoints({ speaker: { name: "Living Room", enabled: true } }),
       );
-      expect(config.deviceNames.speaker).toBe("HTPC Speaker");
+      expect(config.endpoints.speaker).toEqual({ name: "Living Room", enabled: true });
+      expect(config.endpoints.power).toEqual({ name: "HTPC Power", enabled: true });
+      expect(config.endpoints.custom).toEqual([]);
+    });
+
+    it("defaults an omitted name/enabled field inside a built-in entry", () => {
+      const config = parseConfig(
+        withEndpoints({ next: { enabled: false }, power: { name: "TV" } }),
+      );
+      expect(config.endpoints.next).toEqual({ name: "HTPC Next", enabled: false });
+      expect(config.endpoints.power).toEqual({ name: "TV", enabled: true });
+    });
+
+    it("preserves the order of custom commands", () => {
+      const custom = [
+        { key: "b-second", name: "B" },
+        { key: "a-first", name: "A" },
+      ];
+      expect(parseConfig(withEndpoints({ custom })).endpoints.custom).toEqual(custom);
     });
 
     it("is fatal (not silent) on malformed JSON", () => {
       expect(() => {
-        parseConfig(baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: "{not json" }));
-      }).toThrow(/HTPC_BRIDGE_DEVICE_NAMES/);
-    });
-
-    it("rejects an unknown key", () => {
-      expect(() => {
-        parseConfig(baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: JSON.stringify({ bogus: "x" }) }));
-      }).toThrow(/HTPC_BRIDGE_DEVICE_NAMES/);
-    });
-
-    it("rejects a non-string value", () => {
-      expect(() => {
-        parseConfig(baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: JSON.stringify({ speaker: 5 }) }));
-      }).toThrow(/HTPC_BRIDGE_DEVICE_NAMES/);
-    });
-
-    it("rejects an empty-string value", () => {
-      expect(() => {
-        parseConfig(baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: JSON.stringify({ speaker: "" }) }));
-      }).toThrow(/HTPC_BRIDGE_DEVICE_NAMES/);
+        parseConfig(baseEnv({ HTPC_BRIDGE_ENDPOINTS: "{not json" }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
     });
 
     it("rejects a JSON array (not an object)", () => {
       expect(() => {
-        parseConfig(baseEnv({ HTPC_BRIDGE_DEVICE_NAMES: "[]" }));
-      }).toThrow(/HTPC_BRIDGE_DEVICE_NAMES/);
+        parseConfig(baseEnv({ HTPC_BRIDGE_ENDPOINTS: "[]" }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects an unknown top-level key", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ bogus: { name: "x", enabled: true } }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects an unknown key inside a built-in entry", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ speaker: { name: "S", enabled: true, extra: 1 } }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects an empty built-in name", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ speaker: { name: "", enabled: true } }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a non-boolean enabled flag", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ speaker: { name: "S", enabled: "yes" } }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a non-array custom field", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: { key: "movie-mode", name: "M" } }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a custom entry missing its key", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ name: "Movie Mode" }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a custom entry missing its name", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ key: "movie-mode" }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a custom entry with an empty name", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ key: "movie-mode", name: "" }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects an invalid custom key slug (uppercase)", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ key: "Movie-Mode", name: "M" }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects an invalid custom key slug (underscore)", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ key: "movie_mode", name: "M" }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a custom key longer than 64 characters", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ key: "k".repeat(65), name: "M" }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a stray enabled flag on a custom entry (disabled customs are omitted)", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ custom: [{ key: "movie-mode", name: "M", enabled: true }] }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a stray action block on a custom entry (the sidecar never executes)", () => {
+      expect(() => {
+        parseConfig(
+          withEndpoints({
+            custom: [{ key: "movie-mode", name: "M", action: { type: "mediaKey" } }],
+          }),
+        );
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects duplicate custom keys as fatal", () => {
+      expect(() => {
+        parseConfig(
+          withEndpoints({
+            custom: [
+              { key: "movie-mode", name: "Movie Mode" },
+              { key: "movie-mode", name: "Movie Mode Again" },
+            ],
+          }),
+        );
+      }).toThrow(/duplicate key "movie-mode"/);
     });
   });
 
