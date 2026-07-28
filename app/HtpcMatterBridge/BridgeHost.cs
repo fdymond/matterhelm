@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using HtpcMatterBridge.Actions;
 using HtpcMatterBridge.Sidecar;
+using HtpcMatterBridge.Ui;
 
 namespace HtpcMatterBridge;
 
@@ -161,7 +162,7 @@ public sealed class BridgeHost : IDisposable
     private readonly Config _config;
     private readonly IActionExecutor _executor;
     private readonly SidecarSpec _sidecarSpec;
-    private readonly Action<string, string, bool>? _overlaySink;
+    private readonly Action<OverlayContent>? _overlaySink;
     private readonly SupervisorOptions? _supervisorOptions;
     private readonly Action<string, string> _log;
     private readonly string _storageDir;
@@ -185,7 +186,7 @@ public sealed class BridgeHost : IDisposable
     /// <param name="config">Live config; <c>ipcPort</c>/<c>logLevel</c> are read at each enable, <c>overlayEnabled</c>/<c>powerOffAction</c> per action.</param>
     /// <param name="executor">Action executor seam; production passes <see cref="ActionExecutorAdapter"/>.</param>
     /// <param name="sidecarSpec">What to spawn; production passes <see cref="SidecarLaunchSpec.Default"/>, demos/tests inject a stub.</param>
-    /// <param name="overlaySink">Overlay flash sink (primary, pill, isError); production passes <c>OverlayHud.Show</c>. Only invoked while <c>overlayEnabled</c>.</param>
+    /// <param name="overlaySink">Overlay flash sink; production passes <c>OverlayHud.Show</c>. Only invoked while <c>overlayEnabled</c>. Volume-changing actions carry <see cref="OverlayContent.VolumePercent"/> so the HUD renders a fill bar (S4-5).</param>
     /// <param name="supervisorOptions">Supervisor timing knobs; production uses the defaults.</param>
     /// <param name="log">Log sink (level, message); defaults to <see cref="Log"/>. Injectable for tests/demos.</param>
     /// <param name="storageDir">matter.js storage dir handed to the sidecar; defaults to <c>%APPDATA%\HtpcMatterBridge\matter</c> (BLUEPRINT §2.5).</param>
@@ -193,7 +194,7 @@ public sealed class BridgeHost : IDisposable
         Config config,
         IActionExecutor executor,
         SidecarSpec sidecarSpec,
-        Action<string, string, bool>? overlaySink = null,
+        Action<OverlayContent>? overlaySink = null,
         SupervisorOptions? supervisorOptions = null,
         Action<string, string>? log = null,
         string? storageDir = null)
@@ -431,7 +432,12 @@ public sealed class BridgeHost : IDisposable
 
         if (_config.Current.OverlayEnabled)
         {
-            _overlaySink?.Invoke($"Google Home → {intent}", ok ? pill : "failed", !ok);
+            (int? volumePercent, bool muted) = ok ? DescribeVolumeResult(frame) : (null, false);
+            _overlaySink?.Invoke(new OverlayContent($"Google Home → {intent}", ok ? pill : "failed", !ok)
+            {
+                VolumePercent = volumePercent,
+                Muted = muted,
+            });
         }
 
         // No apostrophes in the error: Utf8JsonWriter's default encoder emits
@@ -461,7 +467,8 @@ public sealed class BridgeHost : IDisposable
         if (_config.Current.OverlayEnabled)
         {
             // BLUEPRINT §2.4: the HUD flashes on pairing events too.
-            _overlaySink?.Invoke("Google Home pairing", "pairing code ready — see Pair… in the tray menu", false);
+            _overlaySink?.Invoke(new OverlayContent(
+                "Google Home pairing", "pairing code ready — see Pair… in the tray menu", IsError: false));
         }
 
         PairingReceived?.Invoke(this, frame);
@@ -621,6 +628,38 @@ public sealed class BridgeHost : IDisposable
         MediaKeyName.VolumeDown => (_executor.Execute("volumeStep", -VolumeStepPercent), $"volume down {VolumeStepPercent} %", null),
         _ => throw new ArgumentOutOfRangeException(nameof(keyName), keyName, null),
     };
+
+    /// <summary>
+    /// The resulting volume level (and muted flag) a successful
+    /// <paramref name="frame"/> leaves behind, for the overlay's fill bar
+    /// (S4-5): setVolume carries its own value; setMuted and the custom
+    /// volumeUp/volumeDown media keys read the level back from the executor
+    /// after execution. Null percent (non-volume action, or no audio endpoint
+    /// to read back from) keeps the plain text pill.
+    /// </summary>
+    private (int? VolumePercent, bool Muted) DescribeVolumeResult(ActionFrame frame) => frame switch
+    {
+        SetVolumeFrame v => (v.Value, false),
+        SetMutedFrame m => (ReadBackVolumePercent(), m.Value),
+        CustomActionFrame custom when FindCustomCommand(custom.Key)?.Action is MediaKeyActionConfig
+        {
+            KeyName: MediaKeyName.VolumeUp or MediaKeyName.VolumeDown,
+        } => (ReadBackVolumePercent(), false),
+        _ => (null, false),
+    };
+
+    /// <summary>The executor's current volume, or null when no audio endpoint exists (the overlay then degrades to its text pill).</summary>
+    private int? ReadBackVolumePercent()
+    {
+        try
+        {
+            return _executor.GetVolumeState().VolumePercent;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>The enabled custom command with wire key <paramref name="key"/>, or null (a disabled command is deliberately not found — its endpoint should not exist).</summary>
     private CustomCommandConfig? FindCustomCommand(string key) =>

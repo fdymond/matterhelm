@@ -15,7 +15,9 @@ namespace HtpcMatterBridge.Ui;
 /// Windows' anti-focus-stealing lock can keep the true desktop foreground on
 /// whatever the human already had focused, so this thread may never win real
 /// OS foreground at all — that is orthogonal to what this story proves, and
-/// <c>GetActiveWindow</c> is not subject to that lock. Invoked via
+/// <c>GetActiveWindow</c> is not subject to that lock. S4-5 adds the
+/// volume-bar evidence: canvas bitmaps saved at fixed percents plus a pixel
+/// sampling that asserts the bar's fill width tracks the percent. Invoked via
 /// <c>HtpcMatterBridge.exe --demo-overlay</c>; not part of the production tray
 /// flow (see the guarded branch in <c>Program.Main</c>).
 /// </summary>
@@ -82,6 +84,49 @@ internal static class OverlayHudDemo
             SampleForegroundAndHud($"rapid-fire {i}");
         }
 
+        // S4-5 volume-bar pill: render at fixed percents, save each canvas
+        // bitmap as visual evidence, and objectively assert the fill width
+        // tracks the percent by sampling the track's center pixel row.
+        Rectangle track = hud.VolumeTrackBounds;
+        log.Add($"(diag) volume track bounds (canvas coords): {track}");
+        foreach (int percent in (int[])[0, 37, 100])
+        {
+            hud.Show(new OverlayContent($"Google Home -> volume {percent} %", $"volume set to {percent} %", IsError: false)
+            {
+                VolumePercent = percent,
+            });
+            Pump(120);
+            SampleForegroundAndHud($"volume bar {percent} %");
+
+            using Bitmap canvas = hud.CaptureCanvas();
+            string pngPath = Path.Combine(AppContext.BaseDirectory, $"overlay-hud-volume-{percent}.png");
+            canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+            log.Add($"(evidence) volume-bar canvas at {percent} %: {pngPath}");
+
+            int run = MeasureFillRun(canvas, track);
+            int expected = track.Width * percent / 100;
+            log.Add($"    (diag) fill-run at {percent} %: measured {run} px, expected {expected} px (track width {track.Width})");
+            Check(
+                $"volume bar at {percent} %: fill width tracks the percent (measured {run}, expected {expected} ± 5)",
+                Math.Abs(run - expected) <= 5);
+        }
+
+        // Muted: the bar stays at its level but drops the accent — no green
+        // fill pixels may remain in the track row.
+        hud.Show(new OverlayContent("Google Home -> mute", "muted", IsError: false)
+        {
+            VolumePercent = 40,
+            Muted = true,
+        });
+        Pump(120);
+        using (Bitmap canvas = hud.CaptureCanvas())
+        {
+            string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-volume-muted.png");
+            canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+            log.Add($"(evidence) volume-bar canvas muted at 40 %: {pngPath}");
+            Check("muted volume bar renders no accent (green) fill pixels", MeasureFillRun(canvas, track) == 0);
+        }
+
         int exStyle = unchecked((int)NativeMethods.GetWindowLongPtr(hud.WindowHandle, NativeMethods.GwlExstyle).ToInt64());
         Check("HUD ex-style has WS_EX_NOACTIVATE", (exStyle & NativeMethods.WsExNoActivate) != 0);
         Check("HUD ex-style has WS_EX_TRANSPARENT", (exStyle & NativeMethods.WsExTransparent) != 0);
@@ -110,6 +155,32 @@ internal static class OverlayHudDemo
         Console.WriteLine($"(results file: {resultsPath})");
 
         return allPassed ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Length (px) of the contiguous accent-fill run from the track's left
+    /// edge along its vertical-center pixel row. A fill pixel is classified by
+    /// green-channel dominance (the accent green over the dark panel reads
+    /// G ≫ R; the dim white track and the muted gray fill read G ≈ R).
+    /// </summary>
+    private static int MeasureFillRun(Bitmap canvas, Rectangle track)
+    {
+        int y = track.Y + (track.Height / 2);
+        int run = 0;
+        for (int x = track.Left; x < track.Right; x++)
+        {
+            Color pixel = canvas.GetPixel(x, y);
+            if (pixel.G > pixel.R + 30 && pixel.G > 110)
+            {
+                run++;
+            }
+            else if (run > 0)
+            {
+                break; // past the fill's right edge
+            }
+        }
+
+        return run;
     }
 
     /// <summary>Pumps the STA message loop for at least <paramref name="milliseconds"/> so WinForms Timers actually fire (no Application.Run is active in this harness).</summary>

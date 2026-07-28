@@ -1,5 +1,6 @@
 using HtpcMatterBridge.Actions;
 using HtpcMatterBridge.Sidecar;
+using HtpcMatterBridge.Ui;
 using Xunit;
 
 namespace HtpcMatterBridge.Tests;
@@ -48,7 +49,7 @@ public static class BridgeHostTests
         private readonly TestSupport.LogCapture _log = new();
         private readonly FakeExecutor _executor = new();
         private readonly Lock _gate = new();
-        private readonly List<(string Primary, string Pill, bool IsError)> _overlay = [];
+        private readonly List<OverlayContent> _overlay = [];
         private readonly List<BridgeState> _states = [];
         private readonly List<PairingFrame> _pairings = [];
 
@@ -90,7 +91,11 @@ public static class BridgeHostTests
 
             lock (_gate)
             {
-                Assert.Contains(("Google Home → volume 25 %", "volume set to 25 %", false), _overlay);
+                // S4-5: a successful setVolume flash carries the level so the
+                // HUD renders the percentage bar.
+                Assert.Contains(
+                    new OverlayContent("Google Home → volume 25 %", "volume set to 25 %", false) { VolumePercent = 25 },
+                    _overlay);
                 Assert.Contains(BridgeState.Connected, _states);
             }
 
@@ -117,7 +122,8 @@ public static class BridgeHostTests
 
             lock (_gate)
             {
-                Assert.Contains(("Google Home → volume 25 %", "failed", true), _overlay);
+                // A failed volume action degrades to the plain error pill (no bar).
+                Assert.Contains(new OverlayContent("Google Home → volume 25 %", "failed", true), _overlay);
             }
         }
 
@@ -196,7 +202,7 @@ public static class BridgeHostTests
             lock (_gate)
             {
                 // ADR-004: the overlay flashes the command's display name.
-                Assert.Contains(("Google Home → HTPC Stop", "stop pressed", false), _overlay);
+                Assert.Contains(new OverlayContent("Google Home → HTPC Stop", "stop pressed", false), _overlay);
             }
         }
 
@@ -214,6 +220,7 @@ public static class BridgeHostTests
                     Action = new MediaKeyActionConfig { KeyName = keyName },
                 },
             ];
+            _executor.State = new VolumeState(45, false);
             using var host = CreateHost(NodeClientSpec(
                 $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"volume-nudge"}"""));
             host.SetEnabled(true);
@@ -222,6 +229,41 @@ public static class BridgeHostTests
                 () => _executor.Calls.Contains(("volumeStep", (object?)expectedDelta)),
                 TimeSpan.FromSeconds(10),
                 $"executor to receive volumeStep {expectedDelta}");
+
+            // S4-5: the flash carries the resulting level read back from the
+            // executor after the step (the fake's state stays at 45).
+            await TestSupport.WaitUntilAsync(
+                () =>
+                {
+                    lock (_gate)
+                    {
+                        return _overlay.Any(c => c is { VolumePercent: 45, Muted: false, IsError: false });
+                    }
+                },
+                TimeSpan.FromSeconds(10),
+                "overlay content to carry the read-back volume level 45");
+        }
+
+        [Fact]
+        public async Task SetMutedOverlayCarriesTheCurrentLevelWithTheMutedFlag()
+        {
+            _executor.State = new VolumeState(42, false);
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"setMuted","value":true}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            lock (_gate)
+            {
+                // S4-5: mute keeps the bar at the current level, dimmed.
+                Assert.Contains(
+                    new OverlayContent("Google Home → mute", "muted", false) { VolumePercent = 42, Muted = true },
+                    _overlay);
+            }
         }
 
         [Fact]
@@ -251,7 +293,7 @@ public static class BridgeHostTests
 
             lock (_gate)
             {
-                Assert.Contains(("Google Home → Movie Mode", "launched kodi.exe", false), _overlay);
+                Assert.Contains(new OverlayContent("Google Home → Movie Mode", "launched kodi.exe", false), _overlay);
             }
         }
 
@@ -272,7 +314,7 @@ public static class BridgeHostTests
             lock (_gate)
             {
                 // No display name exists, so the overlay shows the wire key.
-                Assert.Contains(("Google Home → no-such-key", "failed", true), _overlay);
+                Assert.Contains(new OverlayContent("Google Home → no-such-key", "failed", true), _overlay);
             }
         }
 
@@ -351,11 +393,11 @@ public static class BridgeHostTests
                 _config,
                 _executor,
                 spec,
-                overlaySink: (primary, pill, isError) =>
+                overlaySink: content =>
                 {
                     lock (_gate)
                     {
-                        _overlay.Add((primary, pill, isError));
+                        _overlay.Add(content);
                     }
                 },
                 supervisorOptions: _fastOptions,
