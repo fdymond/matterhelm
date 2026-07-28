@@ -117,6 +117,7 @@ public sealed class SettingsViewModel
     private readonly Config _config;
     private readonly Func<string, bool> _pathExists;
     private string _baseline;
+    private BridgeConfig _baselineConfig;
 
     /// <summary>Creates a view-model staged over <paramref name="config"/>'s current state.</summary>
     /// <param name="config">The live config to stage edits against.</param>
@@ -126,6 +127,7 @@ public sealed class SettingsViewModel
         _config = config;
         _pathExists = pathExists ?? File.Exists;
         Working = Clone(config.Current);
+        _baselineConfig = Clone(config.Current);
         _baseline = Snapshot(Working);
     }
 
@@ -292,11 +294,48 @@ public sealed class SettingsViewModel
         Revert();
     }
 
+    /// <summary>The live config this view-model stages over (for <c>Config.Changed</c> subscriptions).</summary>
+    public Config Config => _config;
+
     /// <summary>Discards the staged edits, re-cloning from the live config.</summary>
     public void Revert()
     {
         Working = Clone(_config.Current);
+        _baselineConfig = Clone(_config.Current);
         _baseline = Snapshot(Working);
+    }
+
+    /// <summary>
+    /// Reconciles an external live-config change (tray toggles, tray "Reload
+    /// config") into the staged state — S4-R RISK-1: without this, Save on a
+    /// window opened before the change writes the stale copy back, silently
+    /// reverting the tray action. Not dirty → plain re-stage. Dirty → staged
+    /// edits are preserved, but any field the user has NOT diverged from the
+    /// old baseline is synced to the new live value (so an untouched "Enable
+    /// bridge" can't be un-toggled by Save), and the baseline moves to the new
+    /// live truth so dirtiness is judged against it.
+    /// </summary>
+    public void AbsorbExternalConfigChange()
+    {
+        if (!IsDirty)
+        {
+            Revert();
+            return;
+        }
+
+        BridgeConfig live = _config.Current;
+        if (Working.BridgeEnabled == _baselineConfig.BridgeEnabled)
+        {
+            Working.BridgeEnabled = live.BridgeEnabled;
+        }
+
+        if (Working.OverlayEnabled == _baselineConfig.OverlayEnabled)
+        {
+            Working.OverlayEnabled = live.OverlayEnabled;
+        }
+
+        _baselineConfig = Clone(live);
+        _baseline = Snapshot(_baselineConfig);
     }
 
     /// <summary>Advanced-page "Reload config": re-reads the file (firing <c>Config.Changed</c>) and re-stages from the result, discarding staged edits.</summary>
@@ -366,7 +405,7 @@ public sealed class SettingsViewModel
                     Label = "Log level",
                     Description = "How much detail the bridge sidecar logs.",
                     Kind = SettingKind.Choice,
-                    Choices = ["fatal", "error", "warn", "info", "debug", "trace"],
+                    Choices = ["silent", "fatal", "error", "warn", "info", "debug", "trace"],
                     NeedsBridgeRestart = true,
                     Get = c => c.LogLevel,
                     Set = (c, v) => c.LogLevel = (string)v!,

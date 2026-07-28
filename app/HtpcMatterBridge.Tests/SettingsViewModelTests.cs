@@ -49,6 +49,66 @@ public sealed class SettingsViewModelTests : IDisposable
         Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
     };
 
+    // ---- external live-config changes (S4-R RISK-1) ------------------------
+
+    [Fact]
+    public void ExternalChangeWhileNotDirtyRestagesTheWorkingCopy()
+    {
+        Config config = NewConfig();
+        SettingsViewModel vm = NewViewModel(config);
+
+        // A tray toggle persists + reloads outside the window.
+        config.Current.BridgeEnabled = true;
+        config.Save();
+        config.Reload();
+
+        vm.AbsorbExternalConfigChange();
+
+        Assert.True(vm.Working.BridgeEnabled);
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public void ExternalChangeWhileDirtyPreservesEditsButSyncsUntouchedLiveToggles()
+    {
+        Config config = NewConfig();
+        SettingsViewModel vm = NewViewModel(config);
+
+        // The user has staged an unrelated edit (still dirty afterwards)...
+        vm.Working.Commands.Speaker.Name = "Renamed Speaker";
+
+        // ...while the tray toggles "Enable bridge" externally.
+        config.Current.BridgeEnabled = true;
+        config.Save();
+        config.Reload();
+
+        vm.AbsorbExternalConfigChange();
+
+        // The untouched live toggle syncs (Save can no longer revert the tray
+        // action), the staged rename survives, and the copy stays dirty.
+        Assert.True(vm.Working.BridgeEnabled);
+        Assert.Equal("Renamed Speaker", vm.Working.Commands.Speaker.Name);
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public void ExternalChangeNeverClobbersAToggleTheUserAlreadyEdited()
+    {
+        Config config = NewConfig();
+        SettingsViewModel vm = NewViewModel(config);
+
+        // The user staged BridgeEnabled=true themselves; an external reload
+        // that still has it false must not undo their staged intent.
+        vm.Working.BridgeEnabled = true;
+        config.Save();
+        config.Reload();
+
+        vm.AbsorbExternalConfigChange();
+
+        Assert.True(vm.Working.BridgeEnabled);
+        Assert.True(vm.IsDirty);
+    }
+
     // ---- staging / dirty tracking -----------------------------------------
 
     [Fact]
