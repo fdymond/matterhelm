@@ -26,6 +26,10 @@ internal static class NativeMethods
     internal const uint SwpNoMove = 0x0002;
     internal const uint SwpNoSize = 0x0001;
 
+    /// <summary>Destroys a native HICON (used by <see cref="TrayIcons"/> after cloning into a managed Icon).</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool DestroyIcon(IntPtr hIcon);
+
     // The one flag that matters here: without it, SetWindowPos(HWND_TOPMOST, ...)
     // activates the window as a side effect of the z-order change — independent
     // of, and not prevented by, WS_EX_NOACTIVATE (that ex-style only blocks
