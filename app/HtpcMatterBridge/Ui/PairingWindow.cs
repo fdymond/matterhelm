@@ -34,13 +34,17 @@ public sealed class PairingWindow : Form
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(360, 470);
-        BackColor = Color.White;
+        // System colors, not literals: dark mode (ADR-005) swaps SystemColors
+        // process-wide and hard-coded white turned this window white-on-white.
+        BackColor = SystemColors.Window;
 
         _qrBox = new PictureBox
         {
             Location = new Point(30, 24),
             Size = new Size(QrDisplaySize, QrDisplaySize),
             SizeMode = PictureBoxSizeMode.Zoom,
+            // Deliberately literal white in BOTH themes: a QR code needs a
+            // light quiet zone for phone cameras to lock on — never theme it.
             BackColor = Color.White,
             BorderStyle = BorderStyle.FixedSingle,
         };
@@ -51,7 +55,7 @@ public sealed class PairingWindow : Form
             Location = new Point(30, 336),
             Size = new Size(QrDisplaySize, 18),
             Font = new Font("Segoe UI", 8.5f),
-            ForeColor = Color.DimGray,
+            ForeColor = SystemColors.GrayText,
         };
 
         // A read-only TextBox (not a Label) so the code is selectable/copyable —
@@ -60,7 +64,7 @@ public sealed class PairingWindow : Form
         {
             ReadOnly = true,
             BorderStyle = BorderStyle.None,
-            BackColor = Color.White,
+            BackColor = SystemColors.Window,
             TextAlign = HorizontalAlignment.Center,
             // 16pt keeps the longest expected manual codes (13 chars incl.
             // dashes) fully in view even though focusing a TextBox via

@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using HtpcMatterBridge.Actions;
 using HtpcMatterBridge.Sidecar;
 using HtpcMatterBridge.Ui;
@@ -29,6 +31,12 @@ internal static class Program
     private const string WiredDemoMarkerContent = "demo-note ok";
     private const string WiredDemoResultsFileName = "wired-demo-results.txt";
     private const int AttachParentProcess = -1;
+
+    // S4-3 acceptance demo tuning.
+    private const int SettingsDemoPort = 40_000;
+    private const string SettingsDemoSpeakerName = "Demo Speaker";
+    private const string SettingsDemoCustomKey = "demo-cmd";
+    private const string SettingsDemoCustomName = "Demo Command";
 
     /// <summary>Entry point.</summary>
     [STAThread]
@@ -87,6 +95,16 @@ internal static class Program
             return;
         }
 
+        // S4-3 acceptance demo: scripted settings-window walk (staged edits →
+        // save → config.json round-trip asserted) plus light/dark/search
+        // screenshots, all against a temp config dir. Not part of the
+        // production tray flow.
+        if (args.Contains("--demo-settings-window"))
+        {
+            Environment.ExitCode = RunSettingsWindowDemo(dark: args.Contains("--dark"));
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, name: MutexName, createdNew: out bool createdNew);
         if (!createdNew)
         {
@@ -98,6 +116,13 @@ internal static class Program
         Log.Info("HtpcMatterBridge starting.");
 
         ApplicationConfiguration.Initialize();
+
+        // ADR-005 production dark mode: enabled after PairingWindow moved to
+        // SystemColors (the S4-3 blocker — hard-coded white went
+        // white-on-white under dark). The QR image's white quiet zone is
+        // deliberately unthemed (scannability). OverlayHud draws its own
+        // bitmaps and is unaffected.
+        Application.SetColorMode(SystemColorMode.System);
 
         var trayContext = new TrayContext();
         using var executor = new ActionExecutorAdapter();
@@ -117,6 +142,15 @@ internal static class Program
         // stop grace, and the UI thread must never wait on that.
         trayContext.EnableBridgeChanged += (_, enabled) => Task.Run(() => host.SetEnabled(enabled));
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
+        trayContext.OverlayPreviewRequested += (_, _) =>
+        {
+            // A preview must show even while the feature toggle is off — the
+            // Visible flag only gates Show, so flip it around the one call.
+            bool wasVisible = overlay.Visible;
+            overlay.Visible = true;
+            overlay.Show("Overlay preview", "Settings", isError: false);
+            overlay.Visible = wasVisible;
+        };
 
         // Exit is the one sanctioned synchronous stop: the sidecar must be
         // down (stdin tether, then kill) before the process goes away.
@@ -541,6 +575,137 @@ internal static class Program
 
         window.Close();
         return hasVariance ? 0 : 1;
+    }
+
+    /// <summary>
+    /// S4-3 acceptance evidence: opens <see cref="Ui.SettingsWindow"/> over a
+    /// temp config dir, stages three edits through the shared
+    /// <see cref="Ui.SettingsViewModel"/> (port 40000, speaker rename, one
+    /// custom mediaKey command), saves through the window's Save path, and
+    /// objectively asserts all three landed in config.json on disk. Also
+    /// captures screenshot evidence (same DrawToBitmap technique and rationale
+    /// as <see cref="RunPairingWindowDemo"/>): the saved state
+    /// (<c>settings-window-light.png</c>), the active search filter
+    /// (<c>settings-window-search.png</c>), and — because WinForms color mode
+    /// cannot change once a window exists — a second process invocation with
+    /// <c>--dark</c> for <c>settings-window-dark.png</c>. Color modes are
+    /// forced (Classic/Dark, never System) so the evidence is deterministic
+    /// regardless of the OS theme. Returns 0 iff every check passes.
+    /// </summary>
+    private static int RunSettingsWindowDemo(bool dark)
+    {
+        _ = AttachConsole(AttachParentProcess); // WinExe has no console; borrow the parent's if present.
+        ApplicationConfiguration.Initialize();
+        Application.SetColorMode(dark ? SystemColorMode.Dark : SystemColorMode.Classic);
+
+        bool allPassed = true;
+        void Check(bool pass, string what)
+        {
+            allPassed &= pass;
+            Console.WriteLine($"{(pass ? "PASS" : "FAIL")}  {what}");
+        }
+
+        string tempRoot = Path.Combine(Path.GetTempPath(), "htpc-settings-demo", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        string configPath = Path.Combine(tempRoot, "config.json");
+        var config = new Config(configPath, (level, message) => Console.WriteLine($"    [{level}] {message}"));
+
+        var vm = new Ui.SettingsViewModel(config);
+        using var window = new Ui.SettingsWindow(vm);
+        window.StartPosition = FormStartPosition.Manual;
+        window.Location = new Point(60, 60);
+        window.Show();
+        window.Activate();
+        Pump(500);
+
+        if (dark)
+        {
+            // Child run: only the dark screenshot; the parent asserts it exists.
+            SaveWindowScreenshot(window, "settings-window-dark.png");
+            window.Close();
+            return 0;
+        }
+
+        Console.WriteLine($"S4-3 settings-window demo — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        Console.WriteLine($"temp config: {configPath}");
+
+        Ui.SettingsViewModel.Describe("ipc-port").Set!(vm.Working, SettingsDemoPort);
+        Ui.SettingsViewModel.Describe("speaker-name").Set!(vm.Working, SettingsDemoSpeakerName);
+        vm.AddCustomCommand(new CustomCommandConfig
+        {
+            Key = SettingsDemoCustomKey,
+            Name = SettingsDemoCustomName,
+            Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+        });
+        window.RefreshFromViewModel();
+        Pump(200);
+        Check(vm.IsDirty && vm.IsValid, "staged edits leave the view-model dirty and valid (Save enabled)");
+
+        window.SaveNow();
+        Pump(200);
+        Check(!vm.IsDirty, "save re-stages the working copy (dirty cleared, window stays open)");
+
+        using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(configPath)))
+        {
+            JsonElement root = document.RootElement;
+            Check(
+                root.GetProperty("ipcPort").GetInt32() == SettingsDemoPort,
+                $"config.json ipcPort == {SettingsDemoPort}");
+            Check(
+                root.GetProperty("commands").GetProperty("speaker").GetProperty("name").GetString() == SettingsDemoSpeakerName,
+                $"config.json commands.speaker.name == \"{SettingsDemoSpeakerName}\"");
+            JsonElement custom = root.GetProperty("commands").GetProperty("custom");
+            bool customOk = custom.GetArrayLength() == 1
+                && custom[0].GetProperty("key").GetString() == SettingsDemoCustomKey
+                && custom[0].GetProperty("action").GetProperty("type").GetString() == "mediaKey"
+                && custom[0].GetProperty("action").GetProperty("keyName").GetString() == "stop";
+            Check(customOk, $"config.json commands.custom[0] == {{key: {SettingsDemoCustomKey}, mediaKey stop}}");
+        }
+
+        SaveWindowScreenshot(window, "settings-window-light.png");
+
+        SettingsSearchResult filtered = Ui.SettingsSearch.Filter(Ui.SettingsViewModel.Categories, "port");
+        Check(
+            filtered.MatchingSettingIds.Contains("ipc-port") && !filtered.MatchingSettingIds.Contains("speaker-name"),
+            "SettingsSearch \"port\" matches ipc-port and filters out speaker-name");
+        window.SetSearchQuery("port");
+        Pump(200);
+        Check(
+            window.IsSettingRowVisible("ipc-port") && !window.IsSettingRowVisible("log-level"),
+            "window hides non-matching rows while searching \"port\"");
+        SaveWindowScreenshot(window, "settings-window-search.png");
+        window.SetSearchQuery("");
+        Pump(100);
+        window.Close();
+        Pump(100);
+
+        // Dark rendering can't be flipped mid-process, so a second invocation
+        // of this exe produces the dark screenshot (see the method doc).
+        string darkPng = Path.Combine(AppContext.BaseDirectory, "settings-window-dark.png");
+        File.Delete(darkPng);
+        bool darkOk = false;
+        if (Environment.ProcessPath is { } exe)
+        {
+            var startInfo = new ProcessStartInfo(exe) { UseShellExecute = false };
+            startInfo.ArgumentList.Add("--demo-settings-window");
+            startInfo.ArgumentList.Add("--dark");
+            using Process? child = Process.Start(startInfo);
+            darkOk = child is not null && child.WaitForExit(60_000) && child.ExitCode == 0 && File.Exists(darkPng);
+        }
+
+        Check(darkOk, "second process (--dark) wrote settings-window-dark.png and exited 0");
+
+        Console.WriteLine($"screenshots: {AppContext.BaseDirectory}settings-window-{{light,dark,search}}.png");
+        Console.WriteLine($"OVERALL: {(allPassed ? "PASS" : "FAIL")}");
+        return allPassed ? 0 : 1;
+    }
+
+    /// <summary>Renders the full window (client + frame) to a PNG next to the exe via <see cref="Control.DrawToBitmap"/> (see <see cref="RunPairingWindowDemo"/> remarks for why not a screen capture).</summary>
+    private static void SaveWindowScreenshot(Form window, string fileName)
+    {
+        using var bitmap = new Bitmap(window.Width, window.Height);
+        window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, window.Size));
+        bitmap.Save(Path.Combine(AppContext.BaseDirectory, fileName), ImageFormat.Png);
     }
 
     /// <summary>Pumps the STA message loop for at least <paramref name="milliseconds"/> so the window finishes laying out (no <c>Application.Run</c> is active in this demo).</summary>
