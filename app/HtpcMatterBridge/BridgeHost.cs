@@ -136,6 +136,9 @@ public sealed class BridgeHost : IDisposable
 {
     private const int FaultedRestartThreshold = 2;
 
+    /// <summary>Volume delta for the custom volumeUp/volumeDown media-key actions (ADR-004 §1: ±5 %).</summary>
+    private const int VolumeStepPercent = 5;
+
     private readonly Config _config;
     private readonly IActionExecutor _executor;
     private readonly SidecarSpec _sidecarSpec;
@@ -302,21 +305,30 @@ public sealed class BridgeHost : IDisposable
     }
 
     /// <summary>
-    /// Non-core env vars for the sidecar child (BLUEPRINT §2.3): endpoint
-    /// display names as camelCase JSON, and the optional mDNS interface pin.
+    /// Non-core env vars for the sidecar child (BLUEPRINT §2.3 as amended by
+    /// ADR-004 §2): the endpoint contract as camelCase JSON — built-ins with
+    /// name + enabled (disabled ones present, the bridge omits the endpoint),
+    /// enabled custom commands as key + name (disabled ones omitted; never
+    /// their actions — the sidecar must not know what commands do) — and the
+    /// optional mDNS interface pin.
     /// </summary>
     private static Dictionary<string, string> BuildSidecarExtraEnv(BridgeConfig config)
     {
+        CommandsConfig commands = config.Commands;
         var extra = new Dictionary<string, string>
         {
-            ["HTPC_BRIDGE_DEVICE_NAMES"] = JsonSerializer.Serialize(
+            ["HTPC_BRIDGE_ENDPOINTS"] = JsonSerializer.Serialize(
                 new
                 {
-                    speaker = config.DeviceNames.Speaker,
-                    playPause = config.DeviceNames.PlayPause,
-                    next = config.DeviceNames.Next,
-                    previous = config.DeviceNames.Previous,
-                    power = config.DeviceNames.Power,
+                    speaker = new { name = commands.Speaker.Name, enabled = commands.Speaker.Enabled },
+                    playPause = new { name = commands.PlayPause.Name, enabled = commands.PlayPause.Enabled },
+                    next = new { name = commands.Next.Name, enabled = commands.Next.Enabled },
+                    previous = new { name = commands.Previous.Name, enabled = commands.Previous.Enabled },
+                    power = new { name = commands.Power.Name, enabled = commands.Power.Enabled },
+                    custom = commands.Custom
+                        .Where(c => c.Enabled)
+                        .Select(c => new { key = c.Key, name = c.Name })
+                        .ToArray(),
                 }),
         };
         if (!string.IsNullOrWhiteSpace(config.MdnsInterface))
@@ -387,16 +399,17 @@ public sealed class BridgeHost : IDisposable
         string intent = DescribeIntent(frame);
         bool ok;
         string pill;
+        string? error;
         try
         {
-            (ok, pill) = ExecuteFrame(frame);
+            (ok, pill, error) = ExecuteFrame(frame);
         }
         catch (Exception ex)
         {
             // The executor contract is no-throw; a fake/adapter bug must still
             // nack rather than kill the receive loop with a dropped ack.
             _log("ERROR", $"bridge: action '{intent}' threw: {ex.Message}");
-            (ok, pill) = (false, "failed");
+            (ok, pill, error) = (false, "failed", null);
         }
 
         if (_config.Current.OverlayEnabled)
@@ -407,7 +420,9 @@ public sealed class BridgeHost : IDisposable
         // No apostrophes in the error: Utf8JsonWriter's default encoder emits
         // them as the escape sequence backslash-u0027 on the wire (correct
         // JSON, needlessly ugly).
-        TrayFrame ack = ok ? new AckOkFrame(frame.Id) : new AckFailFrame(frame.Id, $"action failed: {intent}");
+        TrayFrame ack = ok
+            ? new AckOkFrame(frame.Id)
+            : new AckFailFrame(frame.Id, error ?? $"action failed: {intent}");
         try
         {
             _ = server.SendAsync(ack).GetAwaiter().GetResult();
@@ -529,28 +544,72 @@ public sealed class BridgeHost : IDisposable
         }
     }
 
-    private (bool Ok, string Pill) ExecuteFrame(ActionFrame frame) => frame switch
+    /// <summary>Executes one action frame: ok + success pill + optional failure detail for the ack (null = the generic "action failed: {intent}").</summary>
+    private (bool Ok, string Pill, string? Error) ExecuteFrame(ActionFrame frame) => frame switch
     {
-        SetVolumeFrame v => (_executor.Execute("setVolume", v.Value), $"volume set to {v.Value} %"),
-        SetMutedFrame m => (_executor.Execute("setMuted", m.Value), m.Value ? "muted" : "unmuted"),
-        BareActionFrame { Name: BareActionName.PlayPause } => (_executor.Execute("playPause"), "play/pause pressed"),
-        BareActionFrame { Name: BareActionName.Next } => (_executor.Execute("next"), "next track"),
-        BareActionFrame { Name: BareActionName.Previous } => (_executor.Execute("previous"), "previous track"),
-        BareActionFrame { Name: BareActionName.PowerOn } => (_executor.Execute("powerOn"), "displays woken"),
+        SetVolumeFrame v => (_executor.Execute("setVolume", v.Value), $"volume set to {v.Value} %", null),
+        SetMutedFrame m => (_executor.Execute("setMuted", m.Value), m.Value ? "muted" : "unmuted", null),
+        BareActionFrame { Name: BareActionName.PlayPause } => (_executor.Execute("playPause"), "play/pause pressed", null),
+        BareActionFrame { Name: BareActionName.Next } => (_executor.Execute("next"), "next track", null),
+        BareActionFrame { Name: BareActionName.Previous } => (_executor.Execute("previous"), "previous track", null),
+        BareActionFrame { Name: BareActionName.PowerOn } => (_executor.Execute("powerOn"), "displays woken", null),
         BareActionFrame { Name: BareActionName.PowerOff } => ExecutePowerOff(),
-        _ => (false, "unknown action"),
+        CustomActionFrame custom => ExecuteCustom(custom),
+        _ => (false, "unknown action", null),
     };
 
-    private (bool Ok, string Pill) ExecutePowerOff() => _config.Current.PowerOffAction switch
+    private (bool Ok, string Pill, string? Error) ExecutePowerOff() => _config.Current.PowerOffAction switch
     {
-        PowerOffAction.DisplaysOff => (_executor.Execute("powerOff"), "displays off"),
-        PowerOffAction.Sleep => (_executor.Execute("sleep"), "sleeping"),
+        PowerOffAction.DisplaysOff => (_executor.Execute("powerOff"), "displays off", null),
+        PowerOffAction.Sleep => (_executor.Execute("sleep"), "sleeping", null),
         // Pause first, then blank (see class doc); non-short-circuit `&` so
         // the displays still go off even if the pause key injection failed.
-        _ => (_executor.Execute("playPause") & _executor.Execute("powerOff"), "paused + displays off"),
+        _ => (_executor.Execute("playPause") & _executor.Execute("powerOff"), "paused + displays off", null),
     };
 
-    /// <summary>Human-readable command line for the overlay/ack ("volume 40 %", "mute", …).</summary>
+    /// <summary>
+    /// Executes a v2 <c>custom</c> action: resolves the wire key against the
+    /// enabled custom commands and dispatches its configured action through
+    /// the executor seam. An unknown or disabled key nacks with a reason —
+    /// the sidecar publishing an endpoint we no longer have is a config drift
+    /// the ack should name, not a crash.
+    /// </summary>
+    private (bool Ok, string Pill, string? Error) ExecuteCustom(CustomActionFrame frame)
+    {
+        CustomCommandConfig? command = FindCustomCommand(frame.Key);
+        if (command is null)
+        {
+            return (false, "failed", $"unknown or disabled custom command: {frame.Key}");
+        }
+
+        return command.Action switch
+        {
+            MediaKeyActionConfig mediaKey => ExecuteMediaKey(mediaKey.KeyName),
+            LaunchActionConfig launch => (
+                _executor.Execute("launch", new LaunchRequest(launch.Path, launch.Args)),
+                $"launched {Path.GetFileName(launch.Path)}",
+                null),
+            _ => (false, "failed", $"unsupported action type for custom command: {frame.Key}"),
+        };
+    }
+
+    private (bool Ok, string Pill, string? Error) ExecuteMediaKey(MediaKeyName keyName) => keyName switch
+    {
+        MediaKeyName.PlayPause => (_executor.Execute("playPause"), "play/pause pressed", null),
+        MediaKeyName.Next => (_executor.Execute("next"), "next track", null),
+        MediaKeyName.Previous => (_executor.Execute("previous"), "previous track", null),
+        MediaKeyName.Stop => (_executor.Execute("mediaStop"), "stop pressed", null),
+        MediaKeyName.Mute => (_executor.Execute("muteToggle"), "mute toggled", null),
+        MediaKeyName.VolumeUp => (_executor.Execute("volumeStep", VolumeStepPercent), $"volume up {VolumeStepPercent} %", null),
+        MediaKeyName.VolumeDown => (_executor.Execute("volumeStep", -VolumeStepPercent), $"volume down {VolumeStepPercent} %", null),
+        _ => throw new ArgumentOutOfRangeException(nameof(keyName), keyName, null),
+    };
+
+    /// <summary>The enabled custom command with wire key <paramref name="key"/>, or null (a disabled command is deliberately not found — its endpoint should not exist).</summary>
+    private CustomCommandConfig? FindCustomCommand(string key) =>
+        _config.Current.Commands.Custom.FirstOrDefault(c => c.Enabled && c.Key == key);
+
+    /// <summary>Human-readable command line for the overlay/ack ("volume 40 %", "mute", a custom command's display name, …).</summary>
     private string DescribeIntent(ActionFrame frame) => frame switch
     {
         SetVolumeFrame v => $"volume {v.Value} %",
@@ -565,6 +624,9 @@ public sealed class BridgeHost : IDisposable
             PowerOffAction.Sleep => "power off (→ sleep)",
             _ => "power off (→ pause + displays off)",
         },
+        // ADR-004: the overlay reads "Google Home → Movie Mode"; for an
+        // unknown/disabled key the wire key is the only name there is.
+        CustomActionFrame custom => FindCustomCommand(custom.Key)?.Name ?? custom.Key,
         _ => frame.GetType().Name,
     };
 

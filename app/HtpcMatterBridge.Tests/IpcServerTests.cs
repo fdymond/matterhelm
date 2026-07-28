@@ -26,10 +26,10 @@ public sealed class IpcServerTests
         server.Start();
 
         using ClientWebSocket client = await ConnectAsync(port);
-        await SendAsync(client, $$"""{"v":1,"type":"hello","token":"{{Token}}","protocol":1}""");
+        await SendAsync(client, $$"""{"v":2,"type":"hello","token":"{{Token}}","protocol":1}""");
         await TestSupport.WaitUntilAsync(() => server.HasClient, TimeSpan.FromSeconds(5), "hello authentication");
 
-        await SendAsync(client, $$"""{"v":1,"type":"action","id":"{{_actionId}}","name":"setVolume","value":40}""");
+        await SendAsync(client, $$"""{"v":2,"type":"action","id":"{{_actionId}}","name":"setVolume","value":40}""");
         ActionFrame action = await Await(received.Task, "action event");
         SetVolumeFrame setVolume = Assert.IsType<SetVolumeFrame>(action);
         Assert.Equal(40, setVolume.Value);
@@ -38,7 +38,7 @@ public sealed class IpcServerTests
         Assert.True(await server.SendAsync(new AckOkFrame(_actionId)));
         (WebSocketMessageType type, string text, _) = await ReceiveAsync(client);
         Assert.Equal(WebSocketMessageType.Text, type);
-        Assert.Equal($$"""{"v":1,"type":"ack","id":"{{_actionId}}","ok":true}""", text);
+        Assert.Equal($$"""{"v":2,"type":"ack","id":"{{_actionId}}","ok":true}""", text);
     }
 
     [Fact]
@@ -51,16 +51,16 @@ public sealed class IpcServerTests
         server.Start();
 
         using ClientWebSocket client = await ConnectAsync(port);
-        await SendAsync(client, $$"""{"v":1,"type":"hello","token":"{{Token}}","protocol":1}""");
+        await SendAsync(client, $$"""{"v":2,"type":"hello","token":"{{Token}}","protocol":1}""");
         await TestSupport.WaitUntilAsync(() => server.HasClient, TimeSpan.FromSeconds(5), "hello authentication");
 
-        await SendAsync(client, """{"v":1,"type":"pairing","qrPayload":"MT:ABC","manualCode":"3497-011-2332"}""");
+        await SendAsync(client, """{"v":2,"type":"pairing","qrPayload":"MT:ABC","manualCode":"3497-011-2332"}""");
         PairingFrame frame = await Await(received.Task, "pairing event");
         Assert.Equal("MT:ABC", frame.QrPayload);
 
         Assert.True(await server.SendAsync(new StateFrame(12, muted: true)));
         (_, string text, _) = await ReceiveAsync(client);
-        Assert.Equal("""{"v":1,"type":"state","volume":12,"muted":true}""", text);
+        Assert.Equal("""{"v":2,"type":"state","volume":12,"muted":true}""", text);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed class IpcServerTests
         server.Start();
 
         using ClientWebSocket client = await ConnectAsync(port);
-        await SendAsync(client, """{"v":1,"type":"hello","token":"wrong-token","protocol":1}""");
+        await SendAsync(client, """{"v":2,"type":"hello","token":"wrong-token","protocol":1}""");
 
         await AssertClosedAsync(client);
         Assert.False(server.HasClient);
@@ -106,7 +106,7 @@ public sealed class IpcServerTests
         server.Start();
 
         using ClientWebSocket client = await ConnectAsync(port);
-        await SendAsync(client, $$"""{"v":1,"type":"action","id":"{{_actionId}}","name":"playPause"}""");
+        await SendAsync(client, $$"""{"v":2,"type":"action","id":"{{_actionId}}","name":"playPause"}""");
 
         await AssertClosedAsync(client);
         Assert.False(server.HasClient);
@@ -123,10 +123,10 @@ public sealed class IpcServerTests
         server.Start();
 
         using ClientWebSocket client = await ConnectAsync(port);
-        await SendAsync(client, $$"""{"v":1,"type":"hello","token":"{{Token}}","protocol":1}""");
+        await SendAsync(client, $$"""{"v":2,"type":"hello","token":"{{Token}}","protocol":1}""");
         await TestSupport.WaitUntilAsync(() => server.HasClient, TimeSpan.FromSeconds(5), "hello authentication");
 
-        await SendAsync(client, $$"""{"v":1,"type":"action","id":"{{_actionId}}","name":"setVolume","value":101}""");
+        await SendAsync(client, $$"""{"v":2,"type":"action","id":"{{_actionId}}","name":"setVolume","value":101}""");
 
         await AssertClosedAsync(client);
         await TestSupport.WaitUntilAsync(() => !server.HasClient, TimeSpan.FromSeconds(5), "client teardown");
@@ -166,7 +166,7 @@ public sealed class IpcServerTests
         server.Start();
 
         using ClientWebSocket first = await ConnectAsync(port);
-        await SendAsync(first, $$"""{"v":1,"type":"hello","token":"{{Token}}","protocol":1}""");
+        await SendAsync(first, $$"""{"v":2,"type":"hello","token":"{{Token}}","protocol":1}""");
         await TestSupport.WaitUntilAsync(() => server.HasClient, TimeSpan.FromSeconds(5), "hello authentication");
 
         using var second = new ClientWebSocket();

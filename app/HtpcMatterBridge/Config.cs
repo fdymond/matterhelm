@@ -3,23 +3,109 @@ using System.Text.Json.Serialization;
 
 namespace HtpcMatterBridge;
 
-/// <summary>Display names for the five Matter endpoints — the Google voice targets (BLUEPRINT §2.2).</summary>
-public sealed class DeviceNamesConfig
+/// <summary>One built-in command endpoint: display name (the Google voice target) + whether the bridge publishes it (ADR-004 §1).</summary>
+public sealed class BuiltinCommandConfig
 {
-    /// <summary>Speaker endpoint name (OnOff = mute, LevelControl = volume).</summary>
-    public string Speaker { get; set; } = "HTPC Speaker";
+    /// <summary>Endpoint display name.</summary>
+    public required string Name { get; set; }
 
-    /// <summary>Momentary play/pause endpoint name.</summary>
-    public string PlayPause { get; set; } = "HTPC Play Pause";
+    /// <summary>Whether the bridge publishes this endpoint.</summary>
+    public bool Enabled { get; set; } = true;
+}
 
-    /// <summary>Momentary next-track endpoint name.</summary>
-    public string Next { get; set; } = "HTPC Next";
+/// <summary>The media key a <c>mediaKey</c> custom action injects (ADR-004 §1).</summary>
+public enum MediaKeyName
+{
+    /// <summary>Play/pause toggle.</summary>
+    PlayPause,
 
-    /// <summary>Momentary previous-track endpoint name.</summary>
-    public string Previous { get; set; } = "HTPC Previous";
+    /// <summary>Next track.</summary>
+    Next,
 
-    /// <summary>Stateful power endpoint name.</summary>
-    public string Power { get; set; } = "HTPC Power";
+    /// <summary>Previous track.</summary>
+    Previous,
+
+    /// <summary>Media stop.</summary>
+    Stop,
+
+    /// <summary>System mute toggle.</summary>
+    Mute,
+
+    /// <summary>System volume up 5 %.</summary>
+    VolumeUp,
+
+    /// <summary>System volume down 5 %.</summary>
+    VolumeDown,
+}
+
+/// <summary>
+/// What a custom command does when its endpoint fires (ADR-004 §1). Executed
+/// by the tray app only — the sidecar never sees actions. The wire form is
+/// polymorphic on <c>type</c> (<c>mediaKey</c> | <c>launch</c>).
+/// </summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[JsonDerivedType(typeof(MediaKeyActionConfig), "mediaKey")]
+[JsonDerivedType(typeof(LaunchActionConfig), "launch")]
+public abstract class CustomActionConfig;
+
+/// <summary>Custom action injecting one media key (<c>{"type":"mediaKey","keyName":"stop"}</c>).</summary>
+public sealed class MediaKeyActionConfig : CustomActionConfig
+{
+    /// <summary>Which key to inject.</summary>
+    public required MediaKeyName KeyName { get; set; }
+}
+
+/// <summary>Custom action launching a program (<c>{"type":"launch","path":"...","args":"..."}</c>) — detached, never elevated, never via a shell.</summary>
+public sealed class LaunchActionConfig : CustomActionConfig
+{
+    /// <summary>Absolute path of the executable to start.</summary>
+    public required string Path { get; set; }
+
+    /// <summary>Argument string, split per <c>Actions/AppLaunch.SplitArgs</c> (whitespace-separated, double quotes group).</summary>
+    public string Args { get; set; } = "";
+}
+
+/// <summary>
+/// One user-defined command, surfaced to Google Home as an additional
+/// momentary endpoint (ADR-004 §1). <see cref="Key"/> is the stable
+/// kebab-case slug identity (<see cref="CommandKey"/>) — renaming
+/// <see cref="Name"/> never changes it, so renames need no re-pairing.
+/// </summary>
+public sealed class CustomCommandConfig
+{
+    /// <summary>Unique kebab-case slug; the Matter endpoint id and wire identifier.</summary>
+    public required string Key { get; set; }
+
+    /// <summary>Display name — the Google voice target.</summary>
+    public required string Name { get; set; }
+
+    /// <summary>Whether the bridge publishes this endpoint.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>What firing the endpoint does.</summary>
+    public required CustomActionConfig Action { get; set; }
+}
+
+/// <summary>The <c>commands</c> section (ADR-004 §1): the five built-in endpoints plus the user's custom commands. Supersedes the pre-v2 <c>deviceNames</c> section.</summary>
+public sealed class CommandsConfig
+{
+    /// <summary>Speaker endpoint (OnOff = mute, LevelControl = volume).</summary>
+    public BuiltinCommandConfig Speaker { get; set; } = new() { Name = "HTPC Speaker" };
+
+    /// <summary>Momentary play/pause endpoint.</summary>
+    public BuiltinCommandConfig PlayPause { get; set; } = new() { Name = "HTPC Play Pause" };
+
+    /// <summary>Momentary next-track endpoint.</summary>
+    public BuiltinCommandConfig Next { get; set; } = new() { Name = "HTPC Next" };
+
+    /// <summary>Momentary previous-track endpoint.</summary>
+    public BuiltinCommandConfig Previous { get; set; } = new() { Name = "HTPC Previous" };
+
+    /// <summary>Stateful power endpoint.</summary>
+    public BuiltinCommandConfig Power { get; set; } = new() { Name = "HTPC Power" };
+
+    /// <summary>Custom commands, in file order. Keys are unique (load drops duplicates).</summary>
+    public List<CustomCommandConfig> Custom { get; set; } = [];
 }
 
 /// <summary>What the stateful power endpoint does on an "off" write (BLUEPRINT §2.2 power row).</summary>
@@ -42,8 +128,8 @@ public enum PowerOffAction
 /// </summary>
 public sealed class BridgeConfig
 {
-    /// <summary>The five endpoint display names.</summary>
-    public DeviceNamesConfig DeviceNames { get; set; } = new();
+    /// <summary>Built-in and custom command endpoints (ADR-004 §1).</summary>
+    public CommandsConfig Commands { get; set; } = new();
 
     /// <summary>Loopback port the tray app's <c>IpcServer</c> listens on.</summary>
     public int IpcPort { get; set; } = 39531;
@@ -166,7 +252,16 @@ public sealed class Config
             return defaults;
         }
 
-        return ParseWithFallback(text);
+        BridgeConfig config = ParseWithFallback(text, out bool migrated);
+        if (migrated)
+        {
+            // ADR-004 §1: migrate-on-load, then persist the new shape so the
+            // superseded "deviceNames" key disappears from the file.
+            _log("INFO", "config.json migrated legacy \"deviceNames\" into the \"commands\" section.");
+            WriteFile(config);
+        }
+
+        return config;
     }
 
     private string? TryReadFile()
@@ -206,10 +301,17 @@ public sealed class Config
         }
     }
 
-    /// <summary>Parses <paramref name="json"/> field-by-field: an invalid field falls back to its default and logs a WARN; the rest of the document still applies.</summary>
-    private BridgeConfig ParseWithFallback(string json)
+    /// <summary>
+    /// Parses <paramref name="json"/> field-by-field: an invalid field falls
+    /// back to its default and logs a WARN; the rest of the document still
+    /// applies. <paramref name="migrated"/> is true iff a legacy
+    /// <c>deviceNames</c> section was folded into <c>commands</c> (ADR-004
+    /// §1) — the caller then rewrites the file in the new shape.
+    /// </summary>
+    private BridgeConfig ParseWithFallback(string json, out bool migrated)
     {
         var result = new BridgeConfig();
+        migrated = false;
 
         JsonDocument document;
         try
@@ -231,7 +333,7 @@ public sealed class Config
                 return result;
             }
 
-            ApplyDeviceNames(root, result.DeviceNames);
+            migrated = ApplyCommands(root, result.Commands);
             ApplyIpcPort(root, result);
             ApplyPowerOffAction(root, result);
             ApplyOverlayEnabled(root, result);
@@ -243,28 +345,261 @@ public sealed class Config
         return result;
     }
 
-    private void ApplyDeviceNames(JsonElement root, DeviceNamesConfig names)
+    /// <summary>
+    /// Applies the <c>commands</c> section, or — when it is absent but the
+    /// superseded <c>deviceNames</c> section exists — migrates the legacy
+    /// names into the built-ins (enabled, ADR-004 §1). Returns true iff the
+    /// legacy path ran (the file must then be rewritten in the new shape).
+    /// When both sections exist, <c>commands</c> wins and <c>deviceNames</c>
+    /// is ignored like any other unknown root key.
+    /// </summary>
+    private bool ApplyCommands(JsonElement root, CommandsConfig commands)
     {
+        if (root.TryGetProperty("commands", out JsonElement section))
+        {
+            if (section.ValueKind != JsonValueKind.Object)
+            {
+                _log("WARN", "config.json \"commands\" is not an object; using default commands.");
+                return false;
+            }
+
+            ApplyBuiltinCommand(section, "speaker", commands.Speaker);
+            ApplyBuiltinCommand(section, "playPause", commands.PlayPause);
+            ApplyBuiltinCommand(section, "next", commands.Next);
+            ApplyBuiltinCommand(section, "previous", commands.Previous);
+            ApplyBuiltinCommand(section, "power", commands.Power);
+            ApplyCustomCommands(section, commands);
+            return false;
+        }
+
         if (!root.TryGetProperty("deviceNames", out JsonElement deviceNames))
         {
-            return;
+            return false;
         }
 
         if (deviceNames.ValueKind != JsonValueKind.Object)
         {
             _log("WARN", "config.json \"deviceNames\" is not an object; using default device names.");
+            return true; // Still migrated: the rewrite drops the dead key.
+        }
+
+        commands.Speaker.Name = LegacyNameOrDefault(deviceNames, "speaker", commands.Speaker.Name);
+        commands.PlayPause.Name = LegacyNameOrDefault(deviceNames, "playPause", commands.PlayPause.Name);
+        commands.Next.Name = LegacyNameOrDefault(deviceNames, "next", commands.Next.Name);
+        commands.Previous.Name = LegacyNameOrDefault(deviceNames, "previous", commands.Previous.Name);
+        commands.Power.Name = LegacyNameOrDefault(deviceNames, "power", commands.Power.Name);
+        return true;
+    }
+
+    /// <summary>Applies one built-in command entry field-by-field (missing entry or field → keep defaults; wrong type → WARN + default).</summary>
+    private void ApplyBuiltinCommand(JsonElement section, string field, BuiltinCommandConfig builtin)
+    {
+        if (!section.TryGetProperty(field, out JsonElement entry))
+        {
             return;
         }
 
-        names.Speaker = NameOrDefault(deviceNames, "speaker", names.Speaker);
-        names.PlayPause = NameOrDefault(deviceNames, "playPause", names.PlayPause);
-        names.Next = NameOrDefault(deviceNames, "next", names.Next);
-        names.Previous = NameOrDefault(deviceNames, "previous", names.Previous);
-        names.Power = NameOrDefault(deviceNames, "power", names.Power);
+        if (entry.ValueKind != JsonValueKind.Object)
+        {
+            _log("WARN", $"config.json \"commands.{field}\" is not an object; using defaults for it.");
+            return;
+        }
+
+        if (entry.TryGetProperty("name", out JsonElement name))
+        {
+            if (name.ValueKind == JsonValueKind.String && name.GetString() is { Length: > 0 } value)
+            {
+                builtin.Name = value;
+            }
+            else
+            {
+                _log("WARN", $"config.json \"commands.{field}.name\" must be a non-empty string; using default \"{builtin.Name}\".");
+            }
+        }
+
+        if (entry.TryGetProperty("enabled", out JsonElement enabled))
+        {
+            if (enabled.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                builtin.Enabled = enabled.GetBoolean();
+            }
+            else
+            {
+                _log("WARN", $"config.json \"commands.{field}.enabled\" must be a boolean; using default {builtin.Enabled}.");
+            }
+        }
     }
 
-    /// <summary>Reads one device-name field, falling back to <paramref name="defaultValue"/> for a missing, non-string, or empty value.</summary>
-    private string NameOrDefault(JsonElement deviceNames, string field, string defaultValue)
+    /// <summary>
+    /// Applies <c>commands.custom</c>. Per ADR-004 §1 an entry with an
+    /// invalid or duplicate <c>key</c> or an unusable <c>action</c> is
+    /// DROPPED with one WARN (never half-loaded); merely cosmetic fields
+    /// (<c>name</c>/<c>enabled</c>/<c>args</c>) fall back per field.
+    /// </summary>
+    private void ApplyCustomCommands(JsonElement section, CommandsConfig commands)
+    {
+        if (!section.TryGetProperty("custom", out JsonElement custom))
+        {
+            return;
+        }
+
+        if (custom.ValueKind != JsonValueKind.Array)
+        {
+            _log("WARN", "config.json \"commands.custom\" is not an array; using no custom commands.");
+            return;
+        }
+
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+        int index = 0;
+        foreach (JsonElement entry in custom.EnumerateArray())
+        {
+            CustomCommandConfig? command = ParseCustomCommand(entry, index, seenKeys);
+            if (command is not null)
+            {
+                commands.Custom.Add(command);
+            }
+
+            index++;
+        }
+    }
+
+    /// <summary>Parses one <c>commands.custom</c> entry; null (after one WARN) = entry dropped.</summary>
+    private CustomCommandConfig? ParseCustomCommand(JsonElement entry, int index, HashSet<string> seenKeys)
+    {
+        string where = $"commands.custom[{index}]";
+        if (entry.ValueKind != JsonValueKind.Object)
+        {
+            _log("WARN", $"config.json \"{where}\" is not an object; entry dropped.");
+            return null;
+        }
+
+        if (!entry.TryGetProperty("key", out JsonElement keyElement)
+            || keyElement.ValueKind != JsonValueKind.String
+            || keyElement.GetString() is not { } key
+            || !CommandKey.IsValid(key))
+        {
+            _log("WARN", $"config.json \"{where}.key\" must be a kebab-case slug of at most {CommandKey.MaxLength} characters; entry dropped.");
+            return null;
+        }
+
+        if (!seenKeys.Add(key))
+        {
+            _log("WARN", $"config.json \"{where}.key\" duplicates an earlier key; entry dropped.");
+            return null;
+        }
+
+        CustomActionConfig? action = ParseCustomAction(entry, where);
+        if (action is null)
+        {
+            return null;
+        }
+
+        var command = new CustomCommandConfig { Key = key, Name = key, Action = action };
+        if (entry.TryGetProperty("name", out JsonElement name))
+        {
+            if (name.ValueKind == JsonValueKind.String && name.GetString() is { Length: > 0 } value)
+            {
+                command.Name = value;
+            }
+            else
+            {
+                _log("WARN", $"config.json \"{where}.name\" must be a non-empty string; using the key \"{key}\".");
+            }
+        }
+
+        if (entry.TryGetProperty("enabled", out JsonElement enabled))
+        {
+            if (enabled.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                command.Enabled = enabled.GetBoolean();
+            }
+            else
+            {
+                _log("WARN", $"config.json \"{where}.enabled\" must be a boolean; using default {command.Enabled}.");
+            }
+        }
+
+        return command;
+    }
+
+    /// <summary>Parses a custom entry's <c>action</c>; null (after one WARN) = the whole entry must be dropped.</summary>
+    private CustomActionConfig? ParseCustomAction(JsonElement entry, string where)
+    {
+        if (!entry.TryGetProperty("action", out JsonElement action) || action.ValueKind != JsonValueKind.Object)
+        {
+            _log("WARN", $"config.json \"{where}.action\" must be an object; entry dropped.");
+            return null;
+        }
+
+        if (!action.TryGetProperty("type", out JsonElement type) || type.ValueKind != JsonValueKind.String)
+        {
+            _log("WARN", $"config.json \"{where}.action.type\" must be a string; entry dropped.");
+            return null;
+        }
+
+        switch (type.GetString())
+        {
+            case "mediaKey":
+            {
+                MediaKeyName? keyName =
+                    action.TryGetProperty("keyName", out JsonElement keyNameElement) && keyNameElement.ValueKind == JsonValueKind.String
+                        ? ParseMediaKeyName(keyNameElement.GetString())
+                        : null;
+                if (keyName is null)
+                {
+                    _log("WARN", $"config.json \"{where}.action.keyName\" must be one of playPause/next/previous/stop/mute/volumeUp/volumeDown; entry dropped.");
+                    return null;
+                }
+
+                return new MediaKeyActionConfig { KeyName = keyName.Value };
+            }
+
+            case "launch":
+            {
+                if (!action.TryGetProperty("path", out JsonElement path)
+                    || path.ValueKind != JsonValueKind.String
+                    || path.GetString() is not { Length: > 0 } pathValue)
+                {
+                    _log("WARN", $"config.json \"{where}.action.path\" must be a non-empty string; entry dropped.");
+                    return null;
+                }
+
+                var launch = new LaunchActionConfig { Path = pathValue };
+                if (action.TryGetProperty("args", out JsonElement args))
+                {
+                    if (args.ValueKind == JsonValueKind.String)
+                    {
+                        launch.Args = args.GetString()!;
+                    }
+                    else
+                    {
+                        _log("WARN", $"config.json \"{where}.action.args\" must be a string; using no arguments.");
+                    }
+                }
+
+                return launch;
+            }
+
+            default:
+                _log("WARN", $"config.json \"{where}.action.type\" is not a known action type (mediaKey/launch); entry dropped.");
+                return null;
+        }
+    }
+
+    private static MediaKeyName? ParseMediaKeyName(string? wireName) => wireName switch
+    {
+        "playPause" => MediaKeyName.PlayPause,
+        "next" => MediaKeyName.Next,
+        "previous" => MediaKeyName.Previous,
+        "stop" => MediaKeyName.Stop,
+        "mute" => MediaKeyName.Mute,
+        "volumeUp" => MediaKeyName.VolumeUp,
+        "volumeDown" => MediaKeyName.VolumeDown,
+        _ => null,
+    };
+
+    /// <summary>Reads one legacy device-name field, falling back to <paramref name="defaultValue"/> for a missing, non-string, or empty value.</summary>
+    private string LegacyNameOrDefault(JsonElement deviceNames, string field, string defaultValue)
     {
         if (!deviceNames.TryGetProperty(field, out JsonElement element))
         {

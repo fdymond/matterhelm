@@ -9,6 +9,7 @@ public static class MediaKeys
 {
     private const ushort VkMediaNextTrack = 0xB0;
     private const ushort VkMediaPrevTrack = 0xB1;
+    private const ushort VkMediaStop = 0xB2;
     private const ushort VkMediaPlayPause = 0xB3;
 
     /// <summary>Sends the play/pause media key. Returns false if injection failed.</summary>
@@ -19,6 +20,9 @@ public static class MediaKeys
 
     /// <summary>Sends the previous-track media key. Returns false if injection failed.</summary>
     public static bool PreviousTrack() => SendKey(VkMediaPrevTrack, "previous track");
+
+    /// <summary>Sends the media-stop key (S4-2 custom <c>mediaKey</c> actions). Returns false if injection failed.</summary>
+    public static bool Stop() => SendKey(VkMediaStop, "stop");
 
     private static bool SendKey(ushort virtualKey, string name)
     {

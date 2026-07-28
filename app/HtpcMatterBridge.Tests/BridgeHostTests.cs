@@ -76,7 +76,7 @@ public static class BridgeHostTests
         public async Task ActionFrameExecutesFlashesOverlayAndAcksOkThenDisableGoesGray()
         {
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":1,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -84,7 +84,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive setVolume 25");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":1,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -106,12 +106,12 @@ public static class BridgeHostTests
         {
             _executor.NextResult = false;
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":1,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":1,"type":"ack","id":"{{ActionId}}","ok":false,"error":"action failed: volume 25 %"}"""),
+                    $$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":false,"error":"action failed: volume 25 %"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack with the intent text");
 
@@ -129,14 +129,14 @@ public static class BridgeHostTests
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":1,"type":"state","volume":55,"muted":false}"""),
+                () => _log.ContainsMessage("""recv {"v":2,"type":"state","volume":55,"muted":false}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the on-connect state snapshot");
 
             _executor.RaiseVolumeChanged(new VolumeState(61, true));
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":1,"type":"state","volume":61,"muted":true}"""),
+                () => _log.ContainsMessage("""recv {"v":2,"type":"state","volume":61,"muted":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the volume-change state frame");
         }
@@ -145,7 +145,7 @@ public static class BridgeHostTests
         public async Task PairingFrameSurfacesWithPayloadAndFlashesTheOverlay()
         {
             using var host = CreateHost(NodeClientSpec(
-                """{"v":1,"type":"pairing","qrPayload":"MT:TEST","manualCode":"1111-222-3333"}"""));
+                """{"v":2,"type":"pairing","qrPayload":"MT:TEST","manualCode":"1111-222-3333"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -166,6 +166,158 @@ public static class BridgeHostTests
                 Assert.Equal("1111-222-3333", pairing.ManualCode);
                 Assert.Contains(_overlay, c => c.Primary == "Google Home pairing" && !c.IsError);
             }
+        }
+
+        [Fact]
+        public async Task CustomMediaKeyActionDispatchesResolvesTheDisplayNameAndAcksOk()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "stop-media",
+                    Name = "HTPC Stop",
+                    Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"stop-media"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("mediaStop", (object?)null)),
+                TimeSpan.FromSeconds(10),
+                "executor to receive mediaStop");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            lock (_gate)
+            {
+                // ADR-004: the overlay flashes the command's display name.
+                Assert.Contains(("Google Home → HTPC Stop", "stop pressed", false), _overlay);
+            }
+        }
+
+        [Theory]
+        [InlineData(MediaKeyName.VolumeUp, 5)]
+        [InlineData(MediaKeyName.VolumeDown, -5)]
+        public async Task CustomVolumeStepActionsMapToPlusMinusFivePercent(MediaKeyName keyName, int expectedDelta)
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "volume-nudge",
+                    Name = "Volume Nudge",
+                    Action = new MediaKeyActionConfig { KeyName = keyName },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"volume-nudge"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("volumeStep", (object?)expectedDelta)),
+                TimeSpan.FromSeconds(10),
+                $"executor to receive volumeStep {expectedDelta}");
+        }
+
+        [Fact]
+        public async Task CustomLaunchActionPassesPathAndArgsThroughTheExecutorSeam()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "movie-mode",
+                    Name = "Movie Mode",
+                    Action = new LaunchActionConfig { Path = @"C:\apps\kodi.exe", Args = "-fs" },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("launch", (object?)new LaunchRequest(@"C:\apps\kodi.exe", "-fs"))),
+                TimeSpan.FromSeconds(10),
+                "executor to receive the launch request");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            lock (_gate)
+            {
+                Assert.Contains(("Google Home → Movie Mode", "launched kodi.exe", false), _overlay);
+            }
+        }
+
+        [Fact]
+        public async Task UnknownCustomKeyNacksWithAReasonAndNeverHitsTheExecutor()
+        {
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"no-such-key"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage(
+                    $$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: no-such-key"}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the fail ack naming the unknown key");
+
+            Assert.Empty(_executor.Calls);
+            lock (_gate)
+            {
+                // No display name exists, so the overlay shows the wire key.
+                Assert.Contains(("Google Home → no-such-key", "failed", true), _overlay);
+            }
+        }
+
+        [Fact]
+        public async Task DisabledCustomCommandNacksLikeAnUnknownKey()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "movie-mode",
+                    Name = "Movie Mode",
+                    Enabled = false,
+                    Action = new MediaKeyActionConfig { KeyName = MediaKeyName.PlayPause },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage(
+                    $$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: movie-mode"}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the fail ack for the disabled command");
+
+            Assert.Empty(_executor.Calls);
+        }
+
+        [Fact]
+        public async Task SupersededV1FrameIsRejectedAndClosesTheSocket()
+        {
+            // Version-bump proof at the wiring level (ADR-004 §3): a stub
+            // still speaking v1 authenticates (hello is v2 in the spec below)
+            // but its v1 action must close the socket, not execute.
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":1,"type":"action","id":"{{ActionId}}","name":"playPause"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.Contains("WARN", "\"v\" must be the integer 2"),
+                TimeSpan.FromSeconds(10),
+                "the v1 frame to be rejected with the version reason");
+
+            Assert.Empty(_executor.Calls);
         }
 
         [Fact]
@@ -241,7 +393,7 @@ public static class BridgeHostTests
                 "const ws = new WebSocket('ws://localhost:' + p + '/');" +
                 "ws.addEventListener('message', (e) => console.log(JSON.stringify({ level: 30, msg: 'recv ' + e.data })));" +
                 "ws.addEventListener('open', () => {" +
-                "ws.send(JSON.stringify({ v: 1, type: 'hello', token: t, protocol: 1 }));" +
+                "ws.send(JSON.stringify({ v: 2, type: 'hello', token: t, protocol: 1 }));" +
                 string.Concat(framesAfterHello.Select(frame => $"ws.send('{frame}');")) +
                 "});" +
                 "process.stdin.resume();" +
