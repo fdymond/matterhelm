@@ -350,19 +350,27 @@ public sealed class OverlayHud : IDisposable
         {
             RectangleF row = PillRowRect();
             Color pillColor = isError ? Color.FromArgb(230, 196, 60, 58) : Color.FromArgb(230, 55, 158, 96);
-            SizeF pillTextSize = g.MeasureString(pill, pillFont);
-            float pillWidth = Math.Min(row.Width, pillTextSize.Width + SF(28f));
-            var pillRect = new RectangleF(row.X, row.Y, pillWidth, row.Height);
-            using GraphicsPath pillPath = RoundedRect(pillRect, row.Height / 2f);
-            using var pillBrush = new SolidBrush(pillColor);
-            g.FillPath(pillBrush, pillPath);
-
-            using var pillTextBrush = new SolidBrush(Color.White);
             using var pillFormat = new StringFormat
             {
                 Alignment = StringAlignment.Center,
                 LineAlignment = StringAlignment.Center,
+                Trimming = StringTrimming.EllipsisCharacter,
+                FormatFlags = StringFormatFlags.NoWrap,
             };
+
+            // The chip hugs its measured text (owner request): comfortable
+            // side padding, and the height grows with the font rather than
+            // assuming the row constant stays larger than the line height.
+            SizeF pillTextSize = g.MeasureString(pill, pillFont, int.MaxValue, pillFormat);
+            float pillHeight = Math.Max(row.Height, pillTextSize.Height + SF(6f));
+            float pillWidth = Math.Min(row.Width, pillTextSize.Width + SF(32f));
+            var pillRect = new RectangleF(
+                row.X, row.Y + ((row.Height - pillHeight) / 2f), pillWidth, pillHeight);
+            using GraphicsPath pillPath = RoundedRect(pillRect, pillHeight / 2f);
+            using var pillBrush = new SolidBrush(pillColor);
+            g.FillPath(pillBrush, pillPath);
+
+            using var pillTextBrush = new SolidBrush(Color.White);
             g.DrawString(pill, pillFont, pillTextBrush, pillRect, pillFormat);
         }
 

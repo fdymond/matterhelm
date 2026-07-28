@@ -433,7 +433,13 @@ public sealed class BridgeHost : IDisposable
         if (_config.Current.OverlayEnabled)
         {
             (int? volumePercent, bool muted) = ok ? DescribeVolumeResult(frame) : (null, false);
-            _overlaySink?.Invoke(new OverlayContent($"Google Home → {intent}", ok ? pill : "failed", !ok)
+            // Owner request: when the fill bar is showing the level, repeating
+            // the percent on the primary line is redundant — volume sets read
+            // "Google Home → Volume" and the bar carries the number. Acks and
+            // logs keep the precise DescribeIntent text.
+            string overlayIntent =
+                frame is SetVolumeFrame && volumePercent is not null ? "Volume" : intent;
+            _overlaySink?.Invoke(new OverlayContent($"Google Home → {overlayIntent}", ok ? pill : "failed", !ok)
             {
                 VolumePercent = volumePercent,
                 Muted = muted,

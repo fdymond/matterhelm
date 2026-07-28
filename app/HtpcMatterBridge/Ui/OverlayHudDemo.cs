@@ -91,7 +91,7 @@ internal static class OverlayHudDemo
         log.Add($"(diag) volume track bounds (canvas coords): {track}");
         foreach (int percent in (int[])[0, 37, 100])
         {
-            hud.Show(new OverlayContent($"Google Home -> volume {percent} %", $"volume set to {percent} %", IsError: false)
+            hud.Show(new OverlayContent("Google Home -> Volume", $"volume set to {percent} %", IsError: false)
             {
                 VolumePercent = percent,
             });
