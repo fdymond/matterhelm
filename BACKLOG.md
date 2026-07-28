@@ -50,7 +50,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S4-0 | TFM bump `net10.0-windows` (both csproj) + CI dotnet 10.0.x; PerMonitorV2 confirmed | Build+tests green; `--demo-overlay`/`--demo-wired` re-run PASS | S | — | integrator |
+| S4-0 ✅ | TFM bump `net10.0-windows` (both csproj) + CI dotnet 10.0.x; PerMonitorV2 confirmed | Build+tests green; `--demo-overlay`/`--demo-wired` re-run PASS (exit 0 both) | S | — | integrator |
 | S4-1 | Bridge: `HTPC_BRIDGE_ENDPOINTS` env (ADR-004 shape) → dynamic endpoint construction (disabled built-ins omitted, custom momentary plugs); protocol v2 (`v:2` + `custom` action w/ `key`) in protocol.ts + mapping | verify green; unit tests for endpoint-set derivation + custom action mapping; mock-run shows custom endpoint write → `{name:"custom",key}` frame | M | S4-0 | impl (Fable) |
 | S4-2 | App: Config `commands` schema + migration from `deviceNames`; Protocol.cs v2 parity; executor custom actions (`mediaKey`, `launch`); supervisor env → ENDPOINTS | dotnet tests incl. migration + v2 parity + custom dispatch; wired demo extended with a custom command round-trip | M | S4-0 | impl (Fable) |
 | S4-3 | App: `Ui/SettingsWindow` per ADR-004 (left nav categories, top search filter, staged edits + validation, custom command CRUD editor, dark mode via SetColorMode) | Build 0 warnings; view-model/filter logic unit-tested; screenshot evidence light+dark; all settings round-trip to config.json | L | S4-2 | impl (Fable) |
