@@ -47,6 +47,14 @@ internal static class Program
             return;
         }
 
+        // Design aid: export the runtime-drawn tray icons (all states, both
+        // taskbar themes, several sizes + a contact sheet) for visual review.
+        if (args.Contains("--export-tray-icons"))
+        {
+            Ui.TrayIcons.ExportPreviews();
+            return;
+        }
+
         // S2-1 acceptance demo: sidecar crash/auto-restart backoff plus the
         // wrong-token socket close, with objective PASS/FAIL output.
         if (args.Contains("--demo-sidecar-chaos"))

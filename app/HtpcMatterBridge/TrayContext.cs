@@ -65,13 +65,7 @@ public sealed class TrayContext : ApplicationContext
         _uiThreadMarshal = new Control();
         _ = _uiThreadMarshal.Handle;
 
-        _stateIcons = new Dictionary<BridgeState, Icon>
-        {
-            [BridgeState.Disabled] = CreateSolidCircleIcon(Color.Gray),
-            [BridgeState.Running] = CreateSolidCircleIcon(Color.FromArgb(255, 179, 0)),
-            [BridgeState.Connected] = CreateSolidCircleIcon(Color.FromArgb(46, 160, 67)),
-            [BridgeState.Faulted] = CreateSolidCircleIcon(Color.FromArgb(213, 48, 48)),
-        };
+        _stateIcons = Ui.TrayIcons.CreateStateIcons();
 
         _enableBridgeItem = new ToolStripMenuItem("Enable bridge")
         {
@@ -356,36 +350,4 @@ public sealed class TrayContext : ApplicationContext
         Application.Exit();
     }
 
-    /// <summary>Draws a filled, outlined circle at 16x16 and returns it as an owned <see cref="Icon"/> (GDI+; no .ico assets).</summary>
-    private static Icon CreateSolidCircleIcon(Color color)
-    {
-        const int size = 16;
-        using var bitmap = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-        using (Graphics g = Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-            using var fillBrush = new SolidBrush(color);
-            g.FillEllipse(fillBrush, 1, 1, size - 2, size - 2);
-            using var outlinePen = new Pen(Color.FromArgb(110, Color.Black), 1f);
-            g.DrawEllipse(outlinePen, 1, 1, size - 2, size - 2);
-        }
-
-        IntPtr hIcon = bitmap.GetHicon();
-        try
-        {
-            // Icon.FromHandle does not own the native HICON; clone into a
-            // GDI+-managed Icon so the raw handle can be destroyed immediately
-            // instead of leaking for the tray icon's lifetime.
-            using Icon borrowed = Icon.FromHandle(hIcon);
-            return (Icon)borrowed.Clone();
-        }
-        finally
-        {
-            DestroyIcon(hIcon);
-        }
-    }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr hIcon);
 }
