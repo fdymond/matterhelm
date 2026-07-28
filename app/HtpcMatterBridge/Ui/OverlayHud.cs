@@ -103,17 +103,19 @@ public sealed class OverlayHud : IDisposable
         // canvas renders at the window's startup DPI (S4-5 — at 200 % the old
         // fixed 460×104 bitmap appeared half-size).
         private const int CanvasWidthLogical = 460;
-        private const int CanvasHeightLogical = 104;
+        private const int CanvasHeightLogical = 110;
         private const float ShadowMarginLogical = 10f;
         private const float PanelRadiusLogical = 14f;
         private const int BottomMarginLogical = 48;
-        private const float PillRowFromBottomLogical = 38f;
-        private const float PillRowHeightLogical = 24f;
+        private const float PillRowFromBottomLogical = 42f;
+        private const float PillRowHeightLogical = 28f;
         private const float ContentInsetLogical = 18f;
         private const float VolumeTrackWidthLogical = 150f;
         private const float VolumeTrackHeightLogical = 10f;
         private const float PrimaryFontPxLogical = 15.33f; // 11.5 pt at 96 dpi
-        private const float PillFontPxLogical = 12.67f; // 9.5 pt at 96 dpi
+        // Owner request: the executed-command pill reads at the same size as
+        // the primary line (it stays bold to keep the visual hierarchy).
+        private const float PillFontPxLogical = PrimaryFontPxLogical;
 
         private const int HoldMilliseconds = 2500;
         private const int FadeMilliseconds = 300;
