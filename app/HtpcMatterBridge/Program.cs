@@ -372,7 +372,9 @@ internal static partial class Program
 
             string[] expectedPrimaries =
             [
-                $"Google Home → volume {WiredDemoStubVolume} %",
+                // Volume sets read "Volume" without the percent — the fill bar
+                // carries the number (owner request).
+                "Google Home → Volume",
                 "Google Home → unmute",
                 "Google Home → play/pause",
                 $"Google Home → {WiredDemoCustomName}",
@@ -394,7 +396,7 @@ internal static partial class Program
             // S4-5: the setVolume flash must carry the resulting level so the
             // HUD renders the percentage bar instead of the text pill.
             Check(
-                overlaySnapshot.Any(c => c.Primary == $"Google Home → volume {WiredDemoStubVolume} %"
+                overlaySnapshot.Any(c => c.Primary == "Google Home → Volume"
                     && c.VolumePercent == WiredDemoStubVolume && !c.Muted),
                 $"setVolume overlay content carries VolumePercent {WiredDemoStubVolume} (volume-bar pill)");
 

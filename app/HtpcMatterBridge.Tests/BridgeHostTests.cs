@@ -92,9 +92,10 @@ public static class BridgeHostTests
             lock (_gate)
             {
                 // S4-5: a successful setVolume flash carries the level so the
-                // HUD renders the percentage bar.
+                // HUD renders the percentage bar; the primary line drops the
+                // redundant percent (owner request) — the bar shows it.
                 Assert.Contains(
-                    new OverlayContent("Google Home → volume 25 %", "volume set to 25 %", false) { VolumePercent = 25 },
+                    new OverlayContent("Google Home → Volume", "volume set to 25 %", false) { VolumePercent = 25 },
                     _overlay);
                 Assert.Contains(BridgeState.Connected, _states);
             }
