@@ -15,7 +15,11 @@ public sealed class ActionExecutor : IDisposable
 
     /// <summary>
     /// Executes the named action. <paramref name="value"/> carries the payload for value
-    /// actions: <c>int</c> 0–100 for <c>setVolume</c>, <c>bool</c> for <c>setMuted</c>.
+    /// actions: <c>int</c> 0–100 for <c>setVolume</c>, <c>bool</c> for <c>setMuted</c>,
+    /// <c>int</c> signed percent delta for <c>volumeStep</c>, and a
+    /// <see cref="LaunchRequest"/> for <c>launch</c>. Beyond the protocol names, the
+    /// custom-command ops (S4-2) are <c>mediaStop</c>, <c>muteToggle</c>,
+    /// <c>volumeStep</c>, and <c>launch</c>.
     /// </summary>
     public bool Execute(string name, object? value = null)
     {
@@ -29,12 +33,23 @@ public sealed class ActionExecutor : IDisposable
                     return MediaKeys.NextTrack();
                 case "previous":
                     return MediaKeys.PreviousTrack();
+                case "mediaStop":
+                    return MediaKeys.Stop();
                 case "setVolume" when value is int percent:
                     _systemVolume.SetVolumePercent(percent);
                     return true;
                 case "setMuted" when value is bool muted:
                     _systemVolume.SetMuted(muted);
                     return true;
+                case "muteToggle":
+                    _systemVolume.SetMuted(!_systemVolume.GetMuted());
+                    return true;
+                case "volumeStep" when value is int deltaPercent:
+                    // SetVolumePercent clamps, so stepping past 0/100 saturates.
+                    _systemVolume.SetVolumePercent(_systemVolume.GetVolumePercent() + deltaPercent);
+                    return true;
+                case "launch" when value is LaunchRequest request:
+                    return AppLaunch.Start(request);
                 // For now power maps straight to the displays; S2-4 layers the
                 // configurable powerOff behavior (displays off vs. sleep) on top.
                 case "powerOn":

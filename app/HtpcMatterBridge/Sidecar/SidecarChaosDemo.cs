@@ -146,7 +146,7 @@ internal static class SidecarChaosDemo
         using var client = new ClientWebSocket();
         client.ConnectAsync(new Uri($"ws://localhost:{port}/"), CancellationToken.None).GetAwaiter().GetResult();
         byte[] badHello = Encoding.UTF8.GetBytes(
-            /*lang=json*/ """{"v":1,"type":"hello","token":"wrong-token","protocol":1}""");
+            /*lang=json*/ """{"v":2,"type":"hello","token":"wrong-token","protocol":1}""");
         client.SendAsync(badHello, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None)
             .GetAwaiter()
             .GetResult();

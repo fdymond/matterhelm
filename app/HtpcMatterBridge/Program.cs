@@ -20,9 +20,13 @@ internal static class Program
     private const int DemoDisplayMilliseconds = 1_000;
     private const int MinDistinctSampledColors = 2;
 
-    // S2-5 acceptance demo tuning (must match DemoAssets\StubSidecar.js).
+    // S2-5/S4-2 acceptance demo tuning (must match DemoAssets\StubSidecar.js).
     private const int WiredDemoStubVolume = 37;
     private const int WiredDemoSentinelVolume = 61;
+    private const string WiredDemoCustomKey = "demo-note";
+    private const string WiredDemoCustomName = "Demo Note";
+    private const string WiredDemoMarkerFileName = "demo-note-marker.txt";
+    private const string WiredDemoMarkerContent = "demo-note ok";
     private const string WiredDemoResultsFileName = "wired-demo-results.txt";
     private const int AttachParentProcess = -1;
 
@@ -129,17 +133,21 @@ internal static class Program
     }
 
     /// <summary>
-    /// S2-5 acceptance evidence: spawns the stub sidecar
-    /// (<c>DemoAssets\StubSidecar.js</c>) under the real
+    /// S2-5 (extended by S4-2 for protocol v2) acceptance evidence: spawns the
+    /// stub sidecar (<c>DemoAssets\StubSidecar.js</c>) under the real
     /// <see cref="BridgeHost"/>/<see cref="IpcServer"/>/<see cref="SidecarSupervisor"/>
     /// wiring with the real <see cref="ActionExecutorAdapter"/> and a live
     /// <see cref="OverlayHud"/>, then objectively checks: volume/mute
     /// read-back after the stub's setVolume/setMuted actions, an ok ack per
     /// action id (parsed from the stub's stdout echo), overlay Show calls with
-    /// the expected primary strings, the pairing frame surfacing, and a state
-    /// frame carrying a locally-set sentinel volume reaching the stub.
-    /// Restores the original volume/mute in <c>finally</c>. Returns 0 iff all
-    /// checks pass; results also land in <c>wired-demo-results.txt</c>.
+    /// the expected primary strings, the pairing frame surfacing, a state
+    /// frame carrying a locally-set sentinel volume reaching the stub, a v2
+    /// <c>custom</c> action round-trip (config-defined <c>launch</c> of
+    /// node.exe writing a marker file — asserted on disk — plus its ok ack and
+    /// "Google Home → Demo Note" overlay), and that a deliberate v1 frame is
+    /// rejected and closes the socket (version-bump proof). Restores the
+    /// original volume/mute in <c>finally</c>. Returns 0 iff all checks pass;
+    /// results also land in <c>wired-demo-results.txt</c>.
     /// </summary>
     private static int RunWiredDemo()
     {
@@ -185,7 +193,7 @@ internal static class Program
             }
         }
 
-        Emit($"S2-5 wired demo — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        Emit($"S2-5/S4-2 wired demo (protocol v2) — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 
         string? node = ResolveNodeExe();
         string stubPath = Path.Combine(AppContext.BaseDirectory, "DemoAssets", "StubSidecar.js");
@@ -204,6 +212,24 @@ internal static class Program
         Directory.CreateDirectory(tempRoot);
         var config = new Config(Path.Combine(tempRoot, "config.json"), Sink);
         config.Current.IpcPort = GetFreeLoopbackPort();
+
+        // S4-2: a custom `launch` command with a verifiable, side-effect-free
+        // effect — node writes a marker file into the demo temp dir. No shell
+        // string anywhere: the args split into discrete ArgumentList entries.
+        string markerPath = Path.Combine(tempRoot, WiredDemoMarkerFileName);
+        config.Current.Commands.Custom =
+        [
+            new CustomCommandConfig
+            {
+                Key = WiredDemoCustomKey,
+                Name = WiredDemoCustomName,
+                Action = new LaunchActionConfig
+                {
+                    Path = node,
+                    Args = $"-e \"require('fs').writeFileSync(process.argv[1], '{WiredDemoMarkerContent}')\" \"{markerPath}\"",
+                },
+            },
+        ];
         Emit($"ipc port: {config.Current.IpcPort} (ephemeral); temp root: {tempRoot}");
 
         using var executor = new ActionExecutorAdapter();
@@ -278,12 +304,12 @@ internal static class Program
                 {
                     lock (gate)
                     {
-                        return pairingFrames.Count >= 1 && overlayCalls.Count(c => c.Primary.StartsWith("Google Home → ", StringComparison.Ordinal)) >= 3;
+                        return pairingFrames.Count >= 1 && overlayCalls.Count(c => c.Primary.StartsWith("Google Home → ", StringComparison.Ordinal)) >= 4;
                     }
                 },
                 timeoutMs: 20_000)
-                && SentActions().Count >= 3;
-            Check(sequenceDone, "stub completed its scripted sequence (3 actions + pairing) within 20 s");
+                && SentActions().Count >= 4;
+            Check(sequenceDone, "stub completed its scripted sequence (4 actions incl. custom + pairing) within 20 s");
 
             VolumeState after = executor.GetVolumeState();
             Check(
@@ -294,16 +320,24 @@ internal static class Program
             foreach ((string name, string id) in SentActions())
             {
                 bool acked = PumpUntil(
-                    () => LogContains($"stub-recv {{\"v\":1,\"type\":\"ack\",\"id\":\"{id}\",\"ok\":true}}"),
+                    () => LogContains($"stub-recv {{\"v\":2,\"type\":\"ack\",\"id\":\"{id}\",\"ok\":true}}"),
                     timeoutMs: 5_000);
                 Check(acked, $"stub received ack ok for {name} (id {id})");
             }
+
+            // S4-2: the custom `launch` action ran detached — the marker file
+            // it writes is the objective side-effect evidence.
+            bool markerWritten = PumpUntil(
+                () => File.Exists(markerPath) && File.ReadAllText(markerPath) == WiredDemoMarkerContent,
+                timeoutMs: 10_000);
+            Check(markerWritten, $"custom launch action wrote the marker file ({WiredDemoMarkerFileName})");
 
             string[] expectedPrimaries =
             [
                 $"Google Home → volume {WiredDemoStubVolume} %",
                 "Google Home → unmute",
                 "Google Home → play/pause",
+                $"Google Home → {WiredDemoCustomName}",
             ];
             List<(string Primary, string Pill, bool IsError)> overlaySnapshot;
             lock (gate)
@@ -311,7 +345,7 @@ internal static class Program
                 overlaySnapshot = [.. overlayCalls];
             }
 
-            Check(overlaySnapshot.Count >= 3, $"overlay Show invoked >= 3 times (actual {overlaySnapshot.Count})");
+            Check(overlaySnapshot.Count >= 4, $"overlay Show invoked >= 4 times (actual {overlaySnapshot.Count})");
             foreach (string primary in expectedPrimaries)
             {
                 Check(
@@ -340,11 +374,23 @@ internal static class Program
             // through the real executor and expect the stub to echo the frame.
             executor.Execute("setVolume", WiredDemoSentinelVolume);
             bool sentinelSeen = PumpUntil(
-                () => LogContains($"stub-recv {{\"v\":1,\"type\":\"state\",\"volume\":{WiredDemoSentinelVolume},"),
+                () => LogContains($"stub-recv {{\"v\":2,\"type\":\"state\",\"volume\":{WiredDemoSentinelVolume},"),
                 timeoutMs: 10_000);
             Check(
                 sentinelSeen,
                 $"stub received a state frame with the locally-set sentinel volume {WiredDemoSentinelVolume}");
+
+            // Version-bump proof (ADR-004 §3): the sentinel frame cues the
+            // stub to send one v1 frame; the tray app must reject it (only
+            // v:2 parses now) and close the socket.
+            bool v1Rejected = PumpUntil(
+                () => LogContains("\"v\" must be the integer 2"),
+                timeoutMs: 10_000);
+            Check(v1Rejected, "deliberate v1 frame was rejected (\"v\" must be the integer 2)");
+            bool socketClosed = PumpUntil(
+                () => LogContains("stub: socket closed"),
+                timeoutMs: 10_000);
+            Check(socketClosed, "server closed the socket on the v1 frame");
         }
         catch (Exception ex)
         {

@@ -74,7 +74,7 @@ public sealed class SidecarSupervisor : IDisposable
     /// <param name="logLevel">pino level handed to the child.</param>
     /// <param name="options">Timing knobs; production uses the defaults.</param>
     /// <param name="log">Log sink (level, message); defaults to <see cref="Log"/>. Injectable for tests/demos.</param>
-    /// <param name="extraEnv">Additional environment for the child (e.g. <c>HTPC_BRIDGE_DEVICE_NAMES</c>, BLUEPRINT §2.3). Applied before the fixed contract variables, which therefore can never be overridden.</param>
+    /// <param name="extraEnv">Additional environment for the child (e.g. <c>HTPC_BRIDGE_ENDPOINTS</c>, BLUEPRINT §2.3 as amended by ADR-004 §2). Applied before the fixed contract variables, which therefore can never be overridden.</param>
     public SidecarSupervisor(
         SidecarSpec spec,
         int ipcPort,

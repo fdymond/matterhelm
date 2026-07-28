@@ -49,6 +49,14 @@ public enum BareActionName
 /// <summary>An action that carries no payload (playPause/next/previous/powerOn/powerOff).</summary>
 public sealed record BareActionFrame(Guid Id, BareActionName Name) : ActionFrame(Id);
 
+/// <summary>
+/// <c>custom</c> (protocol v2, ADR-004 §3): a user-defined momentary endpoint
+/// fired; <paramref name="Key"/> is its stable kebab-case slug — the config
+/// key, the Matter endpoint id, and the wire identifier. Carries no
+/// <c>value</c> field.
+/// </summary>
+public sealed record CustomActionFrame(Guid Id, string Key) : ActionFrame(Id);
+
 /// <summary><c>setVolume</c>; <paramref name="Value"/> is an integer 0-100 (percent, not 0-254).</summary>
 public sealed record SetVolumeFrame(Guid Id, int Value) : ActionFrame(Id);
 
@@ -148,15 +156,16 @@ public sealed class SidecarParseResult
 /// </summary>
 public static class Protocol
 {
-    /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts).</summary>
-    public const int Version = 1;
+    /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). 2 since the <c>custom</c> action variant landed (ADR-004 §3); only this exact value parses.</summary>
+    public const int Version = 2;
 
-    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR.</summary>
+    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v2 — no breaking field changes.</summary>
     public const int HandshakeProtocol = 1;
 
     private static readonly string[] _helloKeys = ["v", "type", "token", "protocol"];
     private static readonly string[] _bareActionKeys = ["v", "type", "id", "name"];
     private static readonly string[] _valueActionKeys = ["v", "type", "id", "name", "value"];
+    private static readonly string[] _customActionKeys = ["v", "type", "id", "name", "key"];
     private static readonly string[] _pairingKeys = ["v", "type", "qrPayload", "manualCode"];
 
     /// <summary>
@@ -277,9 +286,14 @@ public static class Protocol
             return SidecarParseResult.Fail(err);
         }
 
-        bool carriesValue = name is "setVolume" or "setMuted";
+        string[] allowedKeys = name switch
+        {
+            "setVolume" or "setMuted" => _valueActionKeys,
+            "custom" => _customActionKeys,
+            _ => _bareActionKeys,
+        };
         Guid id = Guid.Empty;
-        err = CheckKeys(obj, carriesValue ? _valueActionKeys : _bareActionKeys)
+        err = CheckKeys(obj, allowedKeys)
             ?? CheckVersion(obj)
             ?? RequireUuid(obj, ref id);
         if (err is not null)
@@ -326,6 +340,26 @@ public static class Protocol
                 }
 
                 return SidecarParseResult.Ok(new SetMutedFrame(id, value));
+            }
+
+            case "custom":
+            {
+                string key = "";
+                err = RequireString(obj, "key", ref key);
+                if (err is not null)
+                {
+                    return SidecarParseResult.Fail(err);
+                }
+
+                // Same slug rule as the config schema and the bridge's zod
+                // side (CommandKey doc) — never reveal the offending value.
+                if (!CommandKey.IsValid(key))
+                {
+                    return SidecarParseResult.Fail(
+                        $"\"key\" must be a kebab-case slug of at most {CommandKey.MaxLength} characters");
+                }
+
+                return SidecarParseResult.Ok(new CustomActionFrame(id, key));
             }
 
             default:
