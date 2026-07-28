@@ -159,6 +159,15 @@ public sealed class BridgeHost : IDisposable
     /// <summary>Volume delta for the custom volumeUp/volumeDown media-key actions (ADR-004 §1: ±5 %).</summary>
     private const int VolumeStepPercent = 5;
 
+    // Volume echo dead-band (owner bug report): Google sets a level, Windows
+    // snaps it to driver granularity, and echoing the ±1 % read-back made the
+    // Home app rewrite its own slider ("76 % → 77 % bounce"). A read-back
+    // within the dead-band of the value just commanded, inside a short
+    // window, is quantization noise — Google already knows what it set.
+    // Larger deltas (real local changes, media-key steps) still publish.
+    private const int VolumeEchoDeadBandPercent = 1;
+    private const int VolumeEchoWindowMilliseconds = 2000;
+
     private readonly Config _config;
     private readonly IActionExecutor _executor;
     private readonly SidecarSpec _sidecarSpec;
@@ -177,6 +186,11 @@ public sealed class BridgeHost : IDisposable
     private int _restartsSinceAuth;
     private BridgeState _state = BridgeState.Disabled;
     private bool _disposed;
+
+    // Volume echo dead-band state (guarded by _gate; see the constants above).
+    private int? _lastCommandedVolume;
+    private bool _lastCommandedMuted;
+    private long _lastVolumeCommandTicks;
 
     /// <summary>Serializes StateChanged delivery; see RecomputeState. Never taken while holding _gate.</summary>
     private readonly Lock _notifyGate = new();
@@ -430,9 +444,21 @@ public sealed class BridgeHost : IDisposable
             (ok, pill, error) = (false, "failed", null);
         }
 
+        (int? volumePercent, bool muted) = ok ? DescribeVolumeResult(frame) : (null, false);
+        if (volumePercent is int commandedVolume)
+        {
+            // Arm the echo dead-band: the CoreAudio change callback for this
+            // very command fires momentarily and must not bounce Google's UI.
+            lock (_gate)
+            {
+                _lastCommandedVolume = commandedVolume;
+                _lastCommandedMuted = muted;
+                _lastVolumeCommandTicks = Environment.TickCount64;
+            }
+        }
+
         if (_config.Current.OverlayEnabled)
         {
-            (int? volumePercent, bool muted) = ok ? DescribeVolumeResult(frame) : (null, false);
             // Owner request: when the fill bar is showing the level, repeating
             // the percent on the primary line is redundant — volume sets read
             // "Google Home → Volume" and the bar carries the number. Acks and
@@ -531,6 +557,19 @@ public sealed class BridgeHost : IDisposable
         lock (_gate)
         {
             server = _running ? _server : null;
+
+            // Echo dead-band: a read-back within ±1 % of the value a Google
+            // command just set (same mute state, short window) is driver
+            // quantization noise — publishing it makes the Home app bounce
+            // its own slider. Real changes exceed the band or arrive later.
+            if (server is not null
+                && _lastCommandedVolume is int commanded
+                && Environment.TickCount64 - _lastVolumeCommandTicks <= VolumeEchoWindowMilliseconds
+                && Math.Abs(state.VolumePercent - commanded) <= VolumeEchoDeadBandPercent
+                && state.Muted == _lastCommandedMuted)
+            {
+                return;
+            }
         }
 
         if (server is null)

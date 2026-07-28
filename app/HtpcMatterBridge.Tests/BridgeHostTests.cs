@@ -149,6 +149,40 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public async Task VolumeEchoWithinTheDeadBandIsNotPublishedBackToGoogle()
+        {
+            // Owner bug: Google sets 76 %, Windows snaps to 77 %, and echoing
+            // the read-back made the Home app bounce its own slider. The ±1 %
+            // read-back right after a command must be swallowed; a genuinely
+            // different change must still publish.
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            // The CoreAudio echo for the command, quantized one point up.
+            _executor.RaiseVolumeChanged(new VolumeState(26, false));
+            // A real change right after — must arrive, and the echo must not.
+            _executor.RaiseVolumeChanged(new VolumeState(40, false));
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("""recv {"v":2,"type":"state","volume":40,"muted":false}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the genuine volume-change state frame");
+
+            // Publishes ride Task.Run: give a wrongly-published echo a moment
+            // to land before asserting it never does.
+            await Task.Delay(250);
+            Assert.False(
+                _log.ContainsMessage("""recv {"v":2,"type":"state","volume":26,"muted":false}"""),
+                "the ±1 echo of the commanded volume must be suppressed");
+        }
+
+        [Fact]
         public async Task PairingFrameSurfacesWithPayloadAndFlashesTheOverlay()
         {
             using var host = CreateHost(NodeClientSpec(
