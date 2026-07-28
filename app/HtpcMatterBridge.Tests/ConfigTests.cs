@@ -173,6 +173,38 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Theory]
+    [InlineData("topLeft", OverlayPosition.TopLeft)]
+    [InlineData("middleRight", OverlayPosition.MiddleRight)]
+    [InlineData("bottomCenter", OverlayPosition.BottomCenter)]
+    public void OverlayPositionLoadsEveryWireForm(string wire, OverlayPosition expected)
+    {
+        File.WriteAllText(_path, $$"""{"overlayPosition":"{{wire}}"}""");
+        Assert.Equal(expected, NewConfig().Current.OverlayPosition);
+    }
+
+    [Theory]
+    [InlineData("\"center\"")]
+    [InlineData("\"5\"")]
+    [InlineData("3")]
+    public void InvalidOverlayPositionFallsBackToBottomCenterWithAWarn(string rawJsonValue)
+    {
+        File.WriteAllText(_path, $$"""{"overlayPosition":{{rawJsonValue}}}""");
+        Config config = NewConfig();
+        Assert.Equal(OverlayPosition.BottomCenter, config.Current.OverlayPosition);
+        Assert.True(_log.Contains("WARN", "overlayPosition"), "expected a WARN naming overlayPosition");
+    }
+
+    [Fact]
+    public void OverlayPositionRoundTripsThroughSaveInCamelCase()
+    {
+        Config config = NewConfig();
+        config.Current.OverlayPosition = OverlayPosition.TopRight;
+        config.Save();
+        Assert.Contains("\"overlayPosition\": \"topRight\"", File.ReadAllText(_path));
+        Assert.Equal(OverlayPosition.TopRight, NewConfig().Current.OverlayPosition);
+    }
+
+    [Theory]
     [InlineData("verbose")]
     [InlineData("INFO")]
     [InlineData("2")]

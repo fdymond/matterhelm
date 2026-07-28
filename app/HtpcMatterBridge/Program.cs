@@ -130,7 +130,15 @@ internal static partial class Program
 
         var trayContext = new TrayContext();
         using var executor = new ActionExecutorAdapter();
-        using var overlay = new OverlayHud { Visible = trayContext.Config.Current.OverlayEnabled };
+        using var overlay = new OverlayHud
+        {
+            Visible = trayContext.Config.Current.OverlayEnabled,
+            Position = trayContext.Config.Current.OverlayPosition,
+        };
+
+        // Settings-window saves reload the config; re-anchor the HUD so a
+        // position change applies live, no restart needed.
+        trayContext.Config.Changed += (_, e) => overlay.Position = e.NewConfig.OverlayPosition;
         using var host = new BridgeHost(
             trayContext.Config,
             executor,
