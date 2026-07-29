@@ -58,6 +58,16 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S4-5 ✅ | Owner-reported: DPI overlap fix (PairingWindow rebuilt; all windows audited at 200 %) + overlay volume percentage-bar pill | Screenshots at real 200 % display; pixel-sampled fill assertions; 272 tests + 3 demos green | M | S4-3 | impl (Fable) |
 | S4-R ✅ (Opus: 0 confirmed bugs, protocol parity verified empirically; 2 RISKs + NITs fixed by integrator) | Adversarial review of Sprint 4 (protocol v2 parity, settings UX correctness, migration safety, refactor regressions) | Findings verified + fixed | M | S4-4 | review (Opus) |
 
+## Sprint 5 — telemetry, diagnostics, latency instrumentation (owner-directed)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S5-0 | Research: latest Matter/matter.js expertise (diagnostics APIs, session/subscription tuning, hub re-association) + .NET 10 local-telemetry best practice | Two cited reports; findings folded into ADR-006 (telemetry design) | S | — | research (Sonnet) ×2, in flight |
+| S5-1 | Bridge diagnostics: matter.js log-level/facility surfacing via env, session/subscription observability events into pino, per-action timing (cluster write → WS send) with correlation ids on frames | verify green; timing lines visible in a mock run | M | S5-0 | impl (Fable) |
+| S5-2 | App diagnostics: per-action timing (frame recv → executed → acked), Meter counters (actions, acks, restarts, reconnects), runtime app log level in config+settings, "Export diagnostics" (zip logs+versions+env, token-redaction verified by test) | tests incl. redaction; timing visible in wired demo | M | S5-0 | impl (Fable) |
+| S5-3 | Coverage & validation in CI: C# coverage collection + threshold, bridge coverage job publishing summaries; both surfaced in Actions summary | CI green with coverage tables | S | S5-0 | impl (Sonnet) |
+| S5-R | Adversarial review of Sprint 5 (privacy: no token/PII in any diagnostic path; perf overhead of instrumentation) | Findings verified + fixed | S | S5-1..3 | review (Opus) |
+
 ## Proposed (from agent reports, integrator-triaged)
 
 - ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.
