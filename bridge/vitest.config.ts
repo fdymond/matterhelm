@@ -6,9 +6,17 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "lcov"],
+      reporter: ["text", "lcov", "json-summary"],
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts"],
+      // ADR-006 §3 / ENGINEERING-STANDARDS: pure logic (mapping/, protocol,
+      // config) must clear 90% lines per file; the rest is reported but not
+      // gated here.
+      thresholds: {
+        "src/mapping/**": { lines: 90, perFile: true },
+        "src/ipc/protocol.ts": { lines: 90 },
+        "src/config.ts": { lines: 90 },
+      },
     },
   },
 });

@@ -19,6 +19,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
+    <!-- ADR-006 §3: VSTest-mode coverage collector (MTP coverage is xunit-v3-only). -->
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
   </ItemGroup>
 
   <ItemGroup>
