@@ -360,6 +360,9 @@ public sealed class SettingsViewModelTests : IDisposable
         vm.Working.PowerOffAction = PowerOffAction.Sleep;
         vm.Working.MdnsInterface = "Ethernet";
         vm.Working.LogLevel = "debug";
+        vm.Working.AppLogLevel = "warn";
+        // Regression (S5-2 report): CopyInto silently dropped OverlayPosition.
+        vm.Working.OverlayPosition = OverlayPosition.TopRight;
         vm.AddCustomCommand(MediaKeyCommand("demo-cmd", name: "Demo Command"));
         vm.Apply();
 
@@ -373,6 +376,8 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal(PowerOffAction.Sleep, reloaded.Current.PowerOffAction);
         Assert.Equal("Ethernet", reloaded.Current.MdnsInterface);
         Assert.Equal("debug", reloaded.Current.LogLevel);
+        Assert.Equal("warn", reloaded.Current.AppLogLevel);
+        Assert.Equal(OverlayPosition.TopRight, reloaded.Current.OverlayPosition);
         CustomCommandConfig custom = Assert.Single(reloaded.Current.Commands.Custom);
         Assert.Equal("demo-cmd", custom.Key);
         Assert.Equal("Demo Command", custom.Name);
@@ -448,6 +453,7 @@ public sealed class SettingsViewModelTests : IDisposable
             ["bridge-enabled"] = true,
             ["ipc-port"] = 40000,
             ["log-level"] = "debug",
+            ["app-log-level"] = "warn",
             ["speaker-name"] = "S",
             ["speaker-enabled"] = false,
             ["play-pause-name"] = "PP",

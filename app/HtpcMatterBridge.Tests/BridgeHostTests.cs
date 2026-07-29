@@ -1,4 +1,6 @@
+using System.Diagnostics.Metrics;
 using HtpcMatterBridge.Actions;
+using HtpcMatterBridge.Diagnostics;
 using HtpcMatterBridge.Sidecar;
 using HtpcMatterBridge.Ui;
 using Xunit;
@@ -398,6 +400,41 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public async Task ActionsFeedTheAppMetricsCountersAndEmitTheDebugTimingLine()
+        {
+            using var counters = new CounterCapture();
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+            await TestSupport.WaitUntilAsync(
+                () => counters.Count("actions_executed_ok") >= 1
+                    && counters.Count("acks_sent") >= 1
+                    && counters.Count("ipc_client_connects") >= 1,
+                TimeSpan.FromSeconds(10),
+                "the ok/ack/connect counters to increment");
+
+            // ADR-006 §2: grep-friendly timing line at Debug, keyed by the
+            // action id (the cross-process correlation key).
+            await TestSupport.WaitUntilAsync(
+                () => _log.Snapshot().Any(e => e.Level == "DEBUG"
+                    && e.Message.StartsWith($"IPC timing: setVolume id={ActionId} execute=", StringComparison.Ordinal)
+                    && e.Message.Contains("ms total=", StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(10),
+                "the Debug IPC timing line for setVolume");
+
+            host.SetEnabled(false);
+            await TestSupport.WaitUntilAsync(
+                () => counters.Count("ipc_client_disconnects") >= 1,
+                TimeSpan.FromSeconds(10),
+                "the disconnect counter to increment");
+        }
+
+        [Fact]
         public async Task SidecarCrashLoopWithoutAuthenticationTurnsFaulted()
         {
             string node = TestSupport.RequireNodeExe();
@@ -477,6 +514,47 @@ public static class BridgeHostTests
                 "process.stdin.on('end', () => process.exit(0));" +
                 "setInterval(() => {}, 1000);";
             return new SidecarSpec(TestSupport.RequireNodeExe(), ["-e", script], Path.GetTempPath());
+        }
+
+        /// <summary>
+        /// Local <see cref="MeterListener"/> summing <see cref="AppMetrics"/>
+        /// counter increments observed during its lifetime. The counters are
+        /// process-global, so assertions must be "&gt;=", never exact.
+        /// </summary>
+        private sealed class CounterCapture : IDisposable
+        {
+            private readonly MeterListener _listener = new();
+            private readonly Lock _gate = new();
+            private readonly Dictionary<string, long> _counts = [];
+
+            public CounterCapture()
+            {
+                _listener.InstrumentPublished = (instrument, listener) =>
+                {
+                    if (instrument.Meter.Name == AppMetrics.MeterName && instrument is Counter<long>)
+                    {
+                        listener.EnableMeasurementEvents(instrument);
+                    }
+                };
+                _listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+                {
+                    lock (_gate)
+                    {
+                        _counts[instrument.Name] = _counts.GetValueOrDefault(instrument.Name) + measurement;
+                    }
+                });
+                _listener.Start();
+            }
+
+            public long Count(string name)
+            {
+                lock (_gate)
+                {
+                    return _counts.GetValueOrDefault(name);
+                }
+            }
+
+            public void Dispose() => _listener.Dispose();
         }
 
         /// <summary>Thread-safe no-side-effect <see cref="IActionExecutor"/> with scriptable results and volume state.</summary>

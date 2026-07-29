@@ -62,6 +62,7 @@ public sealed class ConfigTests : IDisposable
         Assert.True(config.Current.OverlayEnabled);
         Assert.Null(config.Current.MdnsInterface);
         Assert.Equal("info", config.Current.LogLevel);
+        Assert.Equal("info", config.Current.AppLogLevel);
     }
 
     [Fact]
@@ -103,6 +104,7 @@ public sealed class ConfigTests : IDisposable
         config.Current.OverlayEnabled = false;
         config.Current.MdnsInterface = "Ethernet";
         config.Current.LogLevel = "debug";
+        config.Current.AppLogLevel = "warn";
         config.Save();
 
         Config reloaded = NewConfig();
@@ -133,6 +135,7 @@ public sealed class ConfigTests : IDisposable
         Assert.False(reloaded.Current.OverlayEnabled);
         Assert.Equal("Ethernet", reloaded.Current.MdnsInterface);
         Assert.Equal("debug", reloaded.Current.LogLevel);
+        Assert.Equal("warn", reloaded.Current.AppLogLevel);
     }
 
     [Fact]
@@ -170,6 +173,7 @@ public sealed class ConfigTests : IDisposable
         Assert.True(root.TryGetProperty("overlayEnabled", out _));
         Assert.True(root.TryGetProperty("mdnsInterface", out _));
         Assert.True(root.TryGetProperty("logLevel", out _));
+        Assert.True(root.TryGetProperty("appLogLevel", out _));
     }
 
     [Theory]
@@ -226,6 +230,30 @@ public sealed class ConfigTests : IDisposable
     {
         File.WriteAllText(_path, $$"""{"logLevel":"{{level}}"}""");
         Assert.Equal(level, NewConfig().Current.LogLevel);
+    }
+
+    [Theory]
+    [InlineData("debug")]
+    [InlineData("info")]
+    [InlineData("warn")]
+    [InlineData("error")]
+    public void EveryAppLogLevelTheAppSupportsLoads(string level)
+    {
+        File.WriteAllText(_path, $$"""{"appLogLevel":"{{level}}"}""");
+        Assert.Equal(level, NewConfig().Current.AppLogLevel);
+    }
+
+    [Theory]
+    [InlineData("\"trace\"")] // valid pino, not a Log level
+    [InlineData("\"DEBUG\"")]
+    [InlineData("\"\"")]
+    [InlineData("2")]
+    public void UnknownAppLogLevelFallsBackToInfoWithAWarn(string rawJsonValue)
+    {
+        File.WriteAllText(_path, $$"""{"appLogLevel":{{rawJsonValue}}}""");
+        Config config = NewConfig();
+        Assert.Equal("info", config.Current.AppLogLevel);
+        Assert.True(_log.Contains("WARN", "appLogLevel"), "expected a WARN naming appLogLevel");
     }
 
     [Theory]

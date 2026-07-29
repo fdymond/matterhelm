@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Drawing.Imaging;
+using System.IO.Compression;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using HtpcMatterBridge.Actions;
+using HtpcMatterBridge.Diagnostics;
 using HtpcMatterBridge.Sidecar;
 using HtpcMatterBridge.Ui;
 
@@ -119,6 +121,10 @@ internal static partial class Program
         Log.Initialize();
         Log.Info("HtpcMatterBridge starting.");
 
+        // ADR-006 §2: JSON-lines metrics snapshots beside the app log (60 s
+        // timer + final flush on exit); dotnet-counters can attach live too.
+        using var metrics = new MetricsFileListener();
+
         ApplicationConfiguration.Initialize();
 
         // ADR-005 production dark mode: enabled after PairingWindow moved to
@@ -129,6 +135,12 @@ internal static partial class Program
         Application.SetColorMode(SystemColorMode.System);
 
         var trayContext = new TrayContext();
+
+        // ADR-006 §2: the app's own log level follows config `appLogLevel`
+        // live — settings saves reload the config, which re-applies it here.
+        Log.MinimumLevel = Log.ParseLevel(trayContext.Config.Current.AppLogLevel);
+        trayContext.Config.Changed += (_, e) => Log.MinimumLevel = Log.ParseLevel(e.NewConfig.AppLogLevel);
+
         using var executor = new ActionExecutorAdapter();
         using var overlay = new OverlayHud
         {
@@ -256,7 +268,20 @@ internal static partial class Program
 
         string tempRoot = Path.Combine(Path.GetTempPath(), "htpc-wired-demo", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
-        var config = new Config(Path.Combine(tempRoot, "config.json"), Sink);
+
+        // S5-2: the whole diagnostics surface runs against the demo temp dir —
+        // redirected app log, metrics snapshots, and the bundle export below
+        // never touch the real %APPDATA%. Debug minimum so the per-action
+        // timing lines land in the redirected file too.
+        string logsDir = Path.Combine(tempRoot, "logs");
+        Log.LogDirectory = logsDir;
+        Log.MinimumLevel = LogLevel.Debug;
+        Log.Initialize();
+        Log.Info("S5-2 wired demo: app log redirected to the demo temp dir.");
+        using var metrics = new MetricsFileListener(logsDir);
+
+        string configPath = Path.Combine(tempRoot, "config.json");
+        var config = new Config(configPath, Sink);
         config.Current.IpcPort = GetFreeLoopbackPort();
 
         // S4-2: a custom `launch` command with a verifiable, side-effect-free
@@ -446,6 +471,16 @@ internal static partial class Program
                 () => LogContains("stub: socket closed"),
                 timeoutMs: 10_000);
             Check(socketClosed, "server closed the socket on the v1 frame");
+
+            // S5-2: every executed action must have produced a Debug timing
+            // line (the sink echoes them into this output verbatim).
+            lock (gate)
+            {
+                Check(
+                    log.Any(e => e.Level == "DEBUG"
+                        && e.Message.StartsWith("IPC timing: setVolume ", StringComparison.Ordinal)),
+                    "IPC timing Debug line produced for the setVolume action");
+            }
         }
         catch (Exception ex)
         {
@@ -463,6 +498,54 @@ internal static partial class Program
         Check(
             LogContains("exited after stdin close (tether)"),
             "stub exited via the stdin tether on stop (no kill needed)");
+
+        // S5-2: the metrics snapshot must show all four stub actions executed
+        // ok (setVolume, setMuted, playPause, custom).
+        metrics.Flush();
+        string? snapshot = File.Exists(metrics.CurrentFilePath)
+            ? File.ReadLines(metrics.CurrentFilePath).LastOrDefault(l => l.Length > 0)
+            : null;
+        Emit($"metrics snapshot: {snapshot ?? "(missing)"}");
+        long actionsOk = -1;
+        if (snapshot is not null)
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(snapshot);
+                actionsOk = document.RootElement.GetProperty("counters").GetProperty("actions_executed_ok").GetInt64();
+            }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+            {
+                Emit($"    snapshot parse failed: {ex.Message}");
+            }
+        }
+
+        Check(actionsOk >= 3, $"metrics file actions_executed_ok >= 3 (actual {actionsOk})");
+
+        // S5-2: produce a diagnostics bundle over the demo temp dirs and list
+        // its entries as evidence.
+        try
+        {
+            string bundlePath = DiagnosticsBundle.ExportTo(
+                Path.Combine(tempRoot, "htpc-diagnostics-demo.zip"), logsDir, configPath);
+            using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+            Emit("diagnostics bundle entries:");
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                Emit($"    {entry.FullName} ({entry.Length} bytes)");
+            }
+
+            Check(
+                archive.Entries.Any(e => e.FullName == "manifest.json")
+                    && archive.Entries.Any(e => e.FullName == "config.json")
+                    && archive.Entries.Any(e => e.FullName.StartsWith("logs/app-", StringComparison.Ordinal))
+                    && archive.Entries.Any(e => e.FullName.StartsWith("logs/metrics-", StringComparison.Ordinal)),
+                "diagnostics bundle contains manifest.json, config.json, the app log, and the metrics file");
+        }
+        catch (Exception ex)
+        {
+            Check(false, $"diagnostics bundle export failed: {ex.Message}");
+        }
 
         WriteWiredResults(lines, allPassed);
         return allPassed ? 0 : 1;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using HtpcMatterBridge.Diagnostics;
 
 namespace HtpcMatterBridge.Ui;
 
@@ -605,6 +606,7 @@ public sealed partial class SettingsWindow : Form
             "overlay-preview" => ("Preview", _overlayPreview ?? (() => { })),
             "open-config-file" => ("Open file", () => OpenWithShell(Config.DefaultPath, "config.json")),
             "open-config-folder" => ("Open folder", () => OpenWithShell(CurrentConfigDir(), "config folder")),
+            "export-diagnostics" => ("Export…", OnExportDiagnosticsClicked),
             "reload-config" => ("Reload", OnReloadConfigClicked),
             "factory-reset" => ("Reset…", (Action?)null), // disabled until S3-2
             _ => throw new ArgumentOutOfRangeException(nameof(setting), setting.Id, "unknown command setting"),
@@ -625,6 +627,44 @@ public sealed partial class SettingsWindow : Form
 
         button.Click += (_, _) => onClick();
         return button;
+    }
+
+    /// <summary>
+    /// Advanced → "Export diagnostics" (ADR-006 §2): pick a destination, build
+    /// the bundle there, then reveal it in Explorer. The export itself is
+    /// local file I/O over the day-sized log files — quick enough for the UI
+    /// thread (same class of work as the Save path).
+    /// </summary>
+    private void OnExportDiagnosticsClicked()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Export diagnostics",
+            Filter = "Zip archive (*.zip)|*.zip",
+            FileName = DiagnosticsBundle.SuggestedFileName(),
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            string zipPath = DiagnosticsBundle.ExportTo(dialog.FileName);
+            Log.Info($"Settings: diagnostics bundle exported to '{zipPath}'.");
+            using var process = Process.Start(
+                new ProcessStartInfo("explorer.exe", $"/select,\"{zipPath}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Settings: diagnostics export failed: {ex.Message}");
+            MessageBox.Show(
+                this,
+                $"Exporting diagnostics failed: {ex.Message}",
+                "Settings",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 
     private void OnReloadConfigClicked()

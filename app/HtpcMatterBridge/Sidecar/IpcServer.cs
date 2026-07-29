@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
+using HtpcMatterBridge.Diagnostics;
 
 namespace HtpcMatterBridge.Sidecar;
 
@@ -301,6 +302,7 @@ public sealed class IpcServer : IDisposable
 
             authenticated = true;
             Volatile.Write(ref _authedClient, socket);
+            AppMetrics.IpcClientConnects.Add(1);
             _log("INFO", "IPC: sidecar connected and authenticated.");
             Raise(() => ClientChanged?.Invoke(this, true));
             await ReceiveLoopAsync(socket).ConfigureAwait(false);
@@ -324,6 +326,7 @@ public sealed class IpcServer : IDisposable
             socket.Dispose();
             if (authenticated)
             {
+                AppMetrics.IpcClientDisconnects.Add(1);
                 _log("INFO", "IPC: sidecar disconnected.");
                 Raise(() => ClientChanged?.Invoke(this, false));
             }

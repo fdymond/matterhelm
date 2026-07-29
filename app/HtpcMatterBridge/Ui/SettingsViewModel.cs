@@ -367,9 +367,11 @@ public sealed class SettingsViewModel
         into.IpcPort = from.IpcPort;
         into.PowerOffAction = from.PowerOffAction;
         into.OverlayEnabled = from.OverlayEnabled;
+        into.OverlayPosition = from.OverlayPosition;
         into.BridgeEnabled = from.BridgeEnabled;
         into.MdnsInterface = from.MdnsInterface;
         into.LogLevel = from.LogLevel;
+        into.AppLogLevel = from.AppLogLevel;
     }
 
     private static IReadOnlyList<SettingsCategory> BuildCategories() =>
@@ -409,6 +411,18 @@ public sealed class SettingsViewModel
                     NeedsBridgeRestart = true,
                     Get = c => c.LogLevel,
                     Set = (c, v) => c.LogLevel = (string)v!,
+                },
+                new SettingDescriptor
+                {
+                    // ADR-006 §2: applies live (no NeedsBridgeRestart note) —
+                    // Program re-applies Log.MinimumLevel on Config.Changed.
+                    Id = "app-log-level",
+                    Label = "App log level",
+                    Description = "How much detail this app writes to its own log. Applies immediately.",
+                    Kind = SettingKind.Choice,
+                    Choices = ["debug", "info", "warn", "error"],
+                    Get = c => c.AppLogLevel,
+                    Set = (c, v) => c.AppLogLevel = (string)v!,
                 },
             ],
         },
@@ -530,6 +544,13 @@ public sealed class SettingsViewModel
                     Id = "open-config-folder",
                     Label = "Config folder",
                     Description = "Open the folder holding config.json and logs.",
+                    Kind = SettingKind.Command,
+                },
+                new SettingDescriptor
+                {
+                    Id = "export-diagnostics",
+                    Label = "Export diagnostics",
+                    Description = "Save logs, metrics, a system manifest, and your config as a zip for troubleshooting. Nothing uploads.",
                     Kind = SettingKind.Command,
                 },
                 new SettingDescriptor
