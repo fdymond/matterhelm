@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0 && prettier --check .",
     "test": "vitest run",
+    "coverage": "vitest run --coverage",
     "verify": "npm run typecheck && npm run lint && npm run test",
     "start": "tsx src/index.ts"
   },

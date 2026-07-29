@@ -24,6 +24,32 @@ jobs:
           cache-dependency-path: bridge/package-lock.json
       - run: npm ci
       - run: npm run verify
+      # ADR-006 §3: coverage only on ubuntu — one OS is enough for this signal
+      # and keeps total CI wall-time down.
+      - name: Coverage (pure-logic thresholds)
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run coverage
+      - name: Coverage summary
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const { total } = JSON.parse(require("fs").readFileSync("coverage/coverage-summary.json", "utf8"));
+          const pct = (m) => `${total[m].pct.toFixed(2)}% (${total[m].covered}/${total[m].total})`;
+          console.log("## Bridge coverage");
+          console.log("");
+          console.log("| Metric | Coverage |");
+          console.log("| --- | --- |");
+          console.log(`| Statements | ${pct("statements")} |`);
+          console.log(`| Branches | ${pct("branches")} |`);
+          console.log(`| Functions | ${pct("functions")} |`);
+          console.log(`| Lines | ${pct("lines")} |`);
+          console.log("");
+          console.log(
+            "Per-file 90% line threshold enforced for `src/mapping/**`, " +
+            "`src/ipc/protocol.ts`, `src/config.ts` (ADR-006 §3, pure-logic " +
+            "modules); `npm run coverage` fails the job if unmet."
+          );
+          NODE
 
   app-build:
     runs-on: windows-latest
@@ -33,4 +59,35 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release
-      - run: dotnet test app/HtpcMatterBridge.Tests/HtpcMatterBridge.Tests.csproj -c Release
+      - run: dotnet test app/HtpcMatterBridge.Tests/HtpcMatterBridge.Tests.csproj -c Release --collect:"XPlat Code Coverage"
+      - name: Coverage report (ReportGenerator)
+        uses: danielpalme/ReportGenerator-GitHub-Action@5.5.11
+        with:
+          reports: app/HtpcMatterBridge.Tests/TestResults/**/coverage.cobertura.xml
+          targetdir: coveragereport
+          reporttypes: MarkdownSummaryGithub
+      - name: Append coverage summary
+        shell: pwsh
+        run: Get-Content coveragereport/SummaryGithub.md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      # ADR-006 §3: app is UI/interop-heavy (WinForms tray UI, Win32 P/Invoke
+      # actions) — those paths are exercised manually/E2E, not unit tests; the
+      # pure-logic bar lives in code review, not this gate. Threshold is set
+      # a few points below the measured local baseline (~50% line coverage
+      # with the current test suite) to catch regressions without being
+      # brittle to incidental line-count drift; raise as UI/interop code
+      # gains test seams.
+      - name: Enforce coverage threshold
+        shell: pwsh
+        run: |
+          $cobertura = Get-ChildItem -Path app/HtpcMatterBridge.Tests/TestResults -Filter coverage.cobertura.xml -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          [xml]$xml = Get-Content $cobertura
+          $lineRate = [double]$xml.coverage.'line-rate'
+          $pct = [math]::Round($lineRate * 100, 2)
+          $threshold = 45
+          "Line coverage: $pct% (threshold: $threshold%)" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Write-Host "Line coverage: $pct% (threshold: $threshold%)"
+          if ($pct -lt $threshold) {
+            Write-Error "App line coverage $pct% is below the $threshold% threshold (ADR-006 §3)."
+            exit 1
+          }
