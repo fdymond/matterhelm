@@ -1,6 +1,9 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using HtpcMatterBridge.Actions;
+using HtpcMatterBridge.Diagnostics;
 using HtpcMatterBridge.Sidecar;
 using HtpcMatterBridge.Ui;
 
@@ -351,6 +354,9 @@ public sealed class BridgeHost : IDisposable
             case "WARN":
                 Log.Warn(message);
                 break;
+            case "DEBUG":
+                Log.Debug(message);
+                break;
             default:
                 Log.Info(message);
                 break;
@@ -447,6 +453,7 @@ public sealed class BridgeHost : IDisposable
             return;
         }
 
+        long receivedAt = Stopwatch.GetTimestamp();
         string intent = DescribeIntent(frame);
         bool ok;
         string pill;
@@ -462,6 +469,11 @@ public sealed class BridgeHost : IDisposable
             _log("ERROR", $"bridge: action '{intent}' threw: {ex.Message}");
             (ok, pill, error) = (false, "failed", null);
         }
+
+        long executedAt = Stopwatch.GetTimestamp();
+        double executeMs = Stopwatch.GetElapsedTime(receivedAt, executedAt).TotalMilliseconds;
+        AppMetrics.ActionExecuteMs.Record(executeMs);
+        (ok ? AppMetrics.ActionsExecutedOk : AppMetrics.ActionsFailed).Add(1);
 
         (int? volumePercent, bool muted) = ok ? DescribeVolumeResult(frame) : (null, false);
         if (volumePercent is int commandedVolume)
@@ -499,13 +511,41 @@ public sealed class BridgeHost : IDisposable
             : new AckFailFrame(frame.Id, error ?? $"action failed: {intent}");
         try
         {
-            _ = server.SendAsync(ack).GetAwaiter().GetResult();
+            if (server.SendAsync(ack).GetAwaiter().GetResult())
+            {
+                AppMetrics.AcksSent.Add(1);
+            }
         }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
         {
             // Server stopped mid-send; the session is over anyway.
         }
+
+        // ADR-006 §2: grep-friendly per-action timing at Debug; the action id
+        // is the cross-process correlation key (the sidecar logs the same id).
+        long ackedAt = Stopwatch.GetTimestamp();
+        _log("DEBUG", string.Create(
+            CultureInfo.InvariantCulture,
+            $"IPC timing: {WireName(frame)} id={frame.Id} execute={executeMs:0.0}ms ack={Stopwatch.GetElapsedTime(executedAt, ackedAt).TotalMilliseconds:0.0}ms total={Stopwatch.GetElapsedTime(receivedAt, ackedAt).TotalMilliseconds:0.0}ms"));
     }
+
+    /// <summary>The frame's wire action name (protocol.ts discriminators), for the grep-friendly timing line; custom actions carry their key.</summary>
+    private static string WireName(ActionFrame frame) => frame switch
+    {
+        SetVolumeFrame => "setVolume",
+        SetMutedFrame => "setMuted",
+        CustomActionFrame custom => $"custom:{custom.Key}",
+        BareActionFrame bare => bare.Name switch
+        {
+            BareActionName.PlayPause => "playPause",
+            BareActionName.Next => "next",
+            BareActionName.Previous => "previous",
+            BareActionName.PowerOn => "powerOn",
+            BareActionName.PowerOff => "powerOff",
+            _ => throw new ArgumentOutOfRangeException(nameof(frame), bare.Name, null),
+        },
+        _ => frame.GetType().Name,
+    };
 
     private void OnPairingReceived(object? sender, PairingFrame frame)
     {
@@ -565,6 +605,7 @@ public sealed class BridgeHost : IDisposable
 
         if (current)
         {
+            AppMetrics.SupervisorRestarts.Add(1);
             RecomputeState();
         }
     }
@@ -612,6 +653,7 @@ public sealed class BridgeHost : IDisposable
                 && Math.Abs(state.VolumePercent - commanded) <= VolumeEchoDeadBandPercent
                 && state.Muted == _lastCommandedMuted)
             {
+                AppMetrics.StateFramesSuppressed.Add(1);
                 return;
             }
         }
@@ -625,7 +667,10 @@ public sealed class BridgeHost : IDisposable
         {
             try
             {
-                await server.SendAsync(new StateFrame(state.VolumePercent, state.Muted)).ConfigureAwait(false);
+                if (await server.SendAsync(new StateFrame(state.VolumePercent, state.Muted)).ConfigureAwait(false))
+                {
+                    AppMetrics.StateFramesPublished.Add(1);
+                }
             }
             catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
             {
@@ -649,7 +694,10 @@ public sealed class BridgeHost : IDisposable
 
         try
         {
-            _ = server.SendAsync(new StateFrame(state.VolumePercent, state.Muted)).GetAwaiter().GetResult();
+            if (server.SendAsync(new StateFrame(state.VolumePercent, state.Muted)).GetAwaiter().GetResult())
+            {
+                AppMetrics.StateFramesPublished.Add(1);
+            }
         }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
         {

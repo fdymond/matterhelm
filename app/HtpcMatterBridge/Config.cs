@@ -186,6 +186,9 @@ public sealed class BridgeConfig
 
     /// <summary>pino log level handed to the sidecar.</summary>
     public string LogLevel { get; set; } = "info";
+
+    /// <summary>Minimum level of the tray app's own log (ADR-006 §2). Applied live via <c>Log.MinimumLevel</c> — no restart.</summary>
+    public string AppLogLevel { get; set; } = "info";
 }
 
 /// <summary>Payload for <see cref="Config.Changed"/>: the config before and after a load/reload.</summary>
@@ -368,6 +371,7 @@ public sealed class Config
             ApplyBridgeEnabled(root, result);
             ApplyMdnsInterface(root, result);
             ApplyLogLevel(root, result);
+            ApplyAppLogLevel(root, result);
         }
 
         return result;
@@ -793,8 +797,33 @@ public sealed class Config
         _log("WARN", $"config.json \"logLevel\" must be a non-empty string; using default \"{result.LogLevel}\".");
     }
 
+    private void ApplyAppLogLevel(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("appLogLevel", out JsonElement element))
+        {
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.String && element.GetString() is { Length: > 0 } value)
+        {
+            if (KnownAppLogLevels.Contains(value))
+            {
+                result.AppLogLevel = value;
+                return;
+            }
+
+            _log("WARN", $"config.json \"appLogLevel\" \"{value}\" is not one of {string.Join("/", KnownAppLogLevels)}; using default \"{result.AppLogLevel}\".");
+            return;
+        }
+
+        _log("WARN", $"config.json \"appLogLevel\" must be a non-empty string; using default \"{result.AppLogLevel}\".");
+    }
+
     /// <summary>The pino levels the bridge sidecar accepts (its parser is strict — bridge/src/config.ts).</summary>
     private static readonly string[] KnownLogLevels = ["trace", "debug", "info", "warn", "error", "fatal", "silent"];
+
+    /// <summary>The tray app's own log levels (ADR-006 §2; must stay parseable by <c>Log.ParseLevel</c>).</summary>
+    private static readonly string[] KnownAppLogLevels = ["debug", "info", "warn", "error"];
 
     private static string ToWireName(PowerOffAction action) => action switch
     {
