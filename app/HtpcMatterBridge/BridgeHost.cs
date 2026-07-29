@@ -166,7 +166,15 @@ public sealed class BridgeHost : IDisposable
     // window, is quantization noise — Google already knows what it set.
     // Larger deltas (real local changes, media-key steps) still publish.
     private const int VolumeEchoDeadBandPercent = 1;
-    private const int VolumeEchoWindowMilliseconds = 2000;
+    private const int VolumeEchoWindowMilliseconds = 3000;
+
+    // Publish debounce (owner bug report round 2): CoreAudio fires a change
+    // callback for EVERY driver step during a Home-app slider drag; publishing
+    // each one raced the command stream in both directions (tray → sidecar →
+    // Matter attribute → hub → app) and read as lag + bouncing. Publishes now
+    // coalesce: only the LATEST state after a quiet gap goes out, and the echo
+    // dead-band is applied at flush time against the latest command.
+    private const int VolumePublishDebounceMilliseconds = 250;
 
     private readonly Config _config;
     private readonly IActionExecutor _executor;
@@ -191,6 +199,11 @@ public sealed class BridgeHost : IDisposable
     private int? _lastCommandedVolume;
     private bool _lastCommandedMuted;
     private long _lastVolumeCommandTicks;
+
+    // Debounced-publish state (guarded by _publishGate; see the constants above).
+    private readonly Lock _publishGate = new();
+    private System.Threading.Timer? _publishTimer;
+    private VolumeState? _pendingPublish;
 
     /// <summary>Serializes StateChanged delivery; see RecomputeState. Never taken while holding _gate.</summary>
     private readonly Lock _notifyGate = new();
@@ -320,6 +333,12 @@ public sealed class BridgeHost : IDisposable
         }
 
         _executor.VolumeChanged -= OnVolumeChanged;
+        lock (_publishGate)
+        {
+            _publishTimer?.Dispose();
+            _publishTimer = null;
+            _pendingPublish = null;
+        }
     }
 
     private static void DefaultLog(string level, string message)
@@ -553,15 +572,40 @@ public sealed class BridgeHost : IDisposable
     /// <summary>Arrives on an audio-service thread — publish from the pool, never block the callback on the socket.</summary>
     private void OnVolumeChanged(object? sender, VolumeState state)
     {
+        // Never blocks the audio-service callback thread: just coalesce the
+        // latest state and (re)arm the quiet-gap timer.
+        lock (_publishGate)
+        {
+            _pendingPublish = state;
+            _publishTimer ??= new System.Threading.Timer(_ => FlushPendingPublish());
+            _publishTimer.Change(VolumePublishDebounceMilliseconds, Timeout.Infinite);
+        }
+    }
+
+    private void FlushPendingPublish()
+    {
+        VolumeState state;
+        lock (_publishGate)
+        {
+            if (_pendingPublish is not VolumeState pending)
+            {
+                return;
+            }
+
+            state = pending;
+            _pendingPublish = null;
+        }
+
         IpcServer? server;
         lock (_gate)
         {
             server = _running ? _server : null;
 
-            // Echo dead-band: a read-back within ±1 % of the value a Google
-            // command just set (same mute state, short window) is driver
-            // quantization noise — publishing it makes the Home app bounce
-            // its own slider. Real changes exceed the band or arrive later.
+            // Echo dead-band, applied to the settled value: a read-back within
+            // ±1 % of the value a Google command just set (same mute state,
+            // short window) is driver quantization noise — publishing it makes
+            // the Home app bounce its own slider. Real changes exceed the band
+            // or arrive after the window.
             if (server is not null
                 && _lastCommandedVolume is int commanded
                 && Environment.TickCount64 - _lastVolumeCommandTicks <= VolumeEchoWindowMilliseconds
