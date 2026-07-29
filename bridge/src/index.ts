@@ -21,9 +21,9 @@ import type { IpcClientState } from "./ipc/client.js";
 import { PROTOCOL_VERSION } from "./ipc/protocol.js";
 import type { TrayFrame } from "./ipc/protocol.js";
 import { makeLogger } from "./log.js";
-import { clusterWriteToAction } from "./mapping/actions.js";
 import { stateFrameToSpeakerAttributes } from "./mapping/state.js";
 import { createBridge } from "./matter/bridge.js";
+import { PendingAckTimings, makeAckTimingObserver, makeActionDispatcher } from "./timing.js";
 
 /** Hard-exit ceiling for graceful shutdown (BLUEPRINT §2.1 stdin tether). */
 const SHUTDOWN_TIMEOUT_MS = 5000;
@@ -71,17 +71,27 @@ async function main(): Promise<void> {
     },
   });
 
+  // ADR-006 §1 per-action timing: cluster write -> WS send elapsed, and
+  // send -> ack latency, both keyed by the action frame's uuid `id`.
+  const ackTimings = new PendingAckTimings();
+  const observeAck = makeAckTimingObserver({ logger, timings: ackTimings });
+
   const bridgeHandle = await createBridge({
     storageDir: config.storageDir,
     endpoints: config.endpoints,
+    logger,
+    matterLogLevel: config.matterLogLevel,
+    ...(config.matterLogFacilities === undefined
+      ? {}
+      : { matterLogFacilities: config.matterLogFacilities }),
     ...(config.matterPort === undefined ? {} : { port: config.matterPort }),
     ...(config.mdnsInterface === undefined ? {} : { mdnsInterface: config.mdnsInterface }),
-    onClusterWrite: (write) => {
-      const action = clusterWriteToAction(write, randomUUID());
-      if (action !== null) {
-        client.send(action);
-      }
-    },
+    onClusterWrite: makeActionDispatcher({
+      send: (frame) => client.send(frame),
+      logger,
+      timings: ackTimings,
+      newId: randomUUID,
+    }),
   });
 
   // One line per constructed endpoint: the audit trail that the ADR-004
@@ -130,6 +140,7 @@ async function main(): Promise<void> {
       { evt: "ipc.ack", id: frame.id, ok: frame.ok, error: frame.ok ? undefined : frame.error },
       "tray app ack",
     );
+    observeAck(frame);
   };
   handlers.onStateChange = (state) => {
     if (state === "connected") {

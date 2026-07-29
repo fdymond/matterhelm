@@ -14,13 +14,28 @@
  * adapter therefore supports ONE active {@link MatterNode} per process —
  * {@link MatterNode.create} throws if a previously created node has not been
  * closed. That matches the product shape (one sidecar = one bridge node) and
- * keeps the global mutation in a single, documented place.
+ * keeps the global mutation in a single, documented place. The matter.js
+ * `Logger` statics mutated by {@link MatterNode.create} (ADR-006 §1:
+ * destination replacement + levels) are process-global in the same way and,
+ * like the environment vars, are not restored on close — a closing node still
+ * logs, and the next node in this process reinstalls them anyway.
  */
-import { Endpoint, Environment, ServerNode, VendorId } from "@matter/main";
+import {
+  Endpoint,
+  Environment,
+  LogDestination,
+  LogFormat,
+  Logger,
+  ServerNode,
+  VendorId,
+} from "@matter/main";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
 import { SpeakerDevice } from "@matter/main/devices/speaker";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
+
+import { makeMatterLogWriter, wireSessionObservability } from "./diagnostics.js";
+import type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
 /** Pairing codes in protocol vocabulary (ipc `pairing` frame field names). */
 export interface PairingCodes {
@@ -66,6 +81,18 @@ export interface MatterNodeOptions {
   serialNumber: string;
   /** Must differ from `serialNumber` (BLUEPRINT §2.1 facts block). */
   uniqueId: string;
+  /**
+   * Diagnostics seam (ADR-006 §1). When present, matter.js's console log
+   * destination is replaced with one forwarding every line to this logger as
+   * `{evt:"matter.log", facility, ...}` events, and session/subscription
+   * lifecycle is logged as `{evt:"matter.session"|"matter.subscription"}`.
+   * When absent (tests, smoke script) matter.js keeps its console logging.
+   */
+  logger?: DiagnosticsLogger;
+  /** matter.js global log level (`Logger.level`); unset = matter.js default. */
+  matterLogLevel?: MatterLogLevel;
+  /** Per-facility level overrides (`Logger.facilityLevels`); unset = none. */
+  matterLogFacilities?: Readonly<Record<string, MatterLogLevel>>;
 }
 
 const SpeakerEndpointType = SpeakerDevice.with(BridgedDeviceBasicInformationServer);
@@ -76,6 +103,37 @@ const PlugEndpointType = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformatio
  * doc. Claimed by {@link MatterNode.create}, released by {@link MatterNode.close}.
  */
 let environmentClaimed = false;
+
+/**
+ * Applies the ADR-006 §1 logging configuration to matter.js's process-global
+ * `Logger` statics. Levels are applied whenever configured; the console
+ * destination is replaced only when a pino sink is present — raw matter.js
+ * console lines must never interleave with pino's NDJSON on stdout.
+ *
+ * The replacement destination reuses matter.js's default `add` (filtering by
+ * `level`/`facilityLevels` happens upstream in `Logger`), formats with the
+ * PLAIN formatter over `message.values` ONLY — so the text carries no
+ * timestamp/level/facility preamble and no ANSI codes; those fields travel
+ * structured instead — and writes one pino event per line.
+ */
+function configureMatterLogging(options: MatterNodeOptions): void {
+  if (options.matterLogLevel !== undefined) {
+    Logger.level = options.matterLogLevel;
+  }
+  if (options.matterLogFacilities !== undefined) {
+    // Spread: matter.js's setter converts the map's values in place.
+    Logger.facilityLevels = { ...options.matterLogFacilities };
+  }
+  if (options.logger !== undefined) {
+    const plain = LogFormat(LogFormat.PLAIN);
+    Logger.destinations.pino = LogDestination({
+      name: "pino",
+      format: (message) => plain(message.values),
+      write: makeMatterLogWriter(options.logger),
+    });
+    delete Logger.destinations.default;
+  }
+}
 
 /** The BridgedDeviceBasicInformation block every bridged endpoint carries. */
 function bridgedBasicInformation(info: BridgedDeviceInfo): {
@@ -216,6 +274,9 @@ export class MatterNode {
           "so only one node per process is supported; close() the existing node first",
       );
     }
+    // Before ServerNode.create so storage/network boot logs already flow
+    // through the pino destination (ADR-006 §1).
+    configureMatterLogging(options);
     Environment.default.vars.set("storage.path", options.storageDir);
     Environment.default.vars.set("runtime.signals", false);
     if (options.mdnsInterface !== undefined) {
@@ -239,6 +300,28 @@ export class MatterNode {
         uniqueId: options.uniqueId,
       },
     });
+    if (options.logger !== undefined) {
+      // Session observability (ADR-006 §1): matter.js 0.17.7's node-level
+      // `SessionsBehavior` events, adapted to the plain-data seam.
+      const sessions = server.events.sessions;
+      wireSessionObservability(
+        {
+          opened: (cb) => {
+            sessions.opened.on(cb);
+          },
+          closed: (cb) => {
+            sessions.closed.on(cb);
+          },
+          subscriptionAdded: (cb) => {
+            sessions.subscriptionAdded.on(cb);
+          },
+          subscriptionsChanged: (cb) => {
+            sessions.subscriptionsChanged.on(cb);
+          },
+        },
+        options.logger,
+      );
+    }
     const aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator" });
     await server.add(aggregator);
     environmentClaimed = true;

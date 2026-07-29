@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadConfig, parseConfig } from "./config.js";
+import { defaultMatterLogLevel, loadConfig, parseConfig } from "./config.js";
 
 const TOKEN = "session-token-abc123";
 const APPDATA = "C:\\Users\\test\\AppData\\Roaming";
@@ -21,6 +21,7 @@ describe("parseConfig", () => {
       ipcToken: TOKEN,
       storageDir: `${APPDATA}\\HtpcMatterBridge\\matter`,
       logLevel: "info",
+      matterLogLevel: "notice",
       endpoints: {
         speaker: { name: "HTPC Speaker", enabled: true },
         playPause: { name: "HTPC Play Pause", enabled: true },
@@ -34,10 +35,11 @@ describe("parseConfig", () => {
     expect(config.matterPort).toBeUndefined();
   });
 
-  it("has no own mdnsInterface/matterPort keys when unset (exactOptionalPropertyTypes contract)", () => {
+  it("has no own mdnsInterface/matterPort/matterLogFacilities keys when unset (exactOptionalPropertyTypes contract)", () => {
     const config = parseConfig(baseEnv());
     expect(Object.hasOwn(config, "mdnsInterface")).toBe(false);
     expect(Object.hasOwn(config, "matterPort")).toBe(false);
+    expect(Object.hasOwn(config, "matterLogFacilities")).toBe(false);
   });
 
   describe("HTPC_BRIDGE_IPC_TOKEN", () => {
@@ -142,6 +144,116 @@ describe("parseConfig", () => {
       expect(() => {
         parseConfig(baseEnv({ HTPC_BRIDGE_LOG_LEVEL: "verbose" }));
       }).toThrow(/HTPC_BRIDGE_LOG_LEVEL/);
+    });
+  });
+
+  describe("HTPC_BRIDGE_MATTER_LOG_LEVEL (ADR-006 §1)", () => {
+    it.each(["debug", "info", "notice", "warn", "error", "fatal"])(
+      "accepts matter.js level %s",
+      (level) => {
+        expect(parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_LEVEL: level })).matterLogLevel).toBe(
+          level,
+        );
+      },
+    );
+
+    it.each([
+      // pino-only names are NOT matter.js levels — accepting them silently
+      // would hide that matter.js can neither trace nor go fully silent.
+      "trace",
+      "silent",
+      "verbose",
+      "NOTICE",
+    ])("rejects %s as fatal", (level) => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_LEVEL: level }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_LEVEL/);
+    });
+
+    it("treats an empty string like unset (derived default)", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_LEVEL: "" })).matterLogLevel).toBe(
+        "notice",
+      );
+    });
+
+    it.each([
+      ["trace", "debug"],
+      ["debug", "debug"],
+      ["info", "notice"],
+      ["warn", "warn"],
+      ["error", "error"],
+      ["fatal", "fatal"],
+      ["silent", "fatal"],
+    ] as const)("defaults from our logLevel %s to matter.js %s when unset", (pino, matter) => {
+      expect(defaultMatterLogLevel(pino)).toBe(matter);
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_LOG_LEVEL: pino })).matterLogLevel).toBe(matter);
+    });
+  });
+
+  describe("HTPC_BRIDGE_MATTER_LOG_FACILITIES (ADR-006 §1)", () => {
+    it("is undefined when unset", () => {
+      expect(parseConfig(baseEnv()).matterLogFacilities).toBeUndefined();
+    });
+
+    it("treats an empty string as unset", () => {
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "" })).matterLogFacilities,
+      ).toBeUndefined();
+    });
+
+    it("parses a facility->level map verbatim", () => {
+      const facilities = { MdnsServer: "debug", SessionManager: "info" };
+      const config = parseConfig(
+        baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: JSON.stringify(facilities) }),
+      );
+      expect(config.matterLogFacilities).toEqual(facilities);
+    });
+
+    it("accepts an empty object (no overrides)", () => {
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "{}" })).matterLogFacilities,
+      ).toEqual({});
+    });
+
+    it("is fatal (not silent) on malformed JSON", () => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "{not json" }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES/);
+    });
+
+    it.each([
+      ["a JSON array", "[]"],
+      ["a JSON string", '"debug"'],
+      ["a JSON number", "5"],
+      ["JSON null", "null"],
+    ])("rejects %s (not an object)", (_desc, raw) => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: raw }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES/);
+    });
+
+    it("rejects an unknown level value", () => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: '{"MdnsServer":"verbose"}' }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES/);
+    });
+
+    it("rejects a pino-only level value (trace)", () => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: '{"MdnsServer":"trace"}' }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES/);
+    });
+
+    it("rejects a non-string level value", () => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: '{"MdnsServer":0}' }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES/);
+    });
+
+    it("rejects an empty facility name", () => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: '{"":"debug"}' }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES/);
     });
   });
 

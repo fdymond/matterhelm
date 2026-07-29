@@ -21,6 +21,8 @@ import { z } from "zod";
 
 import { CustomCommandKeySchema } from "./ipc/protocol.js";
 import type { BuiltinEndpointKey, EndpointsConfig } from "./matter/devices.js";
+import { MATTER_LOG_LEVELS } from "./matter/diagnostics.js";
+import type { MatterLogLevel } from "./matter/diagnostics.js";
 
 const PORT_MIN = 1024;
 const PORT_MAX = 65535;
@@ -39,6 +41,17 @@ const DEFAULT_BUILTIN_NAMES: Readonly<Record<BuiltinEndpointKey, string>> = {
 /** pino's own level vocabulary, incl. `silent` (BLUEPRINT §2.3). */
 const LogLevelSchema = z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
 export type PinoLevel = z.infer<typeof LogLevelSchema>;
+
+/** matter.js's level vocabulary (ADR-006 §1; matter/diagnostics.ts owns it). */
+const MatterLogLevelSchema = z.enum(MATTER_LOG_LEVELS);
+
+/**
+ * `HTPC_BRIDGE_MATTER_LOG_FACILITIES` value shape: facility name -> matter.js
+ * level. Facility names are matter.js's own logger names (e.g. `MdnsServer`,
+ * `SessionManager`) — free-form here beyond non-emptiness, since the set is
+ * a matter.js internal that changes between releases.
+ */
+const MatterLogFacilitiesSchema = z.record(z.string().min(1), MatterLogLevelSchema);
 
 /**
  * One built-in entry inside `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2). The tray
@@ -82,6 +95,17 @@ export interface Config {
   storageDir: string;
   /** `HTPC_BRIDGE_LOG_LEVEL`; default `"info"`. */
   logLevel: PinoLevel;
+  /**
+   * `HTPC_BRIDGE_MATTER_LOG_LEVEL` (ADR-006 §1) — matter.js's global log
+   * level; default derived from {@link logLevel} via
+   * {@link defaultMatterLogLevel}.
+   */
+  matterLogLevel: MatterLogLevel;
+  /**
+   * `HTPC_BRIDGE_MATTER_LOG_FACILITIES` (ADR-006 §1) — per-facility matter.js
+   * level overrides (JSON object facility -> level); unset = none.
+   */
+  matterLogFacilities?: Readonly<Record<string, MatterLogLevel>>;
   /**
    * `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2); default: every built-in enabled
    * with its "HTPC …" name, no custom commands.
@@ -149,6 +173,82 @@ function parseLogLevel(raw: string | undefined): PinoLevel {
   if (!result.success) {
     throw new Error(
       `HTPC_BRIDGE_LOG_LEVEL must be one of ${LogLevelSchema.options.join(", ")}, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return result.data;
+}
+
+/**
+ * The matter.js global level implied by our own log level when
+ * `HTPC_BRIDGE_MATTER_LOG_LEVEL` is unset (ADR-006 §1). Deliberately one
+ * notch quieter around the default: matter.js INFO narrates every exchange,
+ * so a bridge running at pino `info` gets matter.js `notice` (state changes
+ * and problems, not chatter). pino `silent` maps to `fatal` — the quietest
+ * matter.js level; the forwarded events land in a silent pino logger and are
+ * dropped there anyway.
+ */
+export function defaultMatterLogLevel(logLevel: PinoLevel): MatterLogLevel {
+  switch (logLevel) {
+    case "trace":
+    case "debug":
+      return "debug";
+    case "info":
+      return "notice";
+    case "warn":
+      return "warn";
+    case "error":
+      return "error";
+    case "fatal":
+    case "silent":
+      return "fatal";
+  }
+}
+
+function parseMatterLogLevel(raw: string | undefined, logLevel: PinoLevel): MatterLogLevel {
+  if (raw === undefined || raw === "") {
+    return defaultMatterLogLevel(logLevel);
+  }
+  const result = MatterLogLevelSchema.safeParse(raw);
+  if (!result.success) {
+    throw new Error(
+      `HTPC_BRIDGE_MATTER_LOG_LEVEL must be one of ${MATTER_LOG_LEVELS.join(", ")} ` +
+        `(matter.js's level names), got ${JSON.stringify(raw)}`,
+    );
+  }
+  return result.data;
+}
+
+/**
+ * Unset/empty = no per-facility overrides; malformed JSON, a non-object, an
+ * empty facility name, or an unknown level are all fatal, never silent —
+ * same contract as `HTPC_BRIDGE_ENDPOINTS` (ADR-006 §1).
+ */
+function parseMatterLogFacilities(
+  raw: string | undefined,
+): Readonly<Record<string, MatterLogLevel>> | undefined {
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error("HTPC_BRIDGE_MATTER_LOG_FACILITIES is not valid JSON");
+  }
+  if (typeof json !== "object" || json === null || Array.isArray(json)) {
+    throw new Error(
+      "HTPC_BRIDGE_MATTER_LOG_FACILITIES must be a JSON object mapping facility names " +
+        `to one of ${MATTER_LOG_LEVELS.join(", ")}`,
+    );
+  }
+  const result = MatterLogFacilitiesSchema.safeParse(json);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(
+      "HTPC_BRIDGE_MATTER_LOG_FACILITIES must be a JSON object mapping facility names " +
+        `to one of ${MATTER_LOG_LEVELS.join(", ")}: ${issues}`,
     );
   }
   return result.data;
@@ -233,12 +333,16 @@ function parseMdnsInterface(raw: string | undefined): string | undefined {
 export function parseConfig(env: Record<string, string | undefined>): Config {
   const mdnsInterface = parseMdnsInterface(env.HTPC_BRIDGE_MDNS_INTERFACE);
   const matterPort = parsePortEnv(env.HTPC_BRIDGE_MATTER_PORT, "HTPC_BRIDGE_MATTER_PORT");
+  const logLevel = parseLogLevel(env.HTPC_BRIDGE_LOG_LEVEL);
+  const matterLogFacilities = parseMatterLogFacilities(env.HTPC_BRIDGE_MATTER_LOG_FACILITIES);
   return {
     ipcPort: parsePortEnv(env.HTPC_BRIDGE_IPC_PORT, "HTPC_BRIDGE_IPC_PORT") ?? DEFAULT_IPC_PORT,
     ipcToken: parseToken(env.HTPC_BRIDGE_IPC_TOKEN),
     storageDir: parseStorageDir(env.HTPC_BRIDGE_STORAGE_DIR, env.APPDATA),
-    logLevel: parseLogLevel(env.HTPC_BRIDGE_LOG_LEVEL),
+    logLevel,
+    matterLogLevel: parseMatterLogLevel(env.HTPC_BRIDGE_MATTER_LOG_LEVEL, logLevel),
     endpoints: parseEndpoints(env.HTPC_BRIDGE_ENDPOINTS),
+    ...(matterLogFacilities === undefined ? {} : { matterLogFacilities }),
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),
   };
