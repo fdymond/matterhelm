@@ -38,9 +38,11 @@ import { MatterNode } from "./adapter.js";
 import type { PairingCodes, PlugHandle, SpeakerHandle } from "./adapter.js";
 import { bridgeIdentity, endpointSpecs } from "./devices.js";
 import type { BridgedDeviceKind, BuiltinEndpointKey, EndpointsConfig } from "./devices.js";
+import type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
 export type { PairingCodes } from "./adapter.js";
 export type { BuiltinEndpointKey, EndpointsConfig, MomentaryEndpointKey } from "./devices.js";
+export type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
 /** §2.2: momentary endpoints auto-reset to `off` this long after `on`. */
 export const MOMENTARY_RESET_MS = 800;
@@ -72,6 +74,16 @@ export interface BridgeOptions {
   endpoints: EndpointsConfig;
   /** Pins the mDNS interface for multi-NIC hosts; see `./adapter.js`. */
   mdnsInterface?: string;
+  /**
+   * Diagnostics seam (ADR-006 §1; see `MatterNodeOptions.logger`): matter.js
+   * logs become `{evt:"matter.log"}` pino events and session lifecycle is
+   * logged. Unset (tests, smoke script) = matter.js console logging.
+   */
+  logger?: DiagnosticsLogger;
+  /** matter.js global log level; unset = matter.js's default. */
+  matterLogLevel?: MatterLogLevel;
+  /** Per-facility matter.js level overrides; unset = none. */
+  matterLogFacilities?: Readonly<Record<string, MatterLogLevel>>;
   /** Defaults to {@link DEFAULT_VENDOR_ID} (test VID, ADR-002). */
   vendorId?: number;
   /** Defaults to {@link DEFAULT_PRODUCT_ID} (test PID, ADR-002). */
@@ -253,6 +265,11 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     storageDir: options.storageDir,
     ...(options.port === undefined ? {} : { port: options.port }),
     ...(options.mdnsInterface === undefined ? {} : { mdnsInterface: options.mdnsInterface }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.matterLogLevel === undefined ? {} : { matterLogLevel: options.matterLogLevel }),
+    ...(options.matterLogFacilities === undefined
+      ? {}
+      : { matterLogFacilities: options.matterLogFacilities }),
     vendorId: options.vendorId ?? DEFAULT_VENDOR_ID,
     productId: options.productId ?? DEFAULT_PRODUCT_ID,
     vendorName: VENDOR_NAME,
