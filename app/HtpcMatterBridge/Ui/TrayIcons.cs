@@ -65,7 +65,14 @@ public static class TrayIcons
         }
     }
 
-    /// <summary>Renders one state's icon into a fresh 32bpp bitmap of the given square size.</summary>
+    /// <summary>
+    /// Renders one state's icon into a fresh 32bpp bitmap of the given square
+    /// size. Owner-specified state language: the glyph itself carries the
+    /// state (no badge dot) — a LARGE Matter tri-node with a house at its
+    /// center while the bridge is not operating (white/theme silhouette =
+    /// disabled, amber = enabling/connecting, red = faulted), flipping to a
+    /// green house with the Matter motif inside once connected.
+    /// </summary>
     public static Bitmap Render(BridgeState state, int size, bool darkTaskbar)
     {
         var bitmap = new Bitmap(size, size, PixelFormat.Format32bppArgb);
@@ -74,15 +81,97 @@ public static class TrayIcons
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.Clear(Color.Transparent);
 
-        // Disabled reads as "present but off": dimmed glyph, muted dot.
-        int glyphAlpha = state == BridgeState.Disabled ? 140 : 255;
-        Color glyph = darkTaskbar
-            ? Color.FromArgb(glyphAlpha, 245, 245, 245)
-            : Color.FromArgb(glyphAlpha, 32, 32, 32);
+        Color glyph = state switch
+        {
+            BridgeState.Running => DotColors[BridgeState.Running],
+            BridgeState.Connected => DotColors[BridgeState.Connected],
+            BridgeState.Faulted => DotColors[BridgeState.Faulted],
+            _ => darkTaskbar ? Color.FromArgb(245, 245, 245) : Color.FromArgb(32, 32, 32),
+        };
 
-        DrawHouseWithMatterKnockout(g, size, glyph);
-        DrawStatusDot(g, size, DotColors[state], darkTaskbar);
+        if (state == BridgeState.Connected)
+        {
+            DrawHouseWithMatterKnockout(g, size, glyph);
+        }
+        else
+        {
+            DrawMatterWithHouseCenter(g, size, glyph);
+        }
+
         return bitmap;
+    }
+
+    /// <summary>
+    /// The "not operating" composition: a large Matter tri-node (three
+    /// satellite nodes linked to the center) whose center is a small filled
+    /// house silhouette instead of a node.
+    /// </summary>
+    private static void DrawMatterWithHouseCenter(Graphics g, int size, Color glyph)
+    {
+        float s = size;
+        var center = new PointF(0.50f * s, 0.55f * s);
+        float arm = 0.335f * s;
+        float nodeR = Math.Max(1.8f, 0.115f * s);
+        float lineW = Math.Max(1.4f, 0.085f * s);
+
+        using var linePen = new Pen(glyph, lineW) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var nodeBrush = new SolidBrush(glyph);
+        for (int i = 0; i < 3; i++)
+        {
+            double angle = (-90 + (i * 120)) * Math.PI / 180.0;
+            var satellite = new PointF(
+                center.X + (float)(arm * Math.Cos(angle)),
+                center.Y + (float)(arm * Math.Sin(angle)));
+            g.DrawLine(linePen, center, satellite);
+            g.FillEllipse(nodeBrush, satellite.X - nodeR, satellite.Y - nodeR, 2 * nodeR, 2 * nodeR);
+        }
+
+        // House at the hub: knocked out of a glyph-colored disc so it reads in
+        // taskbar color. The house must sit clearly INSIDE the disc — at equal
+        // widths its corners fall outside the circle and the shape muddles.
+        float discR = 0.235f * s;
+        g.FillEllipse(nodeBrush, center.X - discR, center.Y - discR, 2 * discR, 2 * discR);
+        DrawHouseSilhouette(
+            g, new PointF(center.X, center.Y + (0.01f * s)), 0.30f * s, glyph, knockout: true);
+    }
+
+    /// <summary>
+    /// A minimal house (roof + body) centered at <paramref name="center"/>,
+    /// <paramref name="width"/> wide. With <paramref name="knockout"/> the
+    /// house is punched OUT of what's beneath (used inside the center disc so
+    /// the house reads in taskbar color through the glyph).
+    /// </summary>
+    private static void DrawHouseSilhouette(Graphics g, PointF center, float width, Color glyph, bool knockout)
+    {
+        float w = width;
+        float h = w; // square-ish footprint reads best this small
+        float left = center.X - (w / 2f);
+        float top = center.Y - (h / 2f);
+        using var house = new GraphicsPath();
+        house.AddPolygon(
+        [
+            new PointF(center.X, top),
+            new PointF(left + w, top + (0.42f * h)),
+            new PointF(left + (0.84f * w), top + (0.42f * h)),
+            new PointF(left + (0.84f * w), top + h),
+            new PointF(left + (0.16f * w), top + h),
+            new PointF(left + (0.16f * w), top + (0.42f * h)),
+            new PointF(left, top + (0.42f * h)),
+        ]);
+
+        if (knockout)
+        {
+            CompositingMode previous = g.CompositingMode;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            using var hole = new SolidBrush(Color.Transparent);
+            g.FillPath(hole, house);
+            g.CompositingMode = previous;
+        }
+        else
+        {
+            using var brush = new SolidBrush(glyph);
+            g.FillPath(brush, house);
+        }
     }
 
     /// <summary>
@@ -149,27 +238,6 @@ public static class TrayIcons
         }
 
         g.CompositingMode = previous;
-    }
-
-    /// <summary>
-    /// Bottom-right status dot with a taskbar-toned separation ring — the
-    /// Windows-11-badge way of carrying state without recoloring the glyph.
-    /// </summary>
-    private static void DrawStatusDot(Graphics g, int size, Color dot, bool darkTaskbar)
-    {
-        float s = size;
-        float r = 0.21f * s;
-        float cx = s - r - (0.03f * s);
-        float cy = s - r - (0.03f * s);
-        Color ring = darkTaskbar ? Color.FromArgb(32, 32, 32) : Color.FromArgb(238, 238, 238);
-
-        // Ring first (slightly larger disc), then the colored dot on top; the
-        // ring visually separates the badge from the glyph behind it.
-        using var ringBrush = new SolidBrush(ring);
-        float ringR = r + Math.Max(1.2f, 0.055f * s);
-        g.FillEllipse(ringBrush, cx - ringR, cy - ringR, 2 * ringR, 2 * ringR);
-        using var dotBrush = new SolidBrush(dot);
-        g.FillEllipse(dotBrush, cx - r, cy - r, 2 * r, 2 * r);
     }
 
     /// <summary>Clones the bitmap into a GDI+-owned <see cref="Icon"/> and destroys the intermediate native handle.</summary>
