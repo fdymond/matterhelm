@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defaultMatterLogLevel, loadConfig, parseConfig } from "./config.js";
@@ -19,7 +21,9 @@ describe("parseConfig", () => {
     expect(config).toEqual({
       ipcPort: 39531,
       ipcToken: TOKEN,
-      storageDir: `${APPDATA}\\HtpcMatterBridge\\matter`,
+      // join(), not a literal: CI runs this suite on ubuntu too, where the
+      // separator is "/" (the product itself is Windows-only).
+      storageDir: join(APPDATA, "HtpcMatterBridge", "matter"),
       logLevel: "info",
       matterLogLevel: "notice",
       endpoints: {
@@ -122,7 +126,7 @@ describe("parseConfig", () => {
 
     it("derives %APPDATA%\\HtpcMatterBridge\\matter when unset", () => {
       const config = parseConfig(baseEnv({ APPDATA: "D:\\CustomAppData" }));
-      expect(config.storageDir).toBe("D:\\CustomAppData\\HtpcMatterBridge\\matter");
+      expect(config.storageDir).toBe(join("D:\\CustomAppData", "HtpcMatterBridge", "matter"));
     });
 
     it("is fatal when both the override and APPDATA are unavailable", () => {
