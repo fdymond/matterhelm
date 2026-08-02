@@ -81,9 +81,7 @@ async function main(): Promise<void> {
     endpoints: config.endpoints,
     logger,
     matterLogLevel: config.matterLogLevel,
-    ...(config.matterLogFacilities === undefined
-      ? {}
-      : { matterLogFacilities: config.matterLogFacilities }),
+    matterLogFacilities: config.matterLogFacilities,
     ...(config.matterPort === undefined ? {} : { port: config.matterPort }),
     ...(config.mdnsInterface === undefined ? {} : { mdnsInterface: config.mdnsInterface }),
     onClusterWrite: makeActionDispatcher({

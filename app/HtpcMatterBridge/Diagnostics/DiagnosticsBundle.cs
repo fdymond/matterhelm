@@ -53,6 +53,11 @@ public static class DiagnosticsBundle
         WriteManifest(archive);
         if (File.Exists(config))
         {
+            // Documented carve-out (S5-R F3): config.json is included VERBATIM.
+            // It is user-authored and may contain user-chosen paths (e.g. a
+            // custom launch command under C:\Users\<name>\...) — the
+            // username-scrubbing guarantee applies to the manifest and logs,
+            // not to content the user wrote into their own config.
             AddFile(archive, config, "config.json");
         }
 
@@ -62,12 +67,41 @@ public static class DiagnosticsBundle
             {
                 foreach (string file in Directory.EnumerateFiles(logsDir, pattern).Order(StringComparer.OrdinalIgnoreCase))
                 {
-                    AddFile(archive, file, "logs/" + Path.GetFileName(file));
+                    AddRedactedTextFile(archive, file, "logs/" + Path.GetFileName(file));
                 }
             }
         }
 
         return zipPath;
+    }
+
+    // S5-R F1: matter.js's Commissioning facility historically logged the raw
+    // setup passcode / manual pairing code / QR payload, and those lines can
+    // persist in app logs written BEFORE the bridge-side suppression landed
+    // (or with a user override re-enabling that facility). Scrub commissioning
+    // credentials from bundled logs regardless of how they got there.
+    private static readonly (string Pattern, string Replacement)[] LogRedactions =
+    [
+        (@"passcode:\s*\d+", "passcode: [redacted]"),
+        (@"manual pairing code:\s*\d+", "manual pairing code: [redacted]"),
+        (@"MT:[A-Z0-9.\-]{5,}", "MT:[redacted]"),
+    ];
+
+    private static void AddRedactedTextFile(ZipArchive archive, string path, string entryName)
+    {
+        // FileShare.ReadWrite: the file may gain lines mid-export — a snapshot
+        // mid-append is fine.
+        using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(source);
+        string text = reader.ReadToEnd();
+        foreach ((string pattern, string replacement) in LogRedactions)
+        {
+            text = System.Text.RegularExpressions.Regex.Replace(text, pattern, replacement);
+        }
+
+        ZipArchiveEntry entry = archive.CreateEntry(entryName);
+        using var writer = new StreamWriter(entry.Open());
+        writer.Write(text);
     }
 
     private static void WriteManifest(ZipArchive archive)
