@@ -16,6 +16,9 @@ export default defineConfig({
         "src/mapping/**": { lines: 90, perFile: true },
         "src/ipc/protocol.ts": { lines: 90 },
         "src/config.ts": { lines: 90 },
+        // S5-R F2: the S5-1 pure modules are held to the same bar.
+        "src/timing.ts": { lines: 90 },
+        "src/matter/diagnostics.ts": { lines: 90 },
       },
     },
   },

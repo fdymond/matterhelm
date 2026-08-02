@@ -66,7 +66,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S5-1 ✅ (0.17.7 bump; session events unit-proven — live capture needs commissioning) | Bridge diagnostics: matter.js log-level/facility surfacing via env, session/subscription observability events into pino, per-action timing (cluster write → WS send) with correlation ids on frames | verify green; timing lines visible in a mock run | M | S5-0 | impl (Fable) |
 | S5-2 ✅ (incl. CopyInto OverlayPosition fix) | App diagnostics: per-action timing (frame recv → executed → acked), Meter counters (actions, acks, restarts, reconnects), runtime app log level in config+settings, "Export diagnostics" (zip logs+versions+env, token-redaction verified by test) | tests incl. redaction; timing visible in wired demo | M | S5-0 | impl (Fable) |
 | S5-3 ✅ (45% app gate at measured baseline; bridge per-file 90% proven to fire) | Coverage & validation in CI: C# coverage collection + threshold, bridge coverage job publishing summaries; both surfaced in Actions summary | CI green with coverage tables | S | S5-0 | impl (Sonnet) |
-| S5-R | Adversarial review of Sprint 5 (privacy: no token/PII in any diagnostic path; perf overhead of instrumentation) | Findings verified + fixed | S | S5-1..3 | review (Opus) |
+| S5-R ✅ (Opus: 1 HIGH passcode-in-bundle leak + 3 risks, all fixed with tests) | Adversarial review of Sprint 5 (privacy: no token/PII in any diagnostic path; perf overhead of instrumentation) | Findings verified + fixed | S | S5-1..3 | review (Opus) |
 
 ## Proposed (from agent reports, integrator-triaged)
 

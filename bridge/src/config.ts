@@ -103,9 +103,10 @@ export interface Config {
   matterLogLevel: MatterLogLevel;
   /**
    * `HTPC_BRIDGE_MATTER_LOG_FACILITIES` (ADR-006 §1) — per-facility matter.js
-   * level overrides (JSON object facility -> level); unset = none.
+   * level overrides (JSON object facility -> level), merged over
+   * {@link DEFAULT_MATTER_LOG_FACILITIES} (user entries win).
    */
-  matterLogFacilities?: Readonly<Record<string, MatterLogLevel>>;
+  matterLogFacilities: Readonly<Record<string, MatterLogLevel>>;
   /**
    * `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2); default: every built-in enabled
    * with its "HTPC …" name, no custom commands.
@@ -254,6 +255,20 @@ function parseMatterLogFacilities(
   return result.data;
 }
 
+/**
+ * Always-applied facility floor (S5-R finding F1): matter.js's Commissioning
+ * facility logs the RAW setup passcode, manual pairing code, and QR payload
+ * at NOTICE — which passes our default threshold, flows through the pino
+ * destination onto stdout, into the tray app's persisted log, and from there
+ * into the exportable diagnostics bundle. The pairing codes already reach
+ * the UI structured via the `pairing` IPC frame, so the log line is
+ * redundant — suppress below WARN by default. An explicit user override for
+ * `Commissioning` (e.g. during a pairing spike) wins over this default.
+ */
+export const DEFAULT_MATTER_LOG_FACILITIES: Readonly<Record<string, MatterLogLevel>> = {
+  Commissioning: "warn",
+};
+
 /** Every built-in enabled under its default name, no custom commands. */
 function defaultEndpoints(): EndpointsConfig {
   return {
@@ -342,7 +357,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     logLevel,
     matterLogLevel: parseMatterLogLevel(env.HTPC_BRIDGE_MATTER_LOG_LEVEL, logLevel),
     endpoints: parseEndpoints(env.HTPC_BRIDGE_ENDPOINTS),
-    ...(matterLogFacilities === undefined ? {} : { matterLogFacilities }),
+    matterLogFacilities: { ...DEFAULT_MATTER_LOG_FACILITIES, ...matterLogFacilities },
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),
   };

@@ -18,7 +18,22 @@ namespace HtpcMatterBridge.Tests;
 /// </summary>
 public static class DiagnosticsTests
 {
+    /// <summary>
+    /// Serialization collection for tests that mutate the process-global
+    /// <see cref="Log"/> state (directory/minimum level) — S5-R F4: running
+    /// them in parallel with any future static-<see cref="Log"/> user races
+    /// the redirected directory's recursive delete (the observed file-lock
+    /// flake).
+    /// </summary>
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public sealed class StaticLogState
+    {
+        /// <summary>Collection name for <see cref="CollectionAttribute"/> use.</summary>
+        public const string Name = "static-log-state";
+    }
+
     /// <summary>Redirects the static <see cref="Log"/> into a temp dir for the duration of one test, restoring the original directory and minimum level afterwards.</summary>
+    [Collection(StaticLogState.Name)]
     public sealed class LogLevels : IDisposable
     {
         private readonly string _dir;
@@ -277,6 +292,37 @@ public static class DiagnosticsTests
                     content.Contains(token, StringComparison.Ordinal),
                     $"bundle entry {entry.FullName} contains the live IPC token");
             }
+        }
+
+        [Fact]
+        public void BundledLogsAreScrubbedOfCommissioningCredentials()
+        {
+            // S5-R F1: matter.js's Commissioning facility logged the raw
+            // setup passcode/manual code/QR at NOTICE, and such lines can sit
+            // in logs written before the bridge-side suppression (or with a
+            // user facility override). The bundle must scrub them regardless.
+            File.WriteAllLines(
+                Path.Combine(_logsDir, "app-20260729.log"),
+                [
+                    "2026-07-29 10:00:00.000 [INFO] sidecar: device is uncommissioned passcode: 74308742 discriminator: 2495 manual pairing code: 22368645352",
+                    "2026-07-29 10:00:00.100 [INFO] sidecar: QR code URL: https://example.invalid/qrcode.html?data=MT:Y.K90SO527XL0V5PL10",
+                    "2026-07-29 10:00:01.000 [INFO] bridge: pairing payload received from sidecar.",
+                ]);
+
+            string zipPath = ExportBundle();
+
+            using ZipArchive archive = ZipFile.OpenRead(zipPath);
+            ZipArchiveEntry log = Assert.Single(archive.Entries, e => e.FullName == "logs/app-20260729.log");
+            string content = ReadEntryText(log);
+
+            Assert.DoesNotContain("74308742", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("22368645352", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("MT:Y.K90SO527XL0V5PL10", content, StringComparison.Ordinal);
+            Assert.Contains("passcode: [redacted]", content, StringComparison.Ordinal);
+            Assert.Contains("manual pairing code: [redacted]", content, StringComparison.Ordinal);
+            Assert.Contains("MT:[redacted]", content, StringComparison.Ordinal);
+            // Non-sensitive lines survive untouched.
+            Assert.Contains("pairing payload received from sidecar.", content, StringComparison.Ordinal);
         }
 
         [Fact]

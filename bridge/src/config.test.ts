@@ -26,6 +26,7 @@ describe("parseConfig", () => {
       storageDir: join(APPDATA, "HtpcMatterBridge", "matter"),
       logLevel: "info",
       matterLogLevel: "notice",
+      matterLogFacilities: { Commissioning: "warn" },
       endpoints: {
         speaker: { name: "HTPC Speaker", enabled: true },
         playPause: { name: "HTPC Play Pause", enabled: true },
@@ -39,11 +40,10 @@ describe("parseConfig", () => {
     expect(config.matterPort).toBeUndefined();
   });
 
-  it("has no own mdnsInterface/matterPort/matterLogFacilities keys when unset (exactOptionalPropertyTypes contract)", () => {
+  it("has no own mdnsInterface/matterPort keys when unset (exactOptionalPropertyTypes contract)", () => {
     const config = parseConfig(baseEnv());
     expect(Object.hasOwn(config, "mdnsInterface")).toBe(false);
     expect(Object.hasOwn(config, "matterPort")).toBe(false);
-    expect(Object.hasOwn(config, "matterLogFacilities")).toBe(false);
   });
 
   describe("HTPC_BRIDGE_IPC_TOKEN", () => {
@@ -194,29 +194,36 @@ describe("parseConfig", () => {
     });
   });
 
-  describe("HTPC_BRIDGE_MATTER_LOG_FACILITIES (ADR-006 §1)", () => {
-    it("is undefined when unset", () => {
-      expect(parseConfig(baseEnv()).matterLogFacilities).toBeUndefined();
+  describe("HTPC_BRIDGE_MATTER_LOG_FACILITIES (ADR-006 §1; S5-R F1 default)", () => {
+    it("defaults to suppressing the Commissioning facility below warn (passcode leak, S5-R F1)", () => {
+      expect(parseConfig(baseEnv()).matterLogFacilities).toEqual({ Commissioning: "warn" });
     });
 
-    it("treats an empty string as unset", () => {
+    it("treats an empty string as unset (default still applies)", () => {
       expect(
         parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "" })).matterLogFacilities,
-      ).toBeUndefined();
+      ).toEqual({ Commissioning: "warn" });
     });
 
-    it("parses a facility->level map verbatim", () => {
+    it("merges a facility->level map over the default", () => {
       const facilities = { MdnsServer: "debug", SessionManager: "info" };
       const config = parseConfig(
         baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: JSON.stringify(facilities) }),
       );
-      expect(config.matterLogFacilities).toEqual(facilities);
+      expect(config.matterLogFacilities).toEqual({ Commissioning: "warn", ...facilities });
     });
 
-    it("accepts an empty object (no overrides)", () => {
+    it("lets an explicit Commissioning override win over the default (pairing-spike escape hatch)", () => {
+      const config = parseConfig(
+        baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: '{"Commissioning":"notice"}' }),
+      );
+      expect(config.matterLogFacilities).toEqual({ Commissioning: "notice" });
+    });
+
+    it("accepts an empty object (default only)", () => {
       expect(
         parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "{}" })).matterLogFacilities,
-      ).toEqual({});
+      ).toEqual({ Commissioning: "warn" });
     });
 
     it("is fatal (not silent) on malformed JSON", () => {
