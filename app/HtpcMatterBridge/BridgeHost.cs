@@ -71,8 +71,13 @@ public static class SidecarLaunchSpec
 {
     /// <summary>
     /// The production spec, resolved relative to the exe; falls back to the
-    /// repo build tree (bridge sources via tsx, node.exe from PATH) when the
-    /// packaged layout is absent so the app is runnable during development.
+    /// repo build tree when the packaged layout is absent so the app is
+    /// runnable during development. The dev fallback prefers a fresh
+    /// <c>bridge/dist/bridge.cjs</c> esbuild bundle (S6-1: one node process,
+    /// ~90 MB private and sub-second start vs three processes / ~160 MB /
+    /// ~3 s under tsx); a stale or absent bundle falls back to running the
+    /// sources via tsx, so development iteration never executes stale code.
+    /// node.exe resolves via PATH — dev machines have it.
     /// </summary>
     public static SidecarSpec Default()
     {
@@ -84,23 +89,68 @@ public static class SidecarLaunchSpec
             return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
         }
 
-        // Dev fallback: walk up from the exe (bin\Release\net8.0-windows is
-        // four levels below the repo root) looking for the bridge sources +
-        // installed tsx. node.exe resolves via PATH — dev machines have it.
+        // Dev fallback: walk up from the exe (bin\Release\net10.0-windows is
+        // four levels below the repo root) looking for the bridge sources.
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
         {
             string bridgeDir = Path.Combine(dir.FullName, "bridge");
+            string srcDir = Path.Combine(bridgeDir, "src");
+            if (!File.Exists(Path.Combine(srcDir, "index.ts")))
+            {
+                continue;
+            }
+
+            string bundle = Path.Combine(bridgeDir, "dist", "bridge.cjs");
+            if (IsBundleFresh(bundle, srcDir))
+            {
+                return new SidecarSpec("node.exe", [bundle], bridgeDir);
+            }
+
             string tsxCli = Path.Combine(bridgeDir, "node_modules", "tsx", "dist", "cli.mjs");
-            if (File.Exists(Path.Combine(bridgeDir, "src", "index.ts")) && File.Exists(tsxCli))
+            if (File.Exists(tsxCli))
             {
                 return new SidecarSpec(
-                    "node.exe", [tsxCli, Path.Combine(bridgeDir, "src", "index.ts")], bridgeDir);
+                    "node.exe", [tsxCli, Path.Combine(srcDir, "index.ts")], bridgeDir);
             }
         }
 
         // Neither layout found: return the packaged spec; the supervisor's
         // spawn failure produces one clear ERROR instead of a crash here.
         return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
+    }
+
+    /// <summary>
+    /// True iff <paramref name="bundlePath"/> exists and is at least as new
+    /// as every file under <paramref name="srcDir"/> (recursive mtime check).
+    /// The staleness guard for the dev bundle preference: after any source
+    /// edit the bundle loses until <c>npm run bundle</c> re-produces it, so a
+    /// dev loop that skips bundling silently keeps running current code via
+    /// tsx instead of a stale bundle. Deliberately scoped to <c>src/</c> —
+    /// a dependency bump (package.json) without a source change is not
+    /// detected; re-run <c>npm run bundle</c> after <c>npm ci</c>.
+    /// </summary>
+    public static bool IsBundleFresh(string bundlePath, string srcDir)
+    {
+        if (!File.Exists(bundlePath))
+        {
+            return false;
+        }
+
+        DateTime bundleTime = File.GetLastWriteTimeUtc(bundlePath);
+        if (!Directory.Exists(srcDir))
+        {
+            return true;
+        }
+
+        foreach (string file in Directory.EnumerateFiles(srcDir, "*", SearchOption.AllDirectories))
+        {
+            if (File.GetLastWriteTimeUtc(file) > bundleTime)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 

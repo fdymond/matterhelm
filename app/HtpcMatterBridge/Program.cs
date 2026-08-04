@@ -73,6 +73,17 @@ internal static partial class Program
             return;
         }
 
+        // S6-1 resource-hygiene probe: overlay/settings/tray churn with
+        // before/after handle + GDI + private-bytes bounds, objective
+        // PASS/FAIL output. Hidden; not part of the production tray flow.
+        if (args.Contains("--probe-resources"))
+        {
+            _ = AttachConsole(AttachParentProcess);
+            ApplicationConfiguration.Initialize();
+            Environment.ExitCode = Diagnostics.ResourceProbe.Run();
+            return;
+        }
+
         // S2-1 acceptance demo: sidecar crash/auto-restart backoff plus the
         // wrong-token socket close, with objective PASS/FAIL output.
         if (args.Contains("--demo-sidecar-chaos"))

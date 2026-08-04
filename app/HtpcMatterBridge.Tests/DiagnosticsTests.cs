@@ -211,6 +211,79 @@ public static class DiagnosticsTests
         }
     }
 
+    /// <summary>
+    /// S6-1 idle-churn rule: flushes whose counters/histograms are unchanged
+    /// since the last written line are skipped. Runs in the serialized
+    /// collection — <see cref="AppMetrics"/> is process-global, and a parallel
+    /// test incrementing a counter between two "idle" flushes would make an
+    /// intentionally-identical snapshot differ.
+    /// </summary>
+    [Collection(StaticLogState.Name)]
+    public sealed class MetricsIdleChurn : IDisposable
+    {
+        private readonly string _dir;
+
+        public MetricsIdleChurn()
+        {
+            _dir = Path.Combine(Path.GetTempPath(), "HtpcMatterBridgeTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_dir);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(_dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+        }
+
+        private static List<string> NonEmptyLines(string path) =>
+            [.. File.ReadLines(path).Where(l => l.Length > 0)];
+
+        [Fact]
+        public void IdenticalIdleFlushesAreSkippedButAChangeStillAppends()
+        {
+            using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1));
+            listener.Flush(); // the day's first line — the file must exist
+            listener.Flush(); // identical → skipped
+            listener.Flush(); // identical → skipped
+
+            string path = Assert.Single(Directory.EnumerateFiles(_dir, "metrics-*.jsonl"));
+            string first = Assert.Single(NonEmptyLines(path));
+            using (JsonDocument document = JsonDocument.Parse(first))
+            {
+                Assert.True(document.RootElement.TryGetProperty("ts", out _));
+                Assert.True(document.RootElement.TryGetProperty("counters", out _));
+                Assert.True(document.RootElement.TryGetProperty("histograms", out _));
+            }
+
+            AppMetrics.ActionsExecutedOk.Add(1);
+            listener.Flush(); // changed → appended
+            Assert.Equal(2, NonEmptyLines(path).Count);
+
+            listener.Flush(); // identical again → skipped
+            Assert.Equal(2, NonEmptyLines(path).Count);
+        }
+
+        [Fact]
+        public void ADeletedFileIsRecreatedByTheNextFlushEvenWhenUnchanged()
+        {
+            using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1));
+            listener.Flush();
+            string path = Assert.Single(Directory.EnumerateFiles(_dir, "metrics-*.jsonl"));
+
+            File.Delete(path);
+            listener.Flush(); // unchanged, but the file must come back
+
+            Assert.True(File.Exists(path), "an unchanged flush must still recreate a missing snapshot file");
+            _ = Assert.Single(NonEmptyLines(path));
+        }
+    }
+
     public sealed class Bundles : IDisposable
     {
         private readonly string _dir;
