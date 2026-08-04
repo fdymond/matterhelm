@@ -164,8 +164,25 @@ public sealed class SystemVolume : IDisposable
             try
             {
                 AcquireEndpoint();
-                // The new device carries its own volume/mute; let observers resync.
-                VolumeChanged?.Invoke(this, GetState());
+
+                // A default-device-changed notification also fires when the
+                // last render device is simply removed, leaving no endpoint
+                // to bind — AcquireEndpoint already logged that at WARN (it
+                // is normal, not a fault), so there is nothing to resync
+                // observers with. Without this guard, GetState() below would
+                // re-throw the very same condition as a second, ERROR-level
+                // log for one benign event.
+                bool hasEndpoint;
+                lock (_gate)
+                {
+                    hasEndpoint = _endpointVolume is not null;
+                }
+
+                if (hasEndpoint)
+                {
+                    // The new device carries its own volume/mute; let observers resync.
+                    VolumeChanged?.Invoke(this, GetState());
+                }
             }
             catch (Exception ex)
             {

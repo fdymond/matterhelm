@@ -31,12 +31,13 @@ public interface IActionExecutor : IDisposable
 /// Production <see cref="IActionExecutor"/>: forwards to
 /// <see cref="ActionExecutor"/> and adds the one mapping it does not carry —
 /// <c>"sleep"</c> (the <see cref="PowerOffAction.Sleep"/> power-off variant)
-/// via an owned <see cref="DisplayPower"/>.
+/// via the static <see cref="DisplayPower.Sleep"/> (no instance needed —
+/// unlike <see cref="DisplayPower.DisplaysOff"/>, sleep has no window handle
+/// to send a message to).
 /// </summary>
 public sealed class ActionExecutorAdapter : IActionExecutor
 {
     private readonly ActionExecutor _executor = new();
-    private readonly DisplayPower _displayPower = new();
 
     /// <inheritdoc />
     public event EventHandler<VolumeState>? VolumeChanged
@@ -56,7 +57,6 @@ public sealed class ActionExecutorAdapter : IActionExecutor
     public void Dispose()
     {
         _executor.Dispose();
-        _displayPower.Dispose();
     }
 }
 
