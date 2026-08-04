@@ -35,6 +35,82 @@ public static class BridgeHostTests
         }
     }
 
+    /// <summary>
+    /// The S6-1 dev-bundle staleness rule (<see cref="SidecarLaunchSpec.IsBundleFresh"/>):
+    /// a bundle only wins over tsx when it exists and no file under
+    /// <c>bridge/src</c> (recursively) is newer — stale bundles must lose so
+    /// a dev loop that skips <c>npm run bundle</c> never runs old code.
+    /// </summary>
+    public sealed class BundleFreshness : IDisposable
+    {
+        private readonly string _dir;
+        private readonly string _srcDir;
+        private readonly string _bundlePath;
+
+        public BundleFreshness()
+        {
+            _dir = Path.Combine(Path.GetTempPath(), "HtpcMatterBridgeTests", Guid.NewGuid().ToString("N"));
+            _srcDir = Path.Combine(_dir, "src");
+            _bundlePath = Path.Combine(_dir, "dist", "bridge.cjs");
+            Directory.CreateDirectory(Path.Combine(_srcDir, "ipc"));
+            Directory.CreateDirectory(Path.Combine(_dir, "dist"));
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(_dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+        }
+
+        private static void WriteWithMtime(string path, DateTime mtimeUtc)
+        {
+            File.WriteAllText(path, "// content");
+            File.SetLastWriteTimeUtc(path, mtimeUtc);
+        }
+
+        [Fact]
+        public void MissingBundleIsStale()
+        {
+            WriteWithMtime(Path.Combine(_srcDir, "index.ts"), DateTime.UtcNow.AddHours(-2));
+
+            Assert.False(SidecarLaunchSpec.IsBundleFresh(_bundlePath, _srcDir));
+        }
+
+        [Fact]
+        public void BundleNewerThanEverySourceFileIsFresh()
+        {
+            WriteWithMtime(Path.Combine(_srcDir, "index.ts"), DateTime.UtcNow.AddHours(-2));
+            WriteWithMtime(Path.Combine(_srcDir, "ipc", "client.ts"), DateTime.UtcNow.AddHours(-3));
+            WriteWithMtime(_bundlePath, DateTime.UtcNow.AddHours(-1));
+
+            Assert.True(SidecarLaunchSpec.IsBundleFresh(_bundlePath, _srcDir));
+        }
+
+        [Fact]
+        public void ANewerNestedSourceFileMakesTheBundleStale()
+        {
+            WriteWithMtime(Path.Combine(_srcDir, "index.ts"), DateTime.UtcNow.AddHours(-3));
+            WriteWithMtime(_bundlePath, DateTime.UtcNow.AddHours(-2));
+            WriteWithMtime(Path.Combine(_srcDir, "ipc", "client.ts"), DateTime.UtcNow.AddHours(-1));
+
+            Assert.False(SidecarLaunchSpec.IsBundleFresh(_bundlePath, _srcDir));
+        }
+
+        [Fact]
+        public void AMissingSourceDirLeavesAnExistingBundleFresh()
+        {
+            WriteWithMtime(_bundlePath, DateTime.UtcNow.AddHours(-1));
+
+            Assert.True(SidecarLaunchSpec.IsBundleFresh(_bundlePath, Path.Combine(_dir, "no-such-src")));
+        }
+    }
+
     public sealed class Wiring : IDisposable
     {
         private const string ActionId = "123e4567-e89b-12d3-a456-426614174000";

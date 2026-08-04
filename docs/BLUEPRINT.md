@@ -18,8 +18,9 @@ executes the resulting commands itself. No dependency on any other repo or app
   reflects bridge state at a glance.
 - G4: Reflect real device state (volume %, mute) back into Google Home.
 - G5: Survive restarts (persisted Matter fabric credentials) and run unattended.
-- G6: Lean: sidecar idle CPU < 0.5 %, sidecar RSS < 80 MB, tray app RSS
-  < 40 MB, cold start < 3 s.
+- G6: Lean (budgets restated in **ADR-007** from measurements): idle CPU
+  < 0.5 % both; tray private ≤ 32 MB; sidecar one process, private ≤ 120 MB;
+  cold start < 3 s (bundle: ~1 s). Working set is informational only.
 
 **Non-goals**
 - Matter Media Playback / Content Launcher clusters (Google doesn't surface

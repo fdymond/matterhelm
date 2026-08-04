@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/bridge.cjs --external:node:* --external:bun:sqlite --log-level=warning",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0 && prettier --check .",
     "test": "vitest run",
@@ -26,6 +27,7 @@
     "@types/node": "22.20.1",
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.10",
+    "esbuild": "0.28.1",
     "eslint": "10.8.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-import-resolver-typescript": "4.4.5",
