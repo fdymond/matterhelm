@@ -38,12 +38,14 @@ public sealed class TrayContext : ApplicationContext
 {
     private readonly Control _uiThreadMarshal;
     private readonly NotifyIcon _notifyIcon;
+    private readonly ContextMenuStrip _contextMenu;
     private readonly Dictionary<BridgeState, Icon> _stateIcons;
     private readonly ToolStripMenuItem _enableBridgeItem;
     private readonly ToolStripMenuItem _pairItem;
     private readonly ToolStripMenuItem _overlayItem;
 
     private bool _applyingConfigChange;
+    private bool _disposed;
     private PairingWindow? _pairingWindow;
     private SettingsWindow? _settingsWindow;
     private (string QrPayload, string ManualCode)? _lastPairingInfo;
@@ -104,23 +106,23 @@ public sealed class TrayContext : ApplicationContext
         var exitItem = new ToolStripMenuItem("Exit");
         exitItem.Click += OnExitClicked;
 
-        var menu = new ContextMenuStrip();
-        menu.Items.Add(_enableBridgeItem);
-        menu.Items.Add(_pairItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(_overlayItem);
-        menu.Items.Add(settingsItem);
-        menu.Items.Add(reloadConfigItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(aboutItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(exitItem);
+        _contextMenu = new ContextMenuStrip();
+        _contextMenu.Items.Add(_enableBridgeItem);
+        _contextMenu.Items.Add(_pairItem);
+        _contextMenu.Items.Add(new ToolStripSeparator());
+        _contextMenu.Items.Add(_overlayItem);
+        _contextMenu.Items.Add(settingsItem);
+        _contextMenu.Items.Add(reloadConfigItem);
+        _contextMenu.Items.Add(new ToolStripSeparator());
+        _contextMenu.Items.Add(aboutItem);
+        _contextMenu.Items.Add(new ToolStripSeparator());
+        _contextMenu.Items.Add(exitItem);
 
         _notifyIcon = new NotifyIcon
         {
             Icon = _stateIcons[_state],
             Text = "HTPC Matter Bridge",
-            ContextMenuStrip = menu,
+            ContextMenuStrip = _contextMenu,
             Visible = true,
         };
 
@@ -327,18 +329,40 @@ public sealed class TrayContext : ApplicationContext
         Log.Info("Exit requested from tray menu; shutting down.");
         ExitRequested?.Invoke(this, EventArgs.Empty);
 
-        Config.Changed -= OnConfigChanged;
-        _pairingWindow?.Dispose();
-        _settingsWindow?.Dispose();
-        _notifyIcon.Visible = false;
-        _notifyIcon.Dispose();
-        _uiThreadMarshal.Dispose();
-        foreach (Icon icon in _stateIcons.Values)
-        {
-            icon.Dispose();
-        }
-
+        // Teardown itself now lives in Dispose(bool): Application.Run's
+        // message loop disposes this ApplicationContext once Exit() unwinds
+        // it, so it happens exactly once regardless of how the loop ends.
         Application.Exit();
     }
 
+    /// <summary>
+    /// Idempotent teardown: unsubscribes <see cref="Config.Changed"/>,
+    /// disposes the pairing/settings windows, hides then disposes the notify
+    /// icon (hidden first so no ghost icon lingers in the tray), the context
+    /// menu (which disposes its items), the cached state icons, and the
+    /// UI-thread marshal control. Invoked once by <see cref="Application.Run(ApplicationContext)"/>
+    /// after the message loop exits (see <see cref="OnExitClicked"/>) — never
+    /// call this directly.
+    /// </summary>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_disposed)
+        {
+            _disposed = true;
+
+            Config.Changed -= OnConfigChanged;
+            _pairingWindow?.Dispose();
+            _settingsWindow?.Dispose();
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            _contextMenu.Dispose();
+            _uiThreadMarshal.Dispose();
+            foreach (Icon icon in _stateIcons.Values)
+            {
+                icon.Dispose();
+            }
+        }
+
+        base.Dispose(disposing);
+    }
 }

@@ -68,6 +68,14 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S5-3 ✅ (45% app gate at measured baseline; bridge per-file 90% proven to fire) | Coverage & validation in CI: C# coverage collection + threshold, bridge coverage job publishing summaries; both surfaced in Actions summary | CI green with coverage tables | S | S5-0 | impl (Sonnet) |
 | S5-R ✅ (Opus: 1 HIGH passcode-in-bundle leak + 3 risks, all fixed with tests) | Adversarial review of Sprint 5 (privacy: no token/PII in any diagnostic path; perf overhead of instrumentation) | Findings verified + fixed | S | S5-1..3 | review (Opus) |
 
+## Sprint 6 — deep review & measured optimization (owner-directed)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S6-R ✅ | Whole-repo deep production-quality review (resource lifecycle, allocations, idle behavior, altitude) | Verdict: production-grade, no bugs/leaks; 4 verified findings + hotspot map | M | — | review (Opus) |
+| S6-1 ✅ | Measured resource optimization: esbuild sidecar bundle (1 process, ~90MB private, 0.9s start), WinForms-baseline memory truth, churn probe (`--probe-resources`), metrics idle-churn fix; ADR-007 restates G6 | Before/after tables; probes PASS; all suites green | M | — | impl (Fable) |
+| S6-2 ✅ | Review findings applied: Program.cs 916→180 (Demos/ extraction + helper dedup), dead native window removed, TrayContext Dispose(bool) teardown (ghost-icon fix), audio-device-removed WARN | Behavior-preserving: 309 tests unmodified green; all 6 demos identical exit 0 | S | S6-R, S6-1 | impl (Sonnet) |
+
 ## Proposed (from agent reports, integrator-triaged)
 
 - ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.

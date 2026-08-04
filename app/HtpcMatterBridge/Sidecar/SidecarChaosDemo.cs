@@ -1,7 +1,7 @@
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using HtpcMatterBridge.Demos;
 
 namespace HtpcMatterBridge.Sidecar;
 
@@ -48,7 +48,7 @@ internal static partial class SidecarChaosDemo
 
         Emit($"S2-1 sidecar chaos demo — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 
-        string? node = ResolveNodeExe();
+        string? node = DemoSupport.ResolveNodeExe();
         if (node is null)
         {
             Emit("FAIL  node.exe not found (set HTPC_DEMO_NODE or add node to PATH)");
@@ -138,7 +138,7 @@ internal static partial class SidecarChaosDemo
     {
         emit("--- part 2: wrong-token hello -> socket closed ---");
         string expectedToken = Guid.NewGuid().ToString("N");
-        int port = GetFreeLoopbackPort();
+        int port = DemoSupport.GetFreeLoopbackPort();
         using var server = new IpcServer(port, expectedToken, log: (level, message) => emit($"    [{level}] {message}"));
         server.Start();
         emit($"IpcServer listening on http://localhost:{port}/");
@@ -182,60 +182,6 @@ internal static partial class SidecarChaosDemo
         File.WriteAllText(resultsPath, report);
         Console.WriteLine($"OVERALL: {(allPassed ? "PASS" : "FAIL")}");
         Console.WriteLine($"(results file: {resultsPath})");
-    }
-
-    /// <summary>Demo-only node resolution: HTPC_DEMO_NODE, then PATH, then %USERPROFILE%\tools\node-*.</summary>
-    private static string? ResolveNodeExe()
-    {
-        string? env = Environment.GetEnvironmentVariable("HTPC_DEMO_NODE");
-        if (!string.IsNullOrEmpty(env) && File.Exists(env))
-        {
-            return env;
-        }
-
-        string? path = Environment.GetEnvironmentVariable("PATH");
-        if (path is not null)
-        {
-            foreach (string dir in path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                try
-                {
-                    string candidate = Path.Combine(dir, "node.exe");
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // Malformed PATH entry; skip.
-                }
-            }
-        }
-
-        string tools = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "tools");
-        if (Directory.Exists(tools))
-        {
-            foreach (string dir in Directory.EnumerateDirectories(tools, "node-*"))
-            {
-                string candidate = Path.Combine(dir, "node.exe");
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static int GetFreeLoopbackPort()
-    {
-        var listener = new TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
