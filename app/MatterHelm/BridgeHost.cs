@@ -61,14 +61,41 @@ public sealed class ActionExecutorAdapter : IActionExecutor
 }
 
 /// <summary>
-/// Production sidecar launch spec. S3-1 (packaging) finalizes the shipped
-/// layout; until then this is the fixed convention the packaging story will
-/// satisfy: <c>sidecar\node.exe sidecar\bridge.cjs</c> next to the exe
-/// (BLUEPRINT §2.6 — SEA exe or node-beside-bundle, either way one spec).
+/// Production sidecar launch spec. S3-1 ships the Node SEA layout
+/// <c>sidecar\bridge.exe</c> next to the exe (BLUEPRINT §2.6); the
+/// pre-approved fallback layout <c>sidecar\node.exe sidecar\bridge.cjs</c>
+/// (ADR-007 §2) is still honored so a hand-assembled dist works too.
 /// Demos and tests always inject their own <see cref="SidecarSpec"/>.
 /// </summary>
 public static class SidecarLaunchSpec
 {
+    /// <summary>
+    /// The packaged spec under <paramref name="baseDirectory"/>, or null when
+    /// no packaged layout exists there. <c>sidecar\bridge.exe</c> (Node SEA,
+    /// no args) is preferred; <c>sidecar\node.exe</c> +
+    /// <c>sidecar\bridge.cjs</c> is the sanctioned fallback layout. The seam
+    /// is a parameter (not <see cref="AppContext.BaseDirectory"/>) so tests
+    /// can exercise the selection against a scratch directory.
+    /// </summary>
+    public static SidecarSpec? TryPackaged(string baseDirectory)
+    {
+        string packagedDir = Path.Combine(baseDirectory, "sidecar");
+        string packagedSea = Path.Combine(packagedDir, "bridge.exe");
+        if (File.Exists(packagedSea))
+        {
+            return new SidecarSpec(packagedSea, [], packagedDir);
+        }
+
+        string packagedNode = Path.Combine(packagedDir, "node.exe");
+        string packagedEntry = Path.Combine(packagedDir, "bridge.cjs");
+        if (File.Exists(packagedNode) && File.Exists(packagedEntry))
+        {
+            return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// The production spec, resolved relative to the exe; falls back to the
     /// repo build tree when the packaged layout is absent so the app is
@@ -81,12 +108,9 @@ public static class SidecarLaunchSpec
     /// </summary>
     public static SidecarSpec Default()
     {
-        string packagedDir = Path.Combine(AppContext.BaseDirectory, "sidecar");
-        string packagedNode = Path.Combine(packagedDir, "node.exe");
-        string packagedEntry = Path.Combine(packagedDir, "bridge.cjs");
-        if (File.Exists(packagedNode) && File.Exists(packagedEntry))
+        if (TryPackaged(AppContext.BaseDirectory) is SidecarSpec packaged)
         {
-            return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
+            return packaged;
         }
 
         // Dev fallback: walk up from the exe (bin\Release\net10.0-windows is
@@ -114,9 +138,11 @@ public static class SidecarLaunchSpec
             }
         }
 
-        // Neither layout found: return the packaged spec; the supervisor's
-        // spawn failure produces one clear ERROR instead of a crash here.
-        return new SidecarSpec(packagedNode, [packagedEntry], packagedDir);
+        // Neither layout found: return the (absent) packaged SEA spec; the
+        // supervisor's spawn failure produces one clear ERROR instead of a
+        // crash here.
+        string packagedDir = Path.Combine(AppContext.BaseDirectory, "sidecar");
+        return new SidecarSpec(Path.Combine(packagedDir, "bridge.exe"), [], packagedDir);
     }
 
     /// <summary>
