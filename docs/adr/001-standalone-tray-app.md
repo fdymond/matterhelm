@@ -21,7 +21,8 @@ This repo ships a complete, self-sufficient product with two processes:
 1. **`app/` — C# .NET 8 WinForms tray application** (the product): supervises
    the bridge sidecar, executes all actions itself (SMTC media sessions, media
    keys, CoreAudio volume/mute, display/power), owns config
-   (`%APPDATA%\HtpcMatterBridge\config.json`), the pairing-QR UX, and a
+   (`%APPDATA%\HtpcMatterBridge\config.json`, now `%APPDATA%\MatterHelm`
+   since the S7-2 rename), the pairing-QR UX, and a
    click-through **overlay HUD** that flashes each incoming Google Home command
    and the action taken (same UX pattern as VoiceRemote's transcript pop-ups,
    implemented fresh in this repo).

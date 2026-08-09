@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>MatterHelm</RootNamespace>
+    <AssemblyName>MatterHelm</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- ADR-005 §2: Recommended analyzer bar, analyzer diagnostics as errors,
+         XML docs on (CS1591 enforced; per-rule exceptions live in .editorconfig). -->
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Required by the LibraryImport source generator (SYSLIB1062); no
+         hand-written unsafe code exists in this project. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ADR-003 item 6: the one justified NuGet exception, for local/offline QR
+         rendering (PngByteQRCode â€” no cloud QR service, no System.Drawing-coupled
+         QRCode-Core renderer). MIT licensed; pinned exact per CLAUDE.md. -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- S2-5: stub sidecar for the wired demo and the wiring tests (flows to
+         referencing projects' output too). The real sidecar ships via S3-1. -->
+    <Content Include="DemoAssets\StubSidecar.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

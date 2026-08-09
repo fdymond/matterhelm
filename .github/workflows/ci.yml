@@ -58,12 +58,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release
-      - run: dotnet test app/HtpcMatterBridge.Tests/HtpcMatterBridge.Tests.csproj -c Release --collect:"XPlat Code Coverage"
+      - run: dotnet build app/MatterHelm/MatterHelm.csproj -c Release
+      - run: dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release --collect:"XPlat Code Coverage"
       - name: Coverage report (ReportGenerator)
         uses: danielpalme/ReportGenerator-GitHub-Action@5.5.11
         with:
-          reports: app/HtpcMatterBridge.Tests/TestResults/**/coverage.cobertura.xml
+          reports: app/MatterHelm.Tests/TestResults/**/coverage.cobertura.xml
           targetdir: coveragereport
           reporttypes: MarkdownSummaryGithub
       - name: Append coverage summary
@@ -79,7 +79,7 @@ jobs:
       - name: Enforce coverage threshold
         shell: pwsh
         run: |
-          $cobertura = Get-ChildItem -Path app/HtpcMatterBridge.Tests/TestResults -Filter coverage.cobertura.xml -Recurse |
+          $cobertura = Get-ChildItem -Path app/MatterHelm.Tests/TestResults -Filter coverage.cobertura.xml -Recurse |
             Select-Object -First 1 -ExpandProperty FullName
           [xml]$xml = Get-Content $cobertura
           $lineRate = [double]$xml.coverage.'line-rate'

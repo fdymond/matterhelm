@@ -1,8 +1,8 @@
 {
-  "name": "windows-google-home-matter",
+  "name": "matterhelm-bridge",
   "version": "0.0.1",
   "private": true,
-  "description": "Matter virtual-device bridge exposing a Windows HTPC (VoiceRemote) to Google Home",
+  "description": "MatterHelm's Matter virtual-device bridge sidecar — exposes a Windows HTPC to Google Home",
   "type": "module",
   "engines": {
     "node": ">=22"

@@ -23,7 +23,7 @@ describe("parseConfig", () => {
       ipcToken: TOKEN,
       // join(), not a literal: CI runs this suite on ubuntu too, where the
       // separator is "/" (the product itself is Windows-only).
-      storageDir: join(APPDATA, "HtpcMatterBridge", "matter"),
+      storageDir: join(APPDATA, "MatterHelm", "matter"),
       logLevel: "info",
       matterLogLevel: "notice",
       matterLogFacilities: { Commissioning: "warn" },
@@ -125,9 +125,9 @@ describe("parseConfig", () => {
       expect(config.storageDir).toBe("C:\\scratch\\matter");
     });
 
-    it("derives %APPDATA%\\HtpcMatterBridge\\matter when unset", () => {
+    it("derives %APPDATA%\\MatterHelm\\matter when unset", () => {
       const config = parseConfig(baseEnv({ APPDATA: "D:\\CustomAppData" }));
-      expect(config.storageDir).toBe(join("D:\\CustomAppData", "HtpcMatterBridge", "matter"));
+      expect(config.storageDir).toBe(join("D:\\CustomAppData", "MatterHelm", "matter"));
     });
 
     it("is fatal when both the override and APPDATA are unavailable", () => {
