@@ -154,6 +154,16 @@ public static class SidecarLaunchSpec
     }
 }
 
+/// <summary>
+/// Outcome of <see cref="BridgeHost.FactoryReset"/>: <see cref="Ok"/> true
+/// means the Matter storage directory is gone (whether or not it existed to
+/// begin with); false means it is still there — <see cref="Error"/> carries
+/// the last delete failure so the caller can show/log it. Never partial: the
+/// directory is deleted wholesale via <see cref="Directory.Delete(string, bool)"/>
+/// or not at all.
+/// </summary>
+public sealed record FactoryResetResult(bool Ok, string? Error);
+
 /// <summary>One built-in endpoint's entry in the <c>HTPC_BRIDGE_ENDPOINTS</c> contract: display name + whether the bridge publishes it.</summary>
 internal sealed record SidecarEndpointEntry(string Name, bool Enabled);
 
@@ -196,9 +206,10 @@ internal sealed record SidecarEndpointsEnv(
 /// is still visible/audible, and display-off is the terminal effect; both must
 /// succeed for an ok ack.
 ///
-/// Threading: <see cref="SetEnabled"/> is thread-safe and blocking (child stop
-/// grace) — call it from a worker thread, never a UI thread (shutdown being
-/// the one sanctioned synchronous exception). IPC/supervisor callbacks run on
+/// Threading: <see cref="SetEnabled"/> and <see cref="FactoryReset"/> are
+/// thread-safe and blocking (child stop grace, plus delete retries for the
+/// latter) — call either from a worker thread, never a UI thread (shutdown
+/// being the one sanctioned synchronous exception). IPC/supervisor callbacks run on
 /// pool threads and never touch UI directly: <c>TrayContext</c>,
 /// <c>OverlayHud</c>, and the pairing window all marshal internally, so
 /// <see cref="StateChanged"/>/<see cref="PairingReceived"/>/the overlay sink
@@ -228,6 +239,14 @@ public sealed class BridgeHost : IDisposable
     // coalesce: only the LATEST state after a quiet gap goes out, and the echo
     // dead-band is applied at flush time against the latest command.
     private const int VolumePublishDebounceMilliseconds = 250;
+
+    // Factory reset (BLUEPRINT §2.5, S3-2): the sidecar's own storage-close
+    // and this process's brief handle-flush window can leave the directory
+    // locked for a moment right after the child exits. Retry briefly rather
+    // than fail on the first attempt; give up (surfacing the failure) well
+    // short of anything a user would call "hung".
+    private static readonly TimeSpan FactoryResetDeleteRetryWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan FactoryResetDeleteRetryDelay = TimeSpan.FromMilliseconds(100);
 
     private readonly Config _config;
     private readonly IActionExecutor _executor;
@@ -388,6 +407,110 @@ public sealed class BridgeHost : IDisposable
             _publishTimer?.Dispose();
             _publishTimer = null;
             _pendingPublish = null;
+        }
+    }
+
+    /// <summary>
+    /// Unpair / factory-reset (BLUEPRINT §2.5): a blocking stop-delete-restart
+    /// sequence, safe to call from the tray menu or the Settings → Advanced
+    /// button. Order matters — the sidecar (and its open storage handles) is
+    /// fully down <b>before</b> the directory is touched, so nothing races the
+    /// delete:
+    /// <list type="number">
+    /// <item>Stop the bridge if running (same blocking path as <see cref="SetEnabled"/>).</item>
+    /// <item>Delete the Matter storage directory (retrying briefly on a
+    /// transient lock, see <see cref="FactoryResetDeleteRetryWindow"/>); a
+    /// missing directory (never paired, or already reset) counts as success.
+    /// Deletion is all-or-nothing — a failure never leaves a half-deleted
+    /// directory, and is surfaced via the return value and a WARN log line,
+    /// never swallowed.</item>
+    /// <item>If the bridge was running before step 1, restart it. The
+    /// sidecar's next boot finds no persisted fabric, so it generates a fresh
+    /// commissioning identity (new pairing code) — that regeneration, not any
+    /// special-cased "reset" path here, IS the re-pair flow (BLUEPRINT §2.5):
+    /// the node keeps the same configured identity (name/port/endpoints),
+    /// only the Google-side pairing is gone.</item>
+    /// </list>
+    /// On success, logs an INFO line and — matching every other user-visible
+    /// bridge event — flashes the overlay (when enabled) so the user sees
+    /// "open Pair with Google Home to re-pair" without having to check the
+    /// log. Blocking (child stop grace + delete retries): call from a worker
+    /// thread, never the UI thread — same rule as <see cref="SetEnabled"/>.
+    /// </summary>
+    public FactoryResetResult FactoryReset()
+    {
+        bool wasRunning;
+        lock (_gate)
+        {
+            wasRunning = _running;
+        }
+
+        SetEnabled(false);
+
+        if (!TryDeleteStorageDirectory(_storageDir, out string? error))
+        {
+            _log(
+                "WARN",
+                $"bridge: factory reset could not delete Matter storage at '{_storageDir}' ({error}); "
+                    + "nothing was partially deleted — the bridge is left disabled, retry once whatever "
+                    + "holds the folder open (e.g. an antivirus scan or a slow-to-exit sidecar) has released it.");
+            if (_config.Current.OverlayEnabled)
+            {
+                _overlaySink?.Invoke(new OverlayContent("Factory reset failed", error ?? "failed", IsError: true));
+            }
+
+            return new FactoryResetResult(false, error);
+        }
+
+        _log(
+            "INFO",
+            $"bridge: factory reset complete — Matter storage at '{_storageDir}' deleted; "
+                + "open 'Pair with Google Home…' in the tray menu to re-pair.");
+        if (_config.Current.OverlayEnabled)
+        {
+            _overlaySink?.Invoke(new OverlayContent(
+                "Factory reset complete", "open Pair with Google Home to re-pair", IsError: false));
+        }
+
+        if (wasRunning)
+        {
+            SetEnabled(true);
+        }
+
+        return new FactoryResetResult(true, null);
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="dir"/> recursively, retrying on a transient
+    /// lock for up to <see cref="FactoryResetDeleteRetryWindow"/>. A
+    /// nonexistent directory is treated as already-deleted (true, no error).
+    /// </summary>
+    private static bool TryDeleteStorageDirectory(string dir, out string? error)
+    {
+        error = null;
+        if (!Directory.Exists(dir))
+        {
+            return true;
+        }
+
+        long deadline = Environment.TickCount64 + (long)FactoryResetDeleteRetryWindow.TotalMilliseconds;
+        while (true)
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                error = ex.Message;
+                if (Environment.TickCount64 >= deadline)
+                {
+                    return false;
+                }
+
+                Thread.Sleep(FactoryResetDeleteRetryDelay);
+            }
         }
     }
 

@@ -42,6 +42,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly Dictionary<BridgeState, Icon> _stateIcons;
     private readonly ToolStripMenuItem _enableBridgeItem;
     private readonly ToolStripMenuItem _pairItem;
+    private readonly ToolStripMenuItem _factoryResetItem;
     private readonly ToolStripMenuItem _overlayItem;
 
     private bool _applyingConfigChange;
@@ -84,6 +85,13 @@ public sealed class TrayContext : ApplicationContext
         _pairItem = new ToolStripMenuItem("Pair with Google Home…");
         _pairItem.Click += OnPairClicked;
 
+        // BLUEPRINT §2.5 names this a menu action, directly under Pair…: the
+        // unpair step you'd reach for right before re-pairing. Always enabled
+        // — even a never-paired (gray) bridge has a storage dir worth
+        // clearing pre-emptively — the confirmation dialog is the safety net.
+        _factoryResetItem = new ToolStripMenuItem("Factory reset bridge…");
+        _factoryResetItem.Click += (_, _) => ConfirmAndRequestFactoryReset(owner: null);
+
         _overlayItem = new ToolStripMenuItem("Overlay pop-ups")
         {
             CheckOnClick = true,
@@ -109,6 +117,7 @@ public sealed class TrayContext : ApplicationContext
         _contextMenu = new ContextMenuStrip();
         _contextMenu.Items.Add(_enableBridgeItem);
         _contextMenu.Items.Add(_pairItem);
+        _contextMenu.Items.Add(_factoryResetItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(_overlayItem);
         _contextMenu.Items.Add(settingsItem);
@@ -137,6 +146,9 @@ public sealed class TrayContext : ApplicationContext
 
     /// <summary>"Pair with Google Home…" was clicked (the cached pairing window is shown either way).</summary>
     public event EventHandler? PairRequested;
+
+    /// <summary>"Factory reset bridge…" was clicked and confirmed (from the tray menu or Settings → Advanced); <c>Program</c> calls <see cref="BridgeHost.FactoryReset"/> on a worker thread.</summary>
+    public event EventHandler? FactoryResetRequested;
 
     /// <summary>"Overlay pop-ups" was toggled (already persisted to <see cref="Config"/> by the time this fires); <c>Program</c> flips the live <c>OverlayHud</c>.</summary>
     public event EventHandler<bool>? OverlayEnabledChanged;
@@ -248,6 +260,41 @@ public sealed class TrayContext : ApplicationContext
         ShowOrFocusPairingWindow();
     }
 
+    /// <summary>
+    /// Shows the factory-reset confirmation (BLUEPRINT §2.5 consequences,
+    /// spelled out in full since this is destructive and only asked once) and
+    /// raises <see cref="FactoryResetRequested"/> on Yes. Shared by the tray
+    /// menu item (<paramref name="owner"/> null — no window to parent to) and
+    /// the Settings → Advanced button (<paramref name="owner"/> the settings
+    /// window, via the callback <see cref="ShowOrFocusSettingsWindow"/> wires
+    /// into it).
+    /// </summary>
+    private void ConfirmAndRequestFactoryReset(IWin32Window? owner)
+    {
+        DialogResult choice = MessageBox.Show(
+            owner,
+            "Factory reset the bridge?" + Environment.NewLine + Environment.NewLine
+                + "This will:" + Environment.NewLine
+                + "  •  Stop the bridge (the sidecar disconnects immediately)" + Environment.NewLine
+                + $"  •  Permanently delete the Matter pairing data under {Path.Combine(AppPaths.Root, "matter")}"
+                + Environment.NewLine
+                + "  •  Make every MatterHelm device show as offline in Google Home until you remove them there"
+                + Environment.NewLine
+                + "  •  Require re-pairing (a new QR code) afterward" + Environment.NewLine + Environment.NewLine
+                + "Your config and logs are kept.",
+            "Factory reset bridge",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (choice != DialogResult.Yes)
+        {
+            return;
+        }
+
+        Log.Info("Tray: factory reset confirmed; requesting BridgeHost.FactoryReset().");
+        FactoryResetRequested?.Invoke(this, EventArgs.Empty);
+    }
+
     private void ShowOrFocusPairingWindow()
     {
         if (_pairingWindow is null || _pairingWindow.IsDisposed)
@@ -268,7 +315,8 @@ public sealed class TrayContext : ApplicationContext
         {
             _settingsWindow = new SettingsWindow(
                 new SettingsViewModel(Config),
-                overlayPreview: () => OverlayPreviewRequested?.Invoke(this, EventArgs.Empty));
+                overlayPreview: () => OverlayPreviewRequested?.Invoke(this, EventArgs.Empty),
+                factoryReset: () => ConfirmAndRequestFactoryReset(_settingsWindow));
         }
 
         _settingsWindow.Show();

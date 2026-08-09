@@ -1,0 +1,121 @@
+# End-to-end validation log (hardware-in-the-loop)
+
+Scripted checklist for the manual E2E gate in `docs/DEVELOPMENT-PLAN.md`
+("E2E | manual, scripted checklist | pairing + each voice action on real
+Google Home hardware, results logged in `docs/e2e-log.md`") and the S3-2
+acceptance criterion ("Scripted E2E checklist executed & logged in
+`docs/e2e-log.md`"). This is **not** automated — it needs a real Nest hub,
+a real phone running the Google Home app, and a human. `docs/spikes/
+S0-3-pairing.md` ran an earlier, narrower version of this on the throwaway
+spike bridge; this is the full pass against the shipped product.
+
+**How to use this file**: work through the rows top to bottom on a real run
+(packaged dist per S3-1, or `dotnet run`/`npm start` if packaging hasn't
+landed yet — note which in the run header below). Fill in **Observed** and
+**Verdict** (`PASS` / `FAIL` / `MOVED` / `N/A`) and a UTC **Timestamp** as
+you go; leave a row's Observed/Verdict/Timestamp blank until it's actually
+been run — a blank row means "not yet executed," not "assumed fine." Add a
+new **Run** section per pass (don't overwrite prior evidence); carry
+forward a short note in each new run's header on what changed since the
+last one.
+
+## Run header (fill in per pass)
+
+| Field | Value |
+|---|---|
+| Run date | |
+| Build under test | (packaged dist path, or `dotnet run`/`npm start` — note which) |
+| App version | |
+| Bridge version | |
+| Windows build | |
+| Hub model | |
+| Home app version | |
+| Tester | |
+
+## Pairing
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Fresh install, no prior pairing: enable bridge (tray → Enable bridge) | Tray icon goes gray → amber within a few seconds; no crash | | | |
+| Firewall prompt on first bridge start | Windows Firewall prompts for Node.js/MatterHelm network access; Allow (Private) | | | |
+| Open "Pair with Google Home…" | QR code + manual pairing code render; window is legible/scannable off-screen | | | |
+| Scan QR in Google Home app | Home app shows the uncertified-device consent screen, then proceeds (not a hard "Not a Matter-certified device" failure) | | | |
+| Complete pairing, name devices | Home app shows tiles for HTPC Speaker, HTPC Play Pause, HTPC Next, HTPC Previous, HTPC Power (+ any configured custom commands) | | | |
+| Tray state after pairing completes | Tray icon turns green | | | |
+
+## Per-device voice + app-tile checks
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Voice: "Hey Google, set HTPC Speaker volume to 40 %" | System volume changes to 40 % on the PC; overlay flashes "Google Home → Volume" with a fill bar at ~40 % | | | |
+| **Speaker volume/slider** (S0-3 carried item): drag the HTPC Speaker tile's volume slider in the Home app | System volume tracks the slider in near-real-time while dragging; overlay flashes per step or per settle (no crash/lag pile-up) | | | |
+| **Speaker volume/slider verdict**: does the bridged Speaker endpoint give a usable slider UX, not just voice? (S0-3 acceptance question, never validated on real hardware until this run) | Usable slider — drag lands within a driver step or two of the target, no visible fight-back | | | |
+| Voice: "Hey Google, mute HTPC Speaker" / "…unmute…" | System mutes/unmutes; overlay flashes "mute"/"unmute" | | | |
+| App tile: tap the speaker's mute control | Same mute/unmute effect as voice | | | |
+| Voice: "Hey Google, turn on HTPC Play Pause" | Media play/pause toggles on the PC; tile flips on then back off within ~1 s (momentary auto-reset) | | | |
+| App tile: tap HTPC Play Pause | Same play/pause toggle | | | |
+| Voice: "Hey Google, turn on HTPC Next" / "…HTPC Previous" | Next/previous track fires; tile auto-resets | | | |
+| App tile: tap HTPC Next / HTPC Previous | Same next/previous effect | | | |
+| Voice: "Hey Google, turn off HTPC Power" | Configured power-off behavior fires (displays off / sleep / pause+displays off, per Settings) | | | |
+| App tile: tap HTPC Power off | Same power-off behavior | | | |
+| Voice: "Hey Google, turn on HTPC Power" (if power-on is configured/expected) | Displays wake | | | |
+
+## Custom command
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Settings → Devices & Commands → add a **media key** custom command (e.g. "Stop": mediaKey stop), save, restart bridge if prompted | New tile appears in Home app after re-pair/reload; voice + tile both dispatch the configured media key | | | |
+
+## Key-sequence command
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Settings → Devices & Commands → add a **key sequence** custom command (e.g. `Ctrl+Shift+V` into a text field/editor open on screen), save | New tile appears; voice + tile send the exact chord to the focused window (visible effect, e.g. paste-as-plain-text) | | | |
+
+## Overlay behavior
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Fire several commands in quick succession (e.g. volume up/down a few times fast) | Overlay updates in place without flicker, stacking, or stale text; never steals focus or blocks a click underneath it | | | |
+| Move mouse / click through where the overlay is displayed | Click passes through to whatever is underneath (click-through, non-activating) | | | |
+| Settings → Overlay → change position, Preview | Overlay reappears at the new screen position immediately | | | |
+
+## State reflection (local change → Home app)
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Change system volume locally on the PC (keyboard media key or Windows volume mixer), then open the HTPC Speaker tile in the Home app | The Home app's slider/level reflects the local change (may take a moment) | | | |
+| Mute locally on the PC, check the Home app tile | Tile shows muted | | | |
+
+## App-restart recovery (hub-reconnect watch item)
+
+Carried forward from `docs/spikes/S0-3-pairing.md` (spike run: after a
+force-killed/relaunched bridge with the *same* identity, still advertising
+mDNS every ~90 s, the Nest hub made **zero** reconnection attempts in over
+60 minutes — logged as **FAIL — carried as product risk** and re-scoped in
+`docs/adr/006-telemetry-and-diagnostics.md` §4 as Google controller-side
+re-association policy, not something bridge-side subscription tuning can
+fix; cross-vendor evidence there cites matter.js controllers reconnecting in
+≈2 min and Apple in ≈10–15 min, for contrast). This run re-tests it against
+the shipped bridge (0.17.7, with S5-1's session-observability logging) and
+**times** the stall instead of just eyeballing it, using the session-event
+log lines ADR-006 added for exactly this purpose.
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| With the bridge paired and green, restart the tray app normally (Exit → relaunch, or just toggle Enable bridge off/on) | Sidecar cleanly stops (stdin-tether exit logged) and restarts with the same identity; tray returns to green once the hub reconnects | | | |
+| **Time the reconnect**: note the timestamp the sidecar log shows the fresh session/subscription re-established (ADR-006 §1 session-observability events — grep the app/sidecar log for "session" around the restart) minus the restart timestamp | Record the elapsed time here even if it's fast — this is the metric the spike couldn't capture (spike observed >60 min/never; a healthy run might land in seconds to a couple of minutes) | | | |
+| If the hub has *not* reconnected within ~5 minutes | Apply the documented mitigation: power-cycle the Nest hub or toggle the device tile in the Home app; note whether that fixes it and how long it then took | | | |
+| Repeat with a **hard kill** (End Task the tray process, not Exit) rather than a clean restart | Compare reconnect timing/behavior against the clean-restart row above — a broken pipe/hard kill is the scenario the spike actually hit | | | |
+
+## Factory reset → re-pair
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| With the bridge paired and green, trigger **Factory reset bridge…** from the tray menu, confirm | Confirmation dialog spells out the consequences; after confirming, bridge stops, Matter storage is deleted, log/overlay shows "factory reset complete — open Pair with Google Home to re-pair" | | | |
+| Check the Home app after the reset | All MatterHelm device tiles show offline/unreachable (expected — Google isn't told directly) | | | |
+| Remove the offline tiles in the Home app | Tiles removed cleanly | | | |
+| Tray state after the reset completes | If the bridge was enabled before the reset, it auto-restarts (icon back to amber); if it was off, it stays off | | | |
+| Re-pair from scratch (repeat the Pairing section above) | A **new** QR code/manual code is offered (different from the original pairing); pairing succeeds again with no leftover state from before | | | |
+| Confirm config survived the reset | Device names, custom commands, overlay settings, and other Settings values are unchanged from before the reset (only the Matter pairing was wiped) | | | |
+| Repeat Factory reset with the bridge **disabled** | Storage still deletes; bridge stays disabled afterward (no unexpected auto-start) | | | |
