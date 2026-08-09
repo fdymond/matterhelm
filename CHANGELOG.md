@@ -8,16 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
-No versions have been tagged yet — see `[Unreleased]` below. `v0.1.0` is
-expected once Sprint 3 packaging (`build.ps1`, single dist folder, factory
-reset, user guide — see `BACKLOG.md` S3-1/S3-2/S3-3) lands.
-
 ## [Unreleased]
 
-Feature-complete and paired against real Google Home hardware; packaging
-(v0.1.0) is the remaining gap before a first tagged release. High-level
-summary of what's shipped (see `README.md` "Status" for the authoritative,
-up-to-date version):
+Nothing yet.
+
+## [0.1.0] — 2026-08-09
+
+First tagged release: everything from Sprints 0–7 plus the Sprint 3
+hardening/ship stories (S3-1 packaging, S3-2 factory reset + user guide,
+S3-3 release gate). Feature-complete and paired against real Google Home
+hardware. High-level summary of what's shipped (see `README.md` "Status"
+for the authoritative, up-to-date version):
+
+### Packaging & release (Sprint 3)
+
+- `build.ps1` produces a single self-contained `dist\` folder: Node SEA
+  sidecar (`sidecar\bridge.exe`, with an automatic `node.exe + bridge.cjs`
+  fallback layout) plus a self-contained single-file tray exe — no Node.js
+  or .NET required on the target machine. Sizes: tray 111 MB, sidecar
+  88 MB, total ~200 MB.
+- Factory-reset flow (tray menu, deletes Matter storage after a spelled-out
+  confirmation) and `docs/user-guide.md`; scripted hardware E2E checklist
+  in `docs/e2e-log.md`.
+- Tag-triggered release workflow (verify + tests + dist build + GitHub
+  Release zip).
+- Release perf/budget gate (ADR-007 method: private bytes, settled ≥ 2 min
+  idle, packaged dist under test) — all budgets met:
+
+  | Metric | Budget | Measured (2026-08-09) |
+  |---|---|---|
+  | Tray idle private bytes | ≤ 32 MB | 15.5 MB |
+  | Sidecar processes | 1 | 1 (SEA `bridge.exe`) |
+  | Sidecar idle private bytes | ≤ 120 MB | 93 MB |
+  | Idle CPU (both) | < 0.5 % | tray 0.08 %, sidecar 0 % |
+  | Sidecar cold start → "bridge started" | < 3 s | 2.04 s |
+  | UI churn probe (`--probe-resources`) | PASS | PASS (all 4 bounds) |
+  | `npm audit` | clean | 0 vulnerabilities |
+
+  Bonus observation: after a hard tray-app kill the packaged sidecar exits
+  via its stdin tether in 0.6 s (backlog watch item P-4 did not reproduce
+  with the SEA layout).
 
 ### Bridge (`bridge/`)
 
@@ -60,10 +90,8 @@ up-to-date version):
 - Open-source-grade project scaffolding: license, contributor/security/
   conduct docs, issue and PR templates, release automation (this change).
 
-### Known gaps before v0.1.0
+### Known gaps
 
-- Packaging: Node SEA single-exe + `dotnet publish` self-contained app +
-  unified `build.ps1` dist folder (Sprint 3, `S3-1`).
-- Unpair/factory-reset flow and `docs/user-guide.md` (`S3-2`).
-- Perf/budget release pass and the first tagged `v0.1.0` (`S3-3`).
-- Continued hardware end-to-end validation, logged in `docs/e2e-log.md`.
+- Continued hardware end-to-end validation, logged in `docs/e2e-log.md`
+  (the full scripted checklist has not yet been executed against the
+  packaged dist — needs the human, a Nest hub, and a phone).

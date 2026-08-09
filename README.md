@@ -44,9 +44,10 @@ support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
 
 ## Status
 
-**Phase: feature-complete and paired; packaging (v0.1.0) remains.** CI green
-on every commit (bridge verify+coverage on ubuntu/windows, app build+tests+
-coverage on windows). Commissioned against a real Nest hub.
+**Phase: v0.1.0 released** (packaged dist, factory reset, user guide,
+budget gate — see `CHANGELOG.md`). CI green on every commit (bridge
+verify+coverage on ubuntu/windows, app build+tests+coverage on windows).
+Commissioned against a real Nest hub.
 
 - **Bridge (`bridge/`)**: full Matter device model behind the adapter
   boundary, protocol v2 with custom commands, structured diagnostics with
@@ -58,10 +59,11 @@ coverage on windows). Commissioned against a real Nest hub.
   CRUD incl. key-sequence capture), dark mode, DPI-safe at 200 %, local
   metrics + privacy-hardened diagnostics export. 402 tests. Budgets measured
   and enforced (ADR-007).
-- **Sprints 0–7 delivered and adversarially reviewed** (five review passes).
-  Remaining: Sprint 3 packaging (`build.ps1`, single dist folder, factory
-  reset, user guide, v0.1.0) and continued hardware E2E validation.
-  Natural voice phrases: see `docs/routines.md`.
+- **Sprints 0–7 delivered and adversarially reviewed** (five review passes),
+  including Sprint 3 packaging (`build.ps1` single dist folder, Node SEA
+  sidecar, factory reset, user guide) and the v0.1.0 release gate.
+  Remaining: the full hardware E2E checklist (`docs/e2e-log.md`) against
+  the packaged dist. Natural voice phrases: see `docs/routines.md`.
 
 ## Repository layout
 
@@ -76,7 +78,7 @@ coverage on windows). Commissioned against a real Nest hub.
 | `docs/adr/` | Architecture Decision Records |
 | `CLAUDE.md` | Sub-agent orchestration playbook |
 
-## Quick start (once sprints land)
+## Quick start
 
 ```bash
 cd bridge && npm ci && npm run verify        # sidecar: lint + types + tests
