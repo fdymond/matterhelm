@@ -14,6 +14,11 @@
  * validate-and-hope") — every field is zod-validated or explicitly checked
  * before use, and a malformed value is a fatal startup error, never a silent
  * fallback.
+ *
+ * Naming note (S7-2): the `HTPC_BRIDGE_*` env prefix deliberately survives
+ * the MatterHelm product rename. It is an internal contract between the tray
+ * app and this sidecar — we own both sides — so renaming it would be pure
+ * churn with drift risk and zero user-visible value.
  */
 import { join } from "node:path";
 
@@ -34,7 +39,12 @@ const MOMENTARY_RESET_MS_MIN = 100;
 const MOMENTARY_RESET_MS_MAX = 2000;
 const DEFAULT_MOMENTARY_RESET_MS = 300;
 
-/** Built-in display-name defaults (BLUEPRINT §2.2's "HTPC …" voice targets). */
+/**
+ * Built-in display-name defaults (BLUEPRINT §2.2's "HTPC …" voice targets).
+ * Deliberately NOT renamed to MatterHelm (S7-2): these are the user-facing
+ * paired device names — "HTPC Speaker" is what people say to Google — and
+ * changing the defaults would churn fresh installs for no gain.
+ */
 const DEFAULT_BUILTIN_NAMES: Readonly<Record<BuiltinEndpointKey, string>> = {
   speaker: "HTPC Speaker",
   playPause: "HTPC Play Pause",
@@ -96,7 +106,7 @@ export interface Config {
   ipcPort: number;
   /** `HTPC_BRIDGE_IPC_TOKEN`; required, never logged. */
   ipcToken: string;
-  /** `HTPC_BRIDGE_STORAGE_DIR`; default `%APPDATA%\HtpcMatterBridge\matter`. */
+  /** `HTPC_BRIDGE_STORAGE_DIR`; default `%APPDATA%\MatterHelm\matter`. */
   storageDir: string;
   /** `HTPC_BRIDGE_LOG_LEVEL`; default `"info"`. */
   logLevel: PinoLevel;
@@ -165,7 +175,12 @@ function parseToken(raw: string | undefined): string {
   return result.data;
 }
 
-/** Explicit dir, or `%APPDATA%\HtpcMatterBridge\matter` when unset. */
+/**
+ * Explicit dir, or `%APPDATA%\MatterHelm\matter` when unset (S7-2 rename).
+ * The tray app always sets `HTPC_BRIDGE_STORAGE_DIR` explicitly from its own
+ * migrated (or fallback) data root, so this default only serves hand-run dev
+ * sessions — which get fresh state under the new name.
+ */
 function parseStorageDir(raw: string | undefined, appData: string | undefined): string {
   if (raw !== undefined && raw !== "") {
     return raw;
@@ -173,10 +188,10 @@ function parseStorageDir(raw: string | undefined, appData: string | undefined): 
   if (appData === undefined || appData === "") {
     throw new Error(
       "HTPC_BRIDGE_STORAGE_DIR is unset and APPDATA is unavailable to derive its default " +
-        "(%APPDATA%\\HtpcMatterBridge\\matter); set HTPC_BRIDGE_STORAGE_DIR explicitly",
+        "(%APPDATA%\\MatterHelm\\matter); set HTPC_BRIDGE_STORAGE_DIR explicitly",
     );
   }
-  return join(appData, "HtpcMatterBridge", "matter");
+  return join(appData, "MatterHelm", "matter");
 }
 
 function parseLogLevel(raw: string | undefined): PinoLevel {

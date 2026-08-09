@@ -1,4 +1,4 @@
-# Blueprint: HTPC Matter Bridge (standalone app)
+# Blueprint: MatterHelm (standalone app)
 
 Technical design for a **fully independent** Windows product: a tray
 application that makes the HTPC a locally-paired Google Home device and
@@ -135,7 +135,7 @@ implement the same names):
 |---|---|---|
 | `HTPC_BRIDGE_IPC_PORT` | loopback WS port the tray app listens on | `39531` |
 | `HTPC_BRIDGE_IPC_TOKEN` | per-session auth token for `hello` | required, no default |
-| `HTPC_BRIDGE_STORAGE_DIR` | matter.js `storage.path` | `%APPDATA%\HtpcMatterBridge\matter` |
+| `HTPC_BRIDGE_STORAGE_DIR` | matter.js `storage.path` | `%APPDATA%\MatterHelm\matter` |
 | `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
 | `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
@@ -168,13 +168,13 @@ State flows on connect and on every change (the executor observes system
 volume/mute via CoreAudio callbacks). If the socket is down, Matter writes are
 acked, the action is dropped with one WARN, and the bridge never crashes.
 
-### 2.4 `app/` — tray application (C# .NET 8 WinForms, `HtpcMatterBridge`)
+### 2.4 `app/` — tray application (C# .NET 8 WinForms, `MatterHelm`)
 
 ```
-app/HtpcMatterBridge/
+app/MatterHelm/
   Program.cs            single-instance mutex, Application.Run(TrayContext)
   TrayContext.cs        tray icon + menu + lifecycle (enable/disable bridge)
-  Config.cs             %APPDATA%\HtpcMatterBridge\config.json (camelCase JSON)
+  Config.cs             %APPDATA%\MatterHelm\config.json (camelCase JSON)
   Log.cs                rolling daily file log (7 days)
   Sidecar/
     SidecarSupervisor.cs   spawn node/SEA exe, env token, restart backoff,
@@ -218,9 +218,13 @@ Sprint-2 stories implement those choices, they don't reopen them.
 
 ### 2.5 Persistence & lifecycle
 
-- Matter fabric/commissioning state: `%APPDATA%\HtpcMatterBridge\matter\`
+- Matter fabric/commissioning state: `%APPDATA%\MatterHelm\matter\`
   (delete = unpair; exposed as "Factory reset bridge" menu action).
 - Config + rolling logs under the same appdata root.
+- S7-2 rename migration: on startup, before Config/Log initialize, a legacy
+  `%APPDATA%\HtpcMatterBridge` root is atomically moved to
+  `%APPDATA%\MatterHelm` (fabric storage included, so the pairing survives);
+  if the move fails, the app runs from the legacy root for that session.
 - Sidecar stdout is structured (pino) → parsed into the app log with levels.
 
 ### 2.6 Packaging

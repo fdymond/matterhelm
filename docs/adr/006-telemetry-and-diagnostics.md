@@ -39,7 +39,8 @@ primary sources) fixed the design. A separate finding re-scopes the
 - **Timing**: frame received → executed → acked via
   `Stopwatch.GetTimestamp/GetElapsedTime`, logged per action id.
 - **Metrics**: in-box `System.Diagnostics.Metrics` `Meter`
-  (`HtpcMatterBridge`): counters (actions ok/failed, acks, supervisor
+  (`HtpcMatterBridge`, now `MatterHelm` since the S7-2 rename): counters
+  (actions ok/failed, acks, supervisor
   restarts, IPC connects/disconnects, state frames published/suppressed) +
   latency histogram. Consumed in-process by a `MeterListener` writing a
   JSON-lines metrics file next to the logs, and externally via

@@ -44,7 +44,7 @@ serves one of those four words; anything that doesn't is ceremony and gets cut.
 
 ## C# (tray application, `app/`)
 
-House style for `HtpcMatterBridge` (written fresh here — no code imported from
+House style for `MatterHelm` (written fresh here — no code imported from
 other repos): XML doc `<summary>` on public members, terse why-comments,
 `_camelCase` fields, locks with documented discipline, events marshalled to the
 UI thread via `SynchronizationContext` and fired outside locks, P/Invoke over

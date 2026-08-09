@@ -1,6 +1,6 @@
-# windows-google-home-matter
+# MatterHelm
 
-**HTPC Matter Bridge** — a standalone Windows tray application that makes your
+**MatterHelm** — a standalone Windows tray application that makes your
 HTPC a **locally-paired Google Home device**. Say "Hey Google, set HTPC volume
 to 40 %", tap devices in the Home app, or wire routines ("movie time") — the
 app executes the media/volume/power actions directly on the PC.
@@ -63,7 +63,7 @@ support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
 | Path | Purpose |
 |---|---|
 | `bridge/` | Matter sidecar — Node 22 + TypeScript (strict), matter.js |
-| `app/` | Tray application — C# .NET 8 WinForms (`HtpcMatterBridge`) |
+| `app/` | Tray application — C# .NET WinForms (`MatterHelm`) |
 | `docs/BLUEPRINT.md` | Binding architecture & protocol spec |
 | `docs/RESEARCH.md` | Integration-route research (July 2026) |
 | `docs/DEVELOPMENT-PLAN.md` · `BACKLOG.md` | Process, sprints, story backlog |
@@ -75,7 +75,7 @@ support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
 
 ```bash
 cd bridge && npm ci && npm run verify        # sidecar: lint + types + tests
-# app:  dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release
+# app:  dotnet build app/MatterHelm/MatterHelm.csproj -c Release
 # dist: ./build.ps1  → single folder with both executables
 ```
 

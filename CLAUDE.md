@@ -38,7 +38,7 @@ npm test -- -t "volume"                   # tests matching a name
 
 Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
 (Sprint 0/2 stories) builds with
-`dotnet build app/HtpcMatterBridge/HtpcMatterBridge.csproj -c Release`
+`dotnet build app/MatterHelm/MatterHelm.csproj -c Release`
 (warnings-as-errors). This product is fully standalone (ADR-001): never
 reference, read config from, or depend on `../windows-voice-control` code.
 

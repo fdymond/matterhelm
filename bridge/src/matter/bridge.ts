@@ -63,6 +63,11 @@ export const DEFAULT_PRODUCT_ID = 0x8000;
  */
 const DEFAULT_UNIQUE_ID_SEED = "htpc-matter-bridge";
 
+// S7-2 rename note: NODE_ID and the uniqueId seed are commissioning-critical
+// identity (changing either re-adds every device in Google Home), and the
+// vendor/product names are the paired bridge's user-facing Basic Information
+// strings — all three deliberately keep their pre-MatterHelm values. Only
+// packaging/docs carry the new product name.
 const NODE_ID = "htpc-bridge";
 const VENDOR_NAME = "HTPC Bridge";
 const PRODUCT_NAME = "HTPC Matter Bridge";
