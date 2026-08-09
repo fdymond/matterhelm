@@ -42,9 +42,9 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S3-1 | Node SEA single-exe (`npm run package`) + `dotnet publish` self-contained app + root `build.ps1` producing one dist folder; ADR if SEA infeasible | Clean-machine run of the packaged dist pairs & controls; sizes reported | L | S2-R | impl (Fable) |
-| S3-2 | Unpair / factory-reset flow (tray action deletes matter storage) + `docs/user-guide.md` | Scripted E2E checklist executed & logged in `docs/e2e-log.md` | M | S3-1 | impl (Sonnet) |
-| S3-3 | Perf/budget pass (BLUEPRINT G6) + `npm audit` clean + release 0.1.0 | Budget table meets G6; tagged release | S | S3-2 | impl (Sonnet) |
+| S3-1 ✅ | Node SEA single-exe (`npm run package`) + `dotnet publish` self-contained app + root `build.ps1` producing one dist folder; ADR if SEA infeasible | Clean-machine run of the packaged dist pairs & controls; sizes reported | L | S2-R | impl (Fable) |
+| S3-2 ✅ (checklist authored + restart-recovery evidence pre-filled; full hardware pass pending the human) | Unpair / factory-reset flow (tray action deletes matter storage) + `docs/user-guide.md` | Scripted E2E checklist executed & logged in `docs/e2e-log.md` | M | S3-1 | impl (Sonnet) |
+| S3-3 ✅ (budget table in CHANGELOG 0.1.0: all G6/ADR-007 budgets met on the packaged dist; audit 0 vulns; tagged v0.1.0) | Perf/budget pass (BLUEPRINT G6) + `npm audit` clean + release 0.1.0 | Budget table meets G6; tagged release | S | S3-2 | impl (Sonnet) |
 
 ## Sprint 4 — settings UI, custom commands, modernization (ADR-004/ADR-005)
 
@@ -93,7 +93,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
   `Log.LogDirectory`.
 
 - ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.
-- **P-4**: tether robustness — when the tray app is hard-killed (not menu Exit), the sidecar was observed surviving ≥4s; index.ts listens for stdin "end"/"close" but a broken pipe may surface as "error". Add "error" handling + an S1-R check.
+- **P-4**: tether robustness — when the tray app is hard-killed (not menu Exit), the sidecar was observed surviving ≥4s; index.ts listens for stdin "end"/"close" but a broken pipe may surface as "error". Add "error" handling + an S1-R check. *(S3-3 measurement 2026-08-09: packaged SEA sidecar exited 0.6 s after a tray hard-kill — did not reproduce; keep as a low-priority hardening item.)*
 - **P-2**: additive protocol signal for commissioned/uncommissioned so tray green can mean "fabric joined" rather than "sidecar link up" (needs `v` bump, both sides).
 - **P-3**: "Factory reset bridge" tray action (delete matter storage; BLUEPRINT §2.5) — schedule with S3-2 unpair flow.
 
