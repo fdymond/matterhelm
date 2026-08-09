@@ -103,6 +103,17 @@ log lines ADR-006 added for exactly this purpose.
 
 | Step | Expected | Observed | Verdict | Timestamp (UTC) |
 |---|---|---|---|---|
+**Integrator evidence 2026-08-09 (pre-filled)**: after enabling the bridge at
+17:25:04 (clean restart, MatterHelm build, session-resumption records
+present), the log shows `matter session established` at 17:25:04.790 and
+`matter subscription created` at 17:25:05.048 — hub re-association in
+**under one second** via CASE resumption. Earlier the same day (16:44, after
+a longer outage) a `Subscription successfully reestablished … timing: 0 - 30s`
+line shows reconnection on the ~30 s scale. The >60-min spike stall has not
+reproduced since; the rows below re-verify on demand.
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
 | With the bridge paired and green, restart the tray app normally (Exit → relaunch, or just toggle Enable bridge off/on) | Sidecar cleanly stops (stdin-tether exit logged) and restarts with the same identity; tray returns to green once the hub reconnects | | | |
 | **Time the reconnect**: note the timestamp the sidecar log shows the fresh session/subscription re-established (ADR-006 §1 session-observability events — grep the app/sidecar log for "session" around the restart) minus the restart timestamp | Record the elapsed time here even if it's fast — this is the metric the spike couldn't capture (spike observed >60 min/never; a healthy run might land in seconds to a couple of minutes) | | | |
 | If the hub has *not* reconnected within ~5 minutes | Apply the documented mitigation: power-cycle the Nest hub or toggle the device tile in the Home app; note whether that fixes it and how long it then took | | | |
