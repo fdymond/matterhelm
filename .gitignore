@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Claude Code session state / agent worktrees — local only
+.claude/
 coverage/
 *.log
 # Matter fabric credentials / commissioning state — NEVER commit
