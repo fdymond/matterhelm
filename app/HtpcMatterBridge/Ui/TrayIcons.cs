@@ -95,82 +95,61 @@ public static class TrayIcons
         }
         else
         {
-            DrawMatterWithHouseCenter(g, size, glyph);
+            DrawMatterMark(g, size, glyph);
         }
 
         return bitmap;
     }
 
     /// <summary>
-    /// The "not operating" composition: a large Matter tri-node (three
-    /// satellite nodes linked to the center) whose center is a small filled
-    /// house silhouette instead of a node.
+    /// The "not operating" composition (owner request 2026-08-09): a faithful
+    /// rendition of the Matter certification mark — three units at 120°
+    /// rotational symmetry, each a thick radial arm plus an arc whose circle
+    /// is centered on that arm's OUTER tip (proportions measured from the
+    /// reference art: arm ~0.17r→0.42r, arc radius ~0.32r, sweep ~96°
+    /// straddling the inward direction, so the segment bows toward the glyph
+    /// center and its ends flare toward the neighbouring units). Drawn for
+    /// the owner's personal build; the mark belongs to the CSA — revisit
+    /// before any distribution.
     /// </summary>
-    private static void DrawMatterWithHouseCenter(Graphics g, int size, Color glyph)
+    private static void DrawMatterMark(Graphics g, int size, Color glyph)
     {
         float s = size;
-        var center = new PointF(0.50f * s, 0.55f * s);
-        float arm = 0.335f * s;
-        float nodeR = Math.Max(1.8f, 0.115f * s);
-        float lineW = Math.Max(1.4f, 0.085f * s);
+        var center = new PointF(0.50f * s, 0.52f * s);
+        float innerR = 0.15f * s;
+        float outerR = 0.40f * s;
+        // Tighter circle + wider sweep than the raw reference measurements:
+        // at tray sizes a large-radius 96° arc renders nearly straight and
+        // the three units read as a six-armed asterisk; ~0.26r/112° keeps
+        // the arcs legibly curved while preserving the mark's silhouette.
+        float arcR = 0.26f * s;
+        const float ArcSweepDegrees = 112f;
+        float stroke = Math.Max(1.6f, 0.10f * s);
 
-        using var linePen = new Pen(glyph, lineW) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-        using var nodeBrush = new SolidBrush(glyph);
+        using var pen = new Pen(glyph, stroke)
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+        };
+
         for (int i = 0; i < 3; i++)
         {
-            double angle = (-90 + (i * 120)) * Math.PI / 180.0;
-            var satellite = new PointF(
-                center.X + (float)(arm * Math.Cos(angle)),
-                center.Y + (float)(arm * Math.Sin(angle)));
-            g.DrawLine(linePen, center, satellite);
-            g.FillEllipse(nodeBrush, satellite.X - nodeR, satellite.Y - nodeR, 2 * nodeR, 2 * nodeR);
-        }
+            float outwardDeg = -90f + (i * 120f);
+            double outward = outwardDeg * Math.PI / 180.0;
+            var dir = new PointF((float)Math.Cos(outward), (float)Math.Sin(outward));
 
-        // House at the hub: knocked out of a glyph-colored disc so it reads in
-        // taskbar color. The house must sit clearly INSIDE the disc — at equal
-        // widths its corners fall outside the circle and the shape muddles.
-        float discR = 0.235f * s;
-        g.FillEllipse(nodeBrush, center.X - discR, center.Y - discR, 2 * discR, 2 * discR);
-        DrawHouseSilhouette(
-            g, new PointF(center.X, center.Y + (0.01f * s)), 0.30f * s, glyph, knockout: true);
-    }
+            var inner = new PointF(center.X + (dir.X * innerR), center.Y + (dir.Y * innerR));
+            var tip = new PointF(center.X + (dir.X * outerR), center.Y + (dir.Y * outerR));
+            g.DrawLine(pen, inner, tip);
 
-    /// <summary>
-    /// A minimal house (roof + body) centered at <paramref name="center"/>,
-    /// <paramref name="width"/> wide. With <paramref name="knockout"/> the
-    /// house is punched OUT of what's beneath (used inside the center disc so
-    /// the house reads in taskbar color through the glyph).
-    /// </summary>
-    private static void DrawHouseSilhouette(Graphics g, PointF center, float width, Color glyph, bool knockout)
-    {
-        float w = width;
-        float h = w; // square-ish footprint reads best this small
-        float left = center.X - (w / 2f);
-        float top = center.Y - (h / 2f);
-        using var house = new GraphicsPath();
-        house.AddPolygon(
-        [
-            new PointF(center.X, top),
-            new PointF(left + w, top + (0.42f * h)),
-            new PointF(left + (0.84f * w), top + (0.42f * h)),
-            new PointF(left + (0.84f * w), top + h),
-            new PointF(left + (0.16f * w), top + h),
-            new PointF(left + (0.16f * w), top + (0.42f * h)),
-            new PointF(left, top + (0.42f * h)),
-        ]);
-
-        if (knockout)
-        {
-            CompositingMode previous = g.CompositingMode;
-            g.CompositingMode = CompositingMode.SourceCopy;
-            using var hole = new SolidBrush(Color.Transparent);
-            g.FillPath(hole, house);
-            g.CompositingMode = previous;
-        }
-        else
-        {
-            using var brush = new SolidBrush(glyph);
-            g.FillPath(brush, house);
+            g.DrawArc(
+                pen,
+                tip.X - arcR,
+                tip.Y - arcR,
+                2 * arcR,
+                2 * arcR,
+                outwardDeg + 180f - (ArcSweepDegrees / 2f),
+                ArcSweepDegrees);
         }
     }
 
