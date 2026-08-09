@@ -36,6 +36,99 @@ public static class BridgeHostTests
     }
 
     /// <summary>
+    /// The S3-1 packaged-layout selection
+    /// (<see cref="SidecarLaunchSpec.TryPackaged"/>): the Node SEA exe
+    /// (<c>sidecar\bridge.exe</c>, no args) wins whenever present; the
+    /// ADR-007 §2 fallback layout (<c>sidecar\node.exe</c> +
+    /// <c>sidecar\bridge.cjs</c>) is honored otherwise; no packaged layout
+    /// means null (Default() then walks the dev fallback chain).
+    /// </summary>
+    public sealed class PackagedLayout : IDisposable
+    {
+        private readonly string _baseDir;
+        private readonly string _sidecarDir;
+
+        public PackagedLayout()
+        {
+            _baseDir = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
+            _sidecarDir = Path.Combine(_baseDir, "sidecar");
+            Directory.CreateDirectory(_sidecarDir);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(_baseDir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+        }
+
+        private void Touch(string fileName)
+        {
+            File.WriteAllText(Path.Combine(_sidecarDir, fileName), "stub");
+        }
+
+        [Fact]
+        public void SeaExeIsSelectedWithNoArgs()
+        {
+            Touch("bridge.exe");
+
+            SidecarSpec? spec = SidecarLaunchSpec.TryPackaged(_baseDir);
+
+            Assert.NotNull(spec);
+            Assert.Equal(Path.Combine(_sidecarDir, "bridge.exe"), spec.ExePath);
+            Assert.Empty(spec.Args);
+            Assert.Equal(_sidecarDir, spec.WorkingDirectory);
+        }
+
+        [Fact]
+        public void SeaExeWinsOverNodeBesideBundle()
+        {
+            Touch("bridge.exe");
+            Touch("node.exe");
+            Touch("bridge.cjs");
+
+            SidecarSpec? spec = SidecarLaunchSpec.TryPackaged(_baseDir);
+
+            Assert.NotNull(spec);
+            Assert.Equal(Path.Combine(_sidecarDir, "bridge.exe"), spec.ExePath);
+            Assert.Empty(spec.Args);
+        }
+
+        [Fact]
+        public void NodeBesideBundleIsTheFallbackLayout()
+        {
+            Touch("node.exe");
+            Touch("bridge.cjs");
+
+            SidecarSpec? spec = SidecarLaunchSpec.TryPackaged(_baseDir);
+
+            Assert.NotNull(spec);
+            Assert.Equal(Path.Combine(_sidecarDir, "node.exe"), spec.ExePath);
+            Assert.Equal([Path.Combine(_sidecarDir, "bridge.cjs")], spec.Args);
+            Assert.Equal(_sidecarDir, spec.WorkingDirectory);
+        }
+
+        [Fact]
+        public void NodeWithoutBundleIsNotAPackagedLayout()
+        {
+            Touch("node.exe");
+
+            Assert.Null(SidecarLaunchSpec.TryPackaged(_baseDir));
+        }
+
+        [Fact]
+        public void EmptySidecarDirIsNotAPackagedLayout()
+        {
+            Assert.Null(SidecarLaunchSpec.TryPackaged(_baseDir));
+        }
+    }
+
+    /// <summary>
     /// The S6-1 dev-bundle staleness rule (<see cref="SidecarLaunchSpec.IsBundleFresh"/>):
     /// a bundle only wins over tsx when it exists and no file under
     /// <c>bridge/src</c> (recursively) is newer — stale bundles must lose so
