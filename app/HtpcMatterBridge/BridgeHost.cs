@@ -437,6 +437,9 @@ public sealed class BridgeHost : IDisposable
                         .Where(c => c.Enabled)
                         .Select(c => new SidecarCustomEndpointEntry(c.Key, c.Name))]),
                 SidecarEnvJsonContext.Default.SidecarEndpointsEnv),
+            // S7-1: momentary auto-reset window; Config guarantees 100–2000
+            // (the bridge parser is strict and would exit on anything else).
+            ["HTPC_BRIDGE_MOMENTARY_RESET_MS"] = config.MomentaryResetMs.ToString(CultureInfo.InvariantCulture),
         };
         if (!string.IsNullOrWhiteSpace(config.MdnsInterface))
         {
@@ -800,8 +803,25 @@ public sealed class BridgeHost : IDisposable
                 _executor.Execute("launch", new LaunchRequest(launch.Path, launch.Args)),
                 $"launched {Path.GetFileName(launch.Path)}",
                 null),
+            KeySequenceActionConfig keySequence => ExecuteKeySequence(frame.Key, keySequence.Sequence),
             _ => (false, "failed", $"unsupported action type for custom command: {frame.Key}"),
         };
+    }
+
+    /// <summary>
+    /// Executes a <c>keySequence</c> custom action (S7-1): re-parses the
+    /// stored sequence (Config canonicalizes on load, so a miss here means
+    /// the config mutated since — nack with a reason, never crash) and sends
+    /// the chord through the executor seam.
+    /// </summary>
+    private (bool Ok, string Pill, string? Error) ExecuteKeySequence(string commandKey, string sequence)
+    {
+        if (!KeyChord.TryParse(sequence, out ParsedKeyChord? chord, out string? parseError))
+        {
+            return (false, "failed", $"invalid key sequence for custom command {commandKey}: {parseError}");
+        }
+
+        return (_executor.Execute("keySequence", chord), $"{chord.Canonical} sent", null);
     }
 
     private (bool Ok, string Pill, string? Error) ExecuteMediaKey(MediaKeyName keyName) => keyName switch

@@ -7,16 +7,19 @@ namespace HtpcMatterBridge.Actions;
 /// <c>--selftest-actions</c>. Exercises volume set/read-back, mute toggling,
 /// change-event observation and media-key injection, restoring the original
 /// volume/mute even on failure. Display off/wake is destructive to the session
-/// and therefore opt-in via <c>--selftest-actions-display</c>; sleep is never
-/// exercised. Results go to stdout (parent console, if any) and to
-/// <c>selftest-actions-results.txt</c> next to the exe.
+/// and therefore opt-in via <c>--selftest-actions-display</c>; the S7-1
+/// key-sequence injection types into whatever window has focus and is
+/// likewise opt-in via <c>--selftest-actions-keysequence</c> (it presses
+/// <c>F15</c> — a key with no default Windows binding, so it lands harmlessly);
+/// sleep is never exercised. Results go to stdout (parent console, if any)
+/// and to <c>selftest-actions-results.txt</c> next to the exe.
 /// </summary>
 internal static partial class ActionsSelfTest
 {
     private const int AttachParentProcess = -1;
 
     /// <summary>Runs the self-test. Returns the process exit code: 0 iff every check passed.</summary>
-    public static int Run(bool includeDisplayTests)
+    public static int Run(bool includeDisplayTests, bool includeKeySequenceTest = false)
     {
         _ = AttachConsole(AttachParentProcess); // WinExe has no console; borrow the parent's if present.
         List<string> lines = [];
@@ -77,6 +80,20 @@ internal static partial class ActionsSelfTest
                 // 4) Media key injection — SendInput result only; media state is not
                 //    asserted because no player is guaranteed to be running.
                 Check(executor.Execute("playPause"), "playPause → SendInput injected key-down/key-up");
+
+                // 5) Key-sequence injection (S7-1) — types into the focused
+                //    window, so opt-in only; F15 has no default Windows binding.
+                if (includeKeySequenceTest)
+                {
+                    bool parsed = KeyChord.TryParse("F15", out ParsedKeyChord? chord, out _);
+                    Check(
+                        parsed && executor.Execute("keySequence", chord),
+                        "keySequence F15 → SendInput injected the chord");
+                }
+                else
+                {
+                    Emit("Key sequence: SKIPPED (run with --selftest-actions-keysequence to include)");
+                }
 
                 if (includeDisplayTests)
                 {

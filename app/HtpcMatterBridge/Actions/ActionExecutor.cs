@@ -16,10 +16,11 @@ public sealed class ActionExecutor : IDisposable
     /// <summary>
     /// Executes the named action. <paramref name="value"/> carries the payload for value
     /// actions: <c>int</c> 0–100 for <c>setVolume</c>, <c>bool</c> for <c>setMuted</c>,
-    /// <c>int</c> signed percent delta for <c>volumeStep</c>, and a
-    /// <see cref="LaunchRequest"/> for <c>launch</c>. Beyond the protocol names, the
-    /// custom-command ops (S4-2) are <c>mediaStop</c>, <c>muteToggle</c>,
-    /// <c>volumeStep</c>, and <c>launch</c>.
+    /// <c>int</c> signed percent delta for <c>volumeStep</c>, a
+    /// <see cref="LaunchRequest"/> for <c>launch</c>, and a
+    /// <see cref="ParsedKeyChord"/> for <c>keySequence</c>. Beyond the protocol names,
+    /// the custom-command ops (S4-2/S7-1) are <c>mediaStop</c>, <c>muteToggle</c>,
+    /// <c>volumeStep</c>, <c>launch</c>, and <c>keySequence</c>.
     /// </summary>
     public bool Execute(string name, object? value = null)
     {
@@ -50,6 +51,8 @@ public sealed class ActionExecutor : IDisposable
                     return true;
                 case "launch" when value is LaunchRequest request:
                     return AppLaunch.Start(request);
+                case "keySequence" when value is ParsedKeyChord chord:
+                    return KeyChord.Press(chord);
                 // For now power maps straight to the displays; S2-4 layers the
                 // configurable powerOff behavior (displays off vs. sleep) on top.
                 case "powerOn":

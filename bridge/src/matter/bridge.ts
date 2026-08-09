@@ -25,8 +25,9 @@
  *
  * Momentary auto-reset (§2.2, custom plugs included per ADR-004): a
  * momentary endpoint's `on` write schedules a write of `off`
- * {@link MOMENTARY_RESET_MS} later, so voice, app taps, and routines behave
- * as one button press. A second `on` before the reset restarts the window
+ * {@link BridgeOptions.momentaryResetMs} (default
+ * {@link DEFAULT_MOMENTARY_RESET_MS}) later, so voice, app taps, and
+ * routines behave as one button press. A second `on` before the reset restarts the window
  * (last tap wins — matter.js emits no event for a value-unchanged write, so
  * consecutive `on` events imply an interleaved `off`); an `off` from the
  * controller cancels it. Timers are keyed by Matter endpoint id and cleared
@@ -44,8 +45,13 @@ export type { PairingCodes } from "./adapter.js";
 export type { BuiltinEndpointKey, EndpointsConfig, MomentaryEndpointKey } from "./devices.js";
 export type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
-/** §2.2: momentary endpoints auto-reset to `off` this long after `on`. */
-export const MOMENTARY_RESET_MS = 800;
+/**
+ * §2.2 as amended by S7-1: default ms after `on` that momentary endpoints
+ * auto-reset to `off`. Config-driven via `HTPC_BRIDGE_MOMENTARY_RESET_MS`
+ * (100–2000); this default must equal the tray app's `momentaryResetMs`
+ * default — the two sides ship as one product.
+ */
+export const DEFAULT_MOMENTARY_RESET_MS = 300;
 
 /** Sanctioned Matter test VID/PID defaults (ADR-002); both configurable. */
 export const DEFAULT_VENDOR_ID = 0xfff1;
@@ -72,6 +78,12 @@ export interface BridgeOptions {
   port?: number;
   /** Endpoint set + display names (ADR-004 §2; `config.ts` parses this). */
   endpoints: EndpointsConfig;
+  /**
+   * Momentary auto-reset window in ms (S7-1); unset =
+   * {@link DEFAULT_MOMENTARY_RESET_MS}. `config.ts` validates the 100–2000
+   * range — this module trusts its caller.
+   */
+  momentaryResetMs?: number;
   /** Pins the mDNS interface for multi-NIC hosts; see `./adapter.js`. */
   mdnsInterface?: string;
   /**
@@ -301,13 +313,16 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     await plug.setOnOff(false);
   };
 
-  const scheduler = new MomentaryResetScheduler<string>(MOMENTARY_RESET_MS, (endpointId) => {
-    // A failed write to our own endpoint is an internal invariant violation;
-    // the floating promise surfaces it as an unhandled rejection (fail loud,
-    // docs/ENGINEERING-STANDARDS.md). close() clears timers first, so this
-    // cannot fire against a closed node.
-    void resetMomentary(endpointId);
-  });
+  const scheduler = new MomentaryResetScheduler<string>(
+    options.momentaryResetMs ?? DEFAULT_MOMENTARY_RESET_MS,
+    (endpointId) => {
+      // A failed write to our own endpoint is an internal invariant violation;
+      // the floating promise surfaces it as an unhandled rejection (fail loud,
+      // docs/ENGINEERING-STANDARDS.md). close() clears timers first, so this
+      // cannot fire against a closed node.
+      void resetMomentary(endpointId);
+    },
+  );
 
   // Config-derived endpoint set: enabled built-ins in §2.2 order, then one
   // momentary plug per custom command (endpoint numbers follow add order).

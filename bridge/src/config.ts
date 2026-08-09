@@ -29,6 +29,11 @@ const PORT_MAX = 65535;
 const DEFAULT_IPC_PORT = 39531;
 const DEFAULT_LOG_LEVEL = "info";
 
+/** `HTPC_BRIDGE_MOMENTARY_RESET_MS` bounds and default (S7-1, owner request). */
+const MOMENTARY_RESET_MS_MIN = 100;
+const MOMENTARY_RESET_MS_MAX = 2000;
+const DEFAULT_MOMENTARY_RESET_MS = 300;
+
 /** Built-in display-name defaults (BLUEPRINT §2.2's "HTPC …" voice targets). */
 const DEFAULT_BUILTIN_NAMES: Readonly<Record<BuiltinEndpointKey, string>> = {
   speaker: "HTPC Speaker",
@@ -112,6 +117,14 @@ export interface Config {
    * with its "HTPC …" name, no custom commands.
    */
   endpoints: EndpointsConfig;
+  /**
+   * `HTPC_BRIDGE_MOMENTARY_RESET_MS` (S7-1) — how long after an `on` write a
+   * momentary endpoint snaps back to `off`, in ms (integer 100–2000; default
+   * {@link DEFAULT_MOMENTARY_RESET_MS}). Both sides of the env contract share
+   * the 300 ms default — the tray app's `momentaryResetMs` config field must
+   * stay in lockstep.
+   */
+  momentaryResetMs: number;
   /** `HTPC_BRIDGE_MDNS_INTERFACE`; unset = matter.js auto-detects. */
   mdnsInterface?: string;
   /**
@@ -335,6 +348,30 @@ function parseEndpoints(raw: string | undefined): EndpointsConfig {
   };
 }
 
+/**
+ * Unset/empty = {@link DEFAULT_MOMENTARY_RESET_MS}; anything but an integer
+ * within [{@link MOMENTARY_RESET_MS_MIN}, {@link MOMENTARY_RESET_MS_MAX}] is
+ * fatal, never silent — same contract as every other env field.
+ */
+function parseMomentaryResetMs(raw: string | undefined): number {
+  if (raw === undefined || raw === "") {
+    return DEFAULT_MOMENTARY_RESET_MS;
+  }
+  const result = z.coerce
+    .number()
+    .int()
+    .min(MOMENTARY_RESET_MS_MIN)
+    .max(MOMENTARY_RESET_MS_MAX)
+    .safeParse(raw);
+  if (!result.success) {
+    throw new Error(
+      `HTPC_BRIDGE_MOMENTARY_RESET_MS must be an integer between ${String(MOMENTARY_RESET_MS_MIN)} ` +
+        `and ${String(MOMENTARY_RESET_MS_MAX)}, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return result.data;
+}
+
 function parseMdnsInterface(raw: string | undefined): string | undefined {
   return raw === undefined || raw === "" ? undefined : raw;
 }
@@ -357,6 +394,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     logLevel,
     matterLogLevel: parseMatterLogLevel(env.HTPC_BRIDGE_MATTER_LOG_LEVEL, logLevel),
     endpoints: parseEndpoints(env.HTPC_BRIDGE_ENDPOINTS),
+    momentaryResetMs: parseMomentaryResetMs(env.HTPC_BRIDGE_MOMENTARY_RESET_MS),
     matterLogFacilities: { ...DEFAULT_MATTER_LOG_FACILITIES, ...matterLogFacilities },
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),

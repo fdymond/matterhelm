@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using HtpcMatterBridge.Actions;
 
 namespace HtpcMatterBridge;
 
@@ -39,13 +40,15 @@ public enum MediaKeyName
 }
 
 /// <summary>
-/// What a custom command does when its endpoint fires (ADR-004 §1). Executed
-/// by the tray app only — the sidecar never sees actions. The wire form is
-/// polymorphic on <c>type</c> (<c>mediaKey</c> | <c>launch</c>).
+/// What a custom command does when its endpoint fires (ADR-004 §1, extended
+/// by S7-1). Executed by the tray app only — the sidecar never sees actions.
+/// The wire form is polymorphic on <c>type</c>
+/// (<c>mediaKey</c> | <c>launch</c> | <c>keySequence</c>).
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(MediaKeyActionConfig), "mediaKey")]
 [JsonDerivedType(typeof(LaunchActionConfig), "launch")]
+[JsonDerivedType(typeof(KeySequenceActionConfig), "keySequence")]
 public abstract class CustomActionConfig;
 
 /// <summary>Custom action injecting one media key (<c>{"type":"mediaKey","keyName":"stop"}</c>).</summary>
@@ -63,6 +66,19 @@ public sealed class LaunchActionConfig : CustomActionConfig
 
     /// <summary>Argument string, split per <c>Actions/AppLaunch.SplitArgs</c> (whitespace-separated, double quotes group).</summary>
     public string Args { get; set; } = "";
+}
+
+/// <summary>
+/// Custom action injecting a keyboard chord
+/// (<c>{"type":"keySequence","sequence":"Ctrl+Shift+V"}</c>, S7-1). The
+/// sequence grammar, key table, and canonical form are defined by
+/// <see cref="KeyChord"/>; Config validates on load and persists the
+/// canonical casing.
+/// </summary>
+public sealed class KeySequenceActionConfig : CustomActionConfig
+{
+    /// <summary>The chord in <see cref="KeyChord"/> grammar, canonical form (e.g. <c>Ctrl+Shift+V</c>).</summary>
+    public required string Sequence { get; set; }
 }
 
 /// <summary>
@@ -167,6 +183,14 @@ public sealed class BridgeConfig
 
     /// <summary>What the stateful power endpoint's "off" write does.</summary>
     public PowerOffAction PowerOffAction { get; set; } = PowerOffAction.PauseAndDisplaysOff;
+
+    /// <summary>
+    /// How long after an "on" tap a momentary Google Home switch snaps back
+    /// to "off", in milliseconds (S7-1; integer 100–2000). Threaded to the
+    /// sidecar via <c>HTPC_BRIDGE_MOMENTARY_RESET_MS</c>; the default must
+    /// equal the bridge's <c>DEFAULT_MOMENTARY_RESET_MS</c> (300).
+    /// </summary>
+    public int MomentaryResetMs { get; set; } = 300;
 
     /// <summary>Whether the overlay HUD flashes on commands.</summary>
     public bool OverlayEnabled { get; set; } = true;
@@ -365,6 +389,7 @@ public sealed class Config
 
             migrated = ApplyCommands(root, result.Commands);
             ApplyIpcPort(root, result);
+            ApplyMomentaryResetMs(root, result);
             ApplyPowerOffAction(root, result);
             ApplyOverlayEnabled(root, result);
             ApplyOverlayPosition(root, result);
@@ -612,8 +637,24 @@ public sealed class Config
                 return launch;
             }
 
+            case "keySequence":
+            {
+                if (!action.TryGetProperty("sequence", out JsonElement sequence)
+                    || sequence.ValueKind != JsonValueKind.String
+                    || sequence.GetString() is not { } raw
+                    || !KeyChord.TryParse(raw, out ParsedKeyChord? chord, out _))
+                {
+                    _log("WARN", $"config.json \"{where}.action.sequence\" must be a valid key sequence like \"Ctrl+Shift+V\"; entry dropped.");
+                    return null;
+                }
+
+                // Persisted form is canonical (fixed modifier order, table
+                // casing) — case-insensitive input, canonical casing out.
+                return new KeySequenceActionConfig { Sequence = chord.Canonical };
+            }
+
             default:
-                _log("WARN", $"config.json \"{where}.action.type\" is not a known action type (mediaKey/launch); entry dropped.");
+                _log("WARN", $"config.json \"{where}.action.type\" is not a known action type (mediaKey/launch/keySequence); entry dropped.");
                 return null;
         }
     }
@@ -668,6 +709,25 @@ public sealed class Config
         }
 
         _log("WARN", $"config.json \"ipcPort\" must be an integer 1-65535; using default {result.IpcPort}.");
+    }
+
+    private void ApplyMomentaryResetMs(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("momentaryResetMs", out JsonElement element))
+        {
+            return;
+        }
+
+        // The bridge's env parser is strict and treats an out-of-range value
+        // as FATAL — same discipline as logLevel (S4-R RISK-2): never hand
+        // the sidecar a value that would crash-loop it.
+        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int ms) && ms is >= 100 and <= 2000)
+        {
+            result.MomentaryResetMs = ms;
+            return;
+        }
+
+        _log("WARN", $"config.json \"momentaryResetMs\" must be an integer 100-2000; using default {result.MomentaryResetMs}.");
     }
 
     private void ApplyPowerOffAction(JsonElement root, BridgeConfig result)

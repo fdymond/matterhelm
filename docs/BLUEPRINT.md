@@ -115,7 +115,11 @@ One **Aggregator (bridge)** node exposing:
 | `HTPC Power` | On/Off Plug-in Unit (stateful) | OnOff | configurable: pause + display off / sleep |
 
 Momentary semantics: an `on` write dispatches the action, then auto-resets to
-`off` after 800 ms so voice, app taps, and routines behave as one button press.
+`off` after a configurable window (default 300 ms since S7-1; env
+`HTPC_BRIDGE_MOMENTARY_RESET_MS`) so voice, app taps, and routines behave as
+one button press. A true Matter "tap button" (Generic Switch) exists but
+Google grants it routine-trigger grammar only — no direct voice target — so
+the momentary plug remains the default (research 2026-08).
 Endpoint names are user-configurable — they are the Google voice targets.
 
 ### 2.3 IPC protocol (localhost WebSocket, default port 39531)
@@ -135,6 +139,7 @@ implement the same names):
 | `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
 | `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
+| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 100–2000; invalid = fatal (S7-1) | `300` |
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
 | `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed = fatal | unset |
 
