@@ -82,7 +82,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 |---|---|---|---|---|---|
 | S7-1 ✅ | keySequence custom actions (grammar, SendInput chords, capture UX) + configurable momentary reset (default 300 ms) | INPUT-array proof; both-side default pinned; 391+322 tests | M | — | impl (Fable) |
 | S7-2 ✅ | Rename product to MatterHelm (namespaces/dirs/mutex/meter/docs/CI) + atomic %APPDATA% migration preserving Matter fabric | Identity test files zero-diff; real migration performed at merge (log line verified, fabric present, old root gone) | M | S7-1 | impl (Fable) |
-| S7-3 | OSS-grade project setup: repo → `matterhelm` (private, history kept), LICENSE, CONTRIBUTING, SECURITY, CoC, issue/PR templates, release workflow (changelog+semver tags), branch/PR conventions | Files in place; release workflow dry-run green | M | S7-2 | impl (Sonnet) + integrator |
+| S7-3 ✅ (repo renamed to `matterhelm`; npm audit highs fixed; release workflow validates at first v* tag) | OSS-grade project setup: repo → `matterhelm` (private, history kept), LICENSE, CONTRIBUTING, SECURITY, CoC, issue/PR templates, release workflow (changelog+semver tags), branch/PR conventions | Files in place; release workflow dry-run green | M | S7-2 | impl (Sonnet) + integrator |
 
 ## Proposed (from agent reports, integrator-triaged)
 
