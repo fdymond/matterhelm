@@ -19,18 +19,18 @@ new **Run** section per pass (don't overwrite prior evidence); carry
 forward a short note in each new run's header on what changed since the
 last one.
 
-## Run header (fill in per pass)
+## Run 1 header (build prepared 2026-08-09 by the integrator; checklist execution pending the human)
 
 | Field | Value |
 |---|---|
-| Run date | |
-| Build under test | (packaged dist path, or `dotnet run`/`npm start` — note which) |
-| App version | |
-| Bridge version | |
-| Windows build | |
-| Hub model | |
-| Home app version | |
-| Tester | |
+| Run date | *(fill in when executed)* |
+| Build under test | packaged `dist\` from `build.ps1` at tag `v0.1.0` (commit 95eb9b3), Node SEA sidecar layout (`sidecar\bridge.exe`) |
+| App version | 0.1.0 (`MatterHelm.exe` ProductVersion `0.1.0+95eb9b3`) |
+| Bridge version | 0.1.0 (matter.js 0.17.7, bundled) |
+| Windows build | Windows 11 Enterprise 25H2, build 26200 |
+| Hub model | Google Nest hub |
+| Home app version | *(fill in from the phone when executed)* |
+| Tester | fdymond |
 
 ## Pairing
 
@@ -111,6 +111,14 @@ present), the log shows `matter session established` at 17:25:04.790 and
 a longer outage) a `Subscription successfully reestablished … timing: 0 - 30s`
 line shows reconnection on the ~30 s scale. The >60-min spike stall has not
 reproduced since; the rows below re-verify on demand.
+
+**Integrator observation 2026-08-09 (packaged v0.1.0 dist)**: during the
+S3-3 budget measurement the packaged dist ran 17:51:46–17:55 (sidecar
+online in ~2.7 s from spawn, log-verified) but the hub established **no**
+session in that ~4-minute window — in contrast to the sub-second CASE
+resumption at 17:25 the same day. Too short a window to call a FAIL
+(ADR-006 §4: controller-side policy is erratic); the timed rows below
+should watch for exactly this variance on the real run.
 
 | Step | Expected | Observed | Verdict | Timestamp (UTC) |
 |---|---|---|---|---|
