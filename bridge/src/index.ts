@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   const bridgeHandle = await createBridge({
     storageDir: config.storageDir,
     endpoints: config.endpoints,
+    momentaryResetMs: config.momentaryResetMs,
     logger,
     matterLogLevel: config.matterLogLevel,
     matterLogFacilities: config.matterLogFacilities,

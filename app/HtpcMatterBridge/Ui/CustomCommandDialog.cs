@@ -1,18 +1,37 @@
+using HtpcMatterBridge.Actions;
+
 namespace HtpcMatterBridge.Ui;
 
 /// <summary>
-/// Modal add/edit dialog for one custom command (ADR-004 §4). The key is
-/// locked when editing an existing command — it is the Matter endpoint id and
-/// wire identifier, so renames must never change it (stable identity,
-/// ADR-004 §1). The action editor switches between the media-key combo and
-/// the launch path/args row with the action-type combo. Validation is inline
-/// (via <see cref="SettingsViewModel"/>'s pure rules) and OK stays disabled
-/// while anything is invalid.
+/// Modal add/edit dialog for one custom command (ADR-004 §4, extended by
+/// S7-1). The key is locked when editing an existing command — it is the
+/// Matter endpoint id and wire identifier, so renames must never change it
+/// (stable identity, ADR-004 §1). The action editor switches between the
+/// media-key combo, the launch path/args rows, and the key-sequence row with
+/// the action-type combo. Validation is inline (via
+/// <see cref="SettingsViewModel"/>'s pure rules) and OK stays disabled while
+/// anything is invalid.
+///
+/// <para><b>Key-sequence capture UX</b> (S7-1): the sequence row pairs a
+/// TextBox (type the chord in <see cref="KeyChord"/> grammar, validated
+/// inline) with a <c>Capture</c> toggle-button. Arming the toggle (mouse
+/// click, or Tab to it and press Space — fully keyboard-accessible) routes
+/// the dialog's next keystroke through <see cref="ProcessCmdKey"/>: pure
+/// modifier presses (Ctrl/Shift/Alt/Win alone) are swallowed until a
+/// non-modifier arrives, Esc cancels capture, and the first captured chord is
+/// written into the TextBox in canonical form
+/// (<see cref="ParsedKeyChord.Canonical"/>) before the toggle disarms.
+/// While armed every key — including Enter, Esc, and Space — is capture
+/// input, never dialog navigation. Ctrl/Alt/Shift combine from the live
+/// modifier state; Win+ chords cannot be captured (the OS intercepts most of
+/// them) — type those into the TextBox instead. A non-modifier key outside
+/// the <see cref="KeyChord"/> table is ignored and capture stays armed.</para>
 /// </summary>
 public sealed class CustomCommandDialog : Form
 {
     private const int MediaKeyActionIndex = 0;
     private const int LaunchActionIndex = 1;
+    private const int KeySequenceActionIndex = 2;
 
     private readonly SettingsViewModel _vm;
     private readonly string? _originalKey;
@@ -26,6 +45,9 @@ public sealed class CustomCommandDialog : Form
     private readonly TextBox _pathBox;
     private readonly TextBox _argsBox;
     private readonly TableLayoutPanel _launchRows;
+    private readonly TextBox _sequenceBox;
+    private readonly CheckBox _captureToggle;
+    private readonly TableLayoutPanel _sequenceRow;
     private readonly Label _errorLabel;
     private readonly Button _okButton;
 
@@ -73,6 +95,7 @@ public sealed class CustomCommandDialog : Form
         _actionTypeCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(240) };
         _actionTypeCombo.Items.Add("Press a media key");
         _actionTypeCombo.Items.Add("Launch a program");
+        _actionTypeCombo.Items.Add("Key sequence");
         _actionTypeCombo.SelectedIndexChanged += (_, _) => OnActionTypeChanged();
         AddRow(grid, "Action", _actionTypeCombo);
 
@@ -105,6 +128,26 @@ public sealed class CustomCommandDialog : Form
         AddRow(_launchRows, "Program", pathRow);
         AddRow(_launchRows, "Arguments", _argsBox);
 
+        // S7-1 key-sequence editor: typed chord + Capture toggle (see the
+        // class doc for the capture UX contract).
+        _sequenceBox = new TextBox { Width = S(160) };
+        _sequenceBox.TextChanged += (_, _) => Revalidate();
+        _captureToggle = new CheckBox { Appearance = Appearance.Button, Text = "Capture", AutoSize = true };
+        _captureToggle.CheckedChanged += (_, _) =>
+            _captureToggle.Text = _captureToggle.Checked ? "Press keys…" : "Capture";
+        var sequenceEditor = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = Padding.Empty,
+        };
+        sequenceEditor.Controls.Add(_sequenceBox);
+        sequenceEditor.Controls.Add(_captureToggle);
+        _sequenceRow = SubGrid(grid);
+        AddRow(_sequenceRow, "Sequence (e.g. Ctrl+Shift+V)", sequenceEditor);
+
         _errorLabel = new Label
         {
             AutoSize = true,
@@ -134,20 +177,26 @@ public sealed class CustomCommandDialog : Form
         AcceptButton = _okButton;
         CancelButton = cancelButton;
 
-        if (existing?.Action is LaunchActionConfig launch)
+        switch (existing?.Action)
         {
-            _actionTypeCombo.SelectedIndex = LaunchActionIndex;
-            _pathBox.Text = launch.Path;
-            _argsBox.Text = launch.Args;
-        }
-        else
-        {
-            _actionTypeCombo.SelectedIndex = MediaKeyActionIndex;
-            if (existing?.Action is MediaKeyActionConfig mediaKey)
-            {
-                int index = SettingsViewModel.MediaKeyChoices.ToList().FindIndex(c => c.Key == mediaKey.KeyName);
-                _mediaKeyCombo.SelectedIndex = Math.Max(0, index);
-            }
+            case LaunchActionConfig launch:
+                _actionTypeCombo.SelectedIndex = LaunchActionIndex;
+                _pathBox.Text = launch.Path;
+                _argsBox.Text = launch.Args;
+                break;
+            case KeySequenceActionConfig keySequence:
+                _actionTypeCombo.SelectedIndex = KeySequenceActionIndex;
+                _sequenceBox.Text = keySequence.Sequence;
+                break;
+            default:
+                _actionTypeCombo.SelectedIndex = MediaKeyActionIndex;
+                if (existing?.Action is MediaKeyActionConfig mediaKey)
+                {
+                    int index = SettingsViewModel.MediaKeyChoices.ToList().FindIndex(c => c.Key == mediaKey.KeyName);
+                    _mediaKeyCombo.SelectedIndex = Math.Max(0, index);
+                }
+
+                break;
         }
 
         OnActionTypeChanged();
@@ -187,10 +236,14 @@ public sealed class CustomCommandDialog : Form
 
     private bool IsLaunchAction => _actionTypeCombo.SelectedIndex == LaunchActionIndex;
 
+    private bool IsKeySequenceAction => _actionTypeCombo.SelectedIndex == KeySequenceActionIndex;
+
     private void OnActionTypeChanged()
     {
-        _mediaKeyRow.Visible = !IsLaunchAction;
+        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction;
         _launchRows.Visible = IsLaunchAction;
+        _sequenceRow.Visible = IsKeySequenceAction;
+        _captureToggle.Checked = false; // leaving the row always disarms capture
         Revalidate();
     }
 
@@ -199,9 +252,100 @@ public sealed class CustomCommandDialog : Form
         string? error =
             _vm.ValidateCustomCommandKey(_keyBox.Text.Trim(), _originalKey)
             ?? SettingsViewModel.ValidateCustomCommandName(_nameBox.Text.Trim())
-            ?? (IsLaunchAction ? _vm.ValidateLaunchPath(_pathBox.Text.Trim()) : null);
+            ?? (IsLaunchAction ? _vm.ValidateLaunchPath(_pathBox.Text.Trim()) : null)
+            ?? (IsKeySequenceAction ? SettingsViewModel.ValidateKeySequence(_sequenceBox.Text.Trim()) : null);
         _errorLabel.Text = error ?? "";
         _okButton.Enabled = error is null;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Chord capture (see the class doc): while the Capture toggle is armed
+    /// this intercepts every key message before normal dialog processing —
+    /// Esc disarms without writing, pure modifier presses wait for a
+    /// non-modifier, and the first mappable chord lands in the sequence box
+    /// canonically and disarms the toggle.
+    /// </remarks>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (!_captureToggle.Checked || !IsKeySequenceAction)
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        Keys keyCode = keyData & Keys.KeyCode;
+        if (keyCode == Keys.Escape)
+        {
+            _captureToggle.Checked = false;
+            return true;
+        }
+
+        if (keyCode is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin)
+        {
+            return true; // pure modifier — hold it and press the main key
+        }
+
+        if (TryMapCapturedKey(keyCode, out string keyName))
+        {
+            var modifiers = KeyChordModifiers.None;
+            if (keyData.HasFlag(Keys.Control))
+            {
+                modifiers |= KeyChordModifiers.Ctrl;
+            }
+
+            if (keyData.HasFlag(Keys.Alt))
+            {
+                modifiers |= KeyChordModifiers.Alt;
+            }
+
+            if (keyData.HasFlag(Keys.Shift))
+            {
+                modifiers |= KeyChordModifiers.Shift;
+            }
+
+            _sequenceBox.Text = new ParsedKeyChord(modifiers, KeyChord.Keys[keyName]).Canonical;
+            _captureToggle.Checked = false;
+        }
+
+        // Unmappable non-modifier keys are swallowed and capture stays armed.
+        return true;
+    }
+
+    /// <summary>Maps a captured <see cref="Keys"/> code onto its <see cref="KeyChord"/> table name; false = not in the curated set (capture ignores it).</summary>
+    private static bool TryMapCapturedKey(Keys keyCode, out string keyName)
+    {
+        keyName = keyCode switch
+        {
+            >= Keys.A and <= Keys.Z => keyCode.ToString(),
+            >= Keys.D0 and <= Keys.D9 => keyCode.ToString()[1..], // "D7" -> "7"
+            >= Keys.NumPad0 and <= Keys.NumPad9 =>
+                ((char)('0' + (keyCode - Keys.NumPad0))).ToString(),
+            >= Keys.F1 and <= Keys.F24 => keyCode.ToString(),
+            Keys.Enter => "Enter",
+            Keys.Tab => "Tab",
+            Keys.Space => "Space",
+            Keys.Up => "Up",
+            Keys.Down => "Down",
+            Keys.Left => "Left",
+            Keys.Right => "Right",
+            Keys.Home => "Home",
+            Keys.End => "End",
+            Keys.PageUp => "PageUp",
+            Keys.PageDown => "PageDown",
+            Keys.Insert => "Insert",
+            Keys.Delete => "Delete",
+            Keys.Back => "Backspace",
+            Keys.PrintScreen => "PrintScreen",
+            Keys.MediaPlayPause => "MediaPlayPause",
+            Keys.MediaNextTrack => "MediaNext",
+            Keys.MediaPreviousTrack => "MediaPrevious",
+            Keys.MediaStop => "MediaStop",
+            Keys.VolumeMute => "VolumeMute",
+            Keys.VolumeUp => "VolumeUp",
+            Keys.VolumeDown => "VolumeDown",
+            _ => "",
+        };
+        return keyName.Length > 0;
     }
 
     private void BrowseForProgram()
@@ -228,7 +372,9 @@ public sealed class CustomCommandDialog : Form
 
         CustomActionConfig action = IsLaunchAction
             ? new LaunchActionConfig { Path = _pathBox.Text.Trim(), Args = _argsBox.Text.Trim() }
-            : new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key };
+            : IsKeySequenceAction
+                ? new KeySequenceActionConfig { Sequence = CanonicalSequence(_sequenceBox.Text.Trim()) }
+                : new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key };
         Result = new CustomCommandConfig
         {
             Key = _keyBox.Text.Trim(),
@@ -239,6 +385,10 @@ public sealed class CustomCommandDialog : Form
         DialogResult = DialogResult.OK;
         Close();
     }
+
+    /// <summary>Canonical form of a sequence the validator already accepted (case-insensitive input, canonical casing out — the config stores canonical only).</summary>
+    private static string CanonicalSequence(string sequence) =>
+        KeyChord.TryParse(sequence, out ParsedKeyChord? chord, out _) ? chord.Canonical : sequence;
 
     /// <summary>Logical (96-dpi) pixels → device pixels; see SettingsWindow's DPI note.</summary>
     private int S(int logical) => LogicalToDeviceUnits(logical);

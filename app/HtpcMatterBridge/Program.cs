@@ -22,7 +22,8 @@ internal static partial class Program
         if (args.Contains("--selftest-actions"))
         {
             Environment.ExitCode = Actions.ActionsSelfTest.Run(
-                includeDisplayTests: args.Contains("--selftest-actions-display"));
+                includeDisplayTests: args.Contains("--selftest-actions-display"),
+                includeKeySequenceTest: args.Contains("--selftest-actions-keysequence"));
             return;
         }
 

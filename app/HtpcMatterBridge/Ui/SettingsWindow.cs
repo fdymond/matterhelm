@@ -528,6 +528,7 @@ public sealed partial class SettingsWindow : Form
     {
         SettingKind.Toggle => BuildToggle(setting),
         SettingKind.Port => BuildPort(setting),
+        SettingKind.Number => BuildNumber(setting),
         SettingKind.Text or SettingKind.OptionalText => BuildTextBox(setting),
         SettingKind.Choice => BuildChoice(setting),
         SettingKind.ReadOnlyText => BuildReadOnly(setting),
@@ -548,6 +549,15 @@ public sealed partial class SettingsWindow : Form
         var number = new NumericUpDown { Minimum = 1, Maximum = 65535, Width = S(110) };
         number.ValueChanged += (_, _) => OnEdited(setting, (int)number.Value);
         _editorRefreshers.Add(() => number.Value = Math.Clamp((int)setting.Get!(_vm.Working)!, 1, 65535));
+        return number;
+    }
+
+    private NumericUpDown BuildNumber(SettingDescriptor setting)
+    {
+        var number = new NumericUpDown { Minimum = setting.Minimum, Maximum = setting.Maximum, Width = S(110) };
+        number.ValueChanged += (_, _) => OnEdited(setting, (int)number.Value);
+        _editorRefreshers.Add(() =>
+            number.Value = Math.Clamp((int)setting.Get!(_vm.Working)!, setting.Minimum, setting.Maximum));
         return number;
     }
 

@@ -38,9 +38,12 @@ side can be built by parallel stories without drift.
 ```
 
 Custom action types (executor-side, tray app only — the sidecar never
-executes anything): `mediaKey` (`keyName`: `playPause|next|previous|stop|mute|volumeUp|volumeDown`)
-and `launch` (`path` + `args`, started detached, never elevated, path must
-exist at save time). `key` is a unique kebab-case slug (validated), the
+executes anything): `mediaKey` (`keyName`: `playPause|next|previous|stop|mute|volumeUp|volumeDown`),
+`launch` (`path` + `args`, started detached, never elevated, path must
+exist at save time), and — added by S7-1 — `keySequence`
+(`{"type":"keySequence","sequence":"Ctrl+Shift+V"}`; grammar
+`[Ctrl+][Alt+][Shift+][Win+]<Key>`, canonicalized on save, injected via
+SendInput). `key` is a unique kebab-case slug (validated), the
 Matter endpoint id, and the wire identifier — **renaming a command's display
 name never changes its `key`**, so re-pairing isn't needed for renames.
 

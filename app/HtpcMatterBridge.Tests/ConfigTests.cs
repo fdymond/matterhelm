@@ -58,6 +58,7 @@ public sealed class ConfigTests : IDisposable
             builtin => Assert.True(builtin.Enabled));
         Assert.Empty(commands.Custom);
         Assert.Equal(39531, config.Current.IpcPort);
+        Assert.Equal(300, config.Current.MomentaryResetMs);
         Assert.Equal(PowerOffAction.PauseAndDisplaysOff, config.Current.PowerOffAction);
         Assert.True(config.Current.OverlayEnabled);
         Assert.Null(config.Current.MdnsInterface);
@@ -98,8 +99,15 @@ public sealed class ConfigTests : IDisposable
                 Enabled = false,
                 Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
             },
+            new CustomCommandConfig
+            {
+                Key = "paste-plain",
+                Name = "Paste Plain",
+                Action = new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" },
+            },
         ];
         config.Current.IpcPort = 40000;
+        config.Current.MomentaryResetMs = 450;
         config.Current.PowerOffAction = PowerOffAction.Sleep;
         config.Current.OverlayEnabled = false;
         config.Current.MdnsInterface = "Ethernet";
@@ -117,7 +125,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal("Living Room Power", commands.Power.Name);
         Assert.True(commands.Speaker.Enabled);
         Assert.False(commands.Power.Enabled);
-        Assert.Equal(2, commands.Custom.Count);
+        Assert.Equal(3, commands.Custom.Count);
         CustomCommandConfig movieMode = commands.Custom[0];
         Assert.Equal("movie-mode", movieMode.Key);
         Assert.Equal("Movie Mode", movieMode.Name);
@@ -130,7 +138,10 @@ public sealed class ConfigTests : IDisposable
         Assert.False(stopMedia.Enabled);
         MediaKeyActionConfig mediaKey = Assert.IsType<MediaKeyActionConfig>(stopMedia.Action);
         Assert.Equal(MediaKeyName.Stop, mediaKey.KeyName);
+        CustomCommandConfig pastePlain = commands.Custom[2];
+        Assert.Equal("Ctrl+Shift+V", Assert.IsType<KeySequenceActionConfig>(pastePlain.Action).Sequence);
         Assert.Equal(40000, reloaded.Current.IpcPort);
+        Assert.Equal(450, reloaded.Current.MomentaryResetMs);
         Assert.Equal(PowerOffAction.Sleep, reloaded.Current.PowerOffAction);
         Assert.False(reloaded.Current.OverlayEnabled);
         Assert.Equal("Ethernet", reloaded.Current.MdnsInterface);
@@ -498,6 +509,77 @@ public sealed class ConfigTests : IDisposable
             Assert.Equal(expected, Assert.IsType<MediaKeyActionConfig>(command.Action).KeyName);
         }
 
+        [Fact]
+        public void KeySequenceActionLoadsAndCanonicalizesTheSequence()
+        {
+            // S7-1: case-insensitive input, canonical casing persisted.
+            WriteConfig("""
+                {"commands": {"custom": [
+                    {"key": "paste-plain", "name": "Paste Plain",
+                     "action": {"type": "keySequence", "sequence": "ctrl+shift+v"}}
+                ]}}
+                """);
+
+            Config config = NewConfig();
+
+            CustomCommandConfig command = Assert.Single(config.Current.Commands.Custom);
+            Assert.Equal("Ctrl+Shift+V", Assert.IsType<KeySequenceActionConfig>(command.Action).Sequence);
+        }
+
+        [Fact]
+        public void KeySequenceActionWritesTheKeySequenceDiscriminatorOnSave()
+        {
+            Config config = NewConfig();
+            config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "paste-plain",
+                    Name = "Paste Plain",
+                    Action = new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" },
+                },
+            ];
+            config.Save();
+
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+            JsonElement action = document.RootElement
+                .GetProperty("commands").GetProperty("custom")[0].GetProperty("action");
+            Assert.Equal("keySequence", action.GetProperty("type").GetString());
+            Assert.Equal("Ctrl+Shift+V", action.GetProperty("sequence").GetString());
+        }
+
+        [Theory]
+        [InlineData("\"Ctrl+Ctrl+V\"")] // duplicate modifier
+        [InlineData("\"Ctrl+Bogus\"")] // unknown key
+        [InlineData("\"\"")] // empty
+        [InlineData("42")] // non-string
+        public void KeySequenceActionWithAnInvalidSequenceDropsTheEntryWithAWarn(string rawSequence)
+        {
+            WriteConfig($$$"""
+                {"commands": {"custom": [
+                    {"key": "bad-chord", "action": {"type": "keySequence", "sequence": {{{rawSequence}}}}},
+                    {"key": "good-one", "action": {"type": "mediaKey", "keyName": "stop"}}
+                ]}}
+                """);
+
+            Config config = NewConfig();
+
+            CustomCommandConfig survivor = Assert.Single(config.Current.Commands.Custom);
+            Assert.Equal("good-one", survivor.Key);
+            Assert.True(Log.Contains("WARN", "commands.custom[0].action.sequence"));
+        }
+
+        [Fact]
+        public void KeySequenceActionWithAMissingSequenceDropsTheEntry()
+        {
+            WriteConfig("""{"commands": {"custom": [{"key": "bad-chord", "action": {"type": "keySequence"}}]}}""");
+
+            Config config = NewConfig();
+
+            Assert.Empty(config.Current.Commands.Custom);
+            Assert.True(Log.Contains("WARN", "commands.custom[0].action.sequence"));
+        }
+
         [Theory]
         [InlineData("""{"type": "launch", "args": "-fs"}""")] // missing path
         [InlineData("""{"type": "launch", "path": ""}""")] // empty path
@@ -694,6 +776,45 @@ public sealed class ConfigTests : IDisposable
 
         Assert.Equal(39531, config.Current.IpcPort);
         Assert.True(_log.Contains("WARN", "ipcPort"));
+    }
+
+    [Theory]
+    [InlineData(100)]
+    [InlineData(450)]
+    [InlineData(2000)]
+    public void MomentaryResetMsLoadsValuesAcrossTheAllowedRange(int ms)
+    {
+        File.WriteAllText(_path, $$"""{"momentaryResetMs": {{ms}}}""");
+
+        Assert.Equal(ms, NewConfig().Current.MomentaryResetMs);
+    }
+
+    [Theory]
+    [InlineData("99")] // below the bridge's minimum
+    [InlineData("2001")] // above the bridge's maximum
+    [InlineData("300.5")] // non-integer
+    [InlineData("\"fast\"")] // non-number
+    public void OutOfRangeOrWrongTypedMomentaryResetMsFallsBackTo300AndWarns(string rawValue)
+    {
+        // The bridge env parser is strict (fatal on a bad value), so the tray
+        // app must never hand over anything outside 100-2000.
+        File.WriteAllText(_path, $$"""{"momentaryResetMs": {{rawValue}}}""");
+
+        Config config = NewConfig();
+
+        Assert.Equal(300, config.Current.MomentaryResetMs);
+        Assert.True(_log.Contains("WARN", "momentaryResetMs"));
+    }
+
+    [Fact]
+    public void MomentaryResetMsRoundTripsThroughSaveInCamelCase()
+    {
+        Config config = NewConfig();
+        config.Current.MomentaryResetMs = 1500;
+        config.Save();
+
+        Assert.Contains("\"momentaryResetMs\": 1500", File.ReadAllText(_path));
+        Assert.Equal(1500, NewConfig().Current.MomentaryResetMs);
     }
 
     [Fact]

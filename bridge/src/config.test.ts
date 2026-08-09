@@ -35,6 +35,7 @@ describe("parseConfig", () => {
         power: { name: "HTPC Power", enabled: true },
         custom: [],
       },
+      momentaryResetMs: 300,
     });
     expect(config.mdnsInterface).toBeUndefined();
     expect(config.matterPort).toBeUndefined();
@@ -425,6 +426,38 @@ describe("parseConfig", () => {
           }),
         );
       }).toThrow(/duplicate key "movie-mode"/);
+    });
+  });
+
+  describe("HTPC_BRIDGE_MOMENTARY_RESET_MS (S7-1)", () => {
+    it("defaults to 300 ms when unset (must match the tray app's default)", () => {
+      expect(parseConfig(baseEnv()).momentaryResetMs).toBe(300);
+    });
+
+    it("treats an empty string like unset", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "" })).momentaryResetMs).toBe(
+        300,
+      );
+    });
+
+    it("accepts the range boundaries 100 and 2000", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "100" })).momentaryResetMs).toBe(
+        100,
+      );
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "2000" })).momentaryResetMs,
+      ).toBe(2000);
+    });
+
+    it.each([
+      ["below the minimum", "99"],
+      ["above the maximum", "2001"],
+      ["a non-integer", "300.5"],
+      ["a non-numeric string", "fast"],
+    ])("rejects %s (%s) as fatal", (_desc, raw) => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: raw }));
+      }).toThrow(/HTPC_BRIDGE_MOMENTARY_RESET_MS/);
     });
   });
 

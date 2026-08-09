@@ -231,6 +231,51 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.True(vm.IsValid);
     }
 
+    [Theory]
+    [InlineData(99)]
+    [InlineData(2001)]
+    public void OutOfRangeMomentaryResetFailsValidationOnItsOwnRow(int ms)
+    {
+        SettingsViewModel vm = NewViewModel();
+
+        vm.Working.MomentaryResetMs = ms;
+
+        SettingsValidationError error = Assert.Single(vm.Validate());
+        Assert.Equal("momentary-reset-ms", error.SettingId);
+    }
+
+    [Fact]
+    public void InvalidKeySequenceCommandFailsValidationOnTheCustomCommandsRow()
+    {
+        SettingsViewModel vm = NewViewModel();
+
+        vm.AddCustomCommand(new CustomCommandConfig
+        {
+            Key = "paste-plain",
+            Name = "Paste Plain",
+            Action = new KeySequenceActionConfig { Sequence = "Ctrl+Bogus" },
+        });
+
+        SettingsValidationError error = Assert.Single(vm.Validate());
+        Assert.Equal("custom-commands", error.SettingId);
+        Assert.Contains("not a known key", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidKeySequenceCommandPasses()
+    {
+        SettingsViewModel vm = NewViewModel(pathExists: _ => false);
+
+        vm.AddCustomCommand(new CustomCommandConfig
+        {
+            Key = "paste-plain",
+            Name = "Paste Plain",
+            Action = new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" },
+        });
+
+        Assert.True(vm.IsValid);
+    }
+
     [Fact]
     public void MediaKeyCommandsNeedNoPathAndPass()
     {
@@ -298,6 +343,17 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.NotNull(vm.ValidateLaunchPath(@"C:\missing.exe"));
     }
 
+    [Fact]
+    public void KeySequenceRuleMirrorsTheKeyChordParser()
+    {
+        // The dialog validates its sequence TextBox through this rule (S7-1).
+        Assert.Null(SettingsViewModel.ValidateKeySequence("ctrl+shift+v"));
+        Assert.Null(SettingsViewModel.ValidateKeySequence("F5"));
+        Assert.NotNull(SettingsViewModel.ValidateKeySequence(""));
+        Assert.NotNull(SettingsViewModel.ValidateKeySequence("Ctrl+Ctrl+V"));
+        Assert.NotNull(SettingsViewModel.ValidateKeySequence("Ctrl+Bogus"));
+    }
+
     // ---- custom command CRUD ----------------------------------------------
 
     [Fact]
@@ -336,7 +392,7 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void DescribeActionSummarizesBothActionTypes()
+    public void DescribeActionSummarizesEveryActionType()
     {
         Assert.Equal(
             "Media key: stop",
@@ -344,6 +400,9 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal(
             "Launch: kodi.exe",
             SettingsViewModel.DescribeAction(new LaunchActionConfig { Path = @"C:\apps\kodi.exe" }));
+        Assert.Equal(
+            "Key sequence: Ctrl+Shift+V",
+            SettingsViewModel.DescribeAction(new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" }));
     }
 
     // ---- apply / revert / reload ------------------------------------------
@@ -355,6 +414,7 @@ public sealed class SettingsViewModelTests : IDisposable
         SettingsViewModel vm = NewViewModel(config);
 
         vm.Working.IpcPort = 40000;
+        vm.Working.MomentaryResetMs = 450;
         vm.Working.Commands.Speaker.Name = "Demo Speaker";
         vm.Working.Commands.Power.Enabled = false;
         vm.Working.PowerOffAction = PowerOffAction.Sleep;
@@ -371,6 +431,7 @@ public sealed class SettingsViewModelTests : IDisposable
 
         Config reloaded = NewConfig();
         Assert.Equal(40000, reloaded.Current.IpcPort);
+        Assert.Equal(450, reloaded.Current.MomentaryResetMs);
         Assert.Equal("Demo Speaker", reloaded.Current.Commands.Speaker.Name);
         Assert.False(reloaded.Current.Commands.Power.Enabled);
         Assert.Equal(PowerOffAction.Sleep, reloaded.Current.PowerOffAction);
@@ -465,6 +526,7 @@ public sealed class SettingsViewModelTests : IDisposable
             ["power-name"] = "PW",
             ["power-enabled"] = false,
             ["power-off-action"] = "sleep",
+            ["momentary-reset-ms"] = 500,
             ["overlay-enabled"] = false,
             ["overlay-position"] = "topRight",
             ["mdns-interface"] = "Ethernet",
@@ -525,6 +587,7 @@ public sealed class SettingsViewModelTests : IDisposable
                 "next-name", "next-enabled",
                 "previous-name", "previous-enabled",
                 "power-name", "power-enabled",
+                "momentary-reset-ms",
                 "custom-commands",
                 "mdns-interface",
             ],

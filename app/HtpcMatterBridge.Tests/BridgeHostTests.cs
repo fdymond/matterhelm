@@ -411,6 +411,61 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public async Task CustomKeySequenceActionDispatchesTheParsedChordAndAcksOk()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "paste-plain",
+                    Name = "Paste Plain",
+                    Action = new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"paste-plain"}"""));
+            host.SetEnabled(true);
+
+            // The executor seam receives the PARSED chord (records compare by
+            // value), so no real SendInput ever happens in this test.
+            var expectedChord = new ParsedKeyChord(
+                KeyChordModifiers.Ctrl | KeyChordModifiers.Shift, KeyChord.Keys["V"]);
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("keySequence", (object?)expectedChord)),
+                TimeSpan.FromSeconds(10),
+                "executor to receive the parsed Ctrl+Shift+V chord");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            lock (_gate)
+            {
+                // ADR-004: the overlay flashes the command's display name.
+                Assert.Contains(new OverlayContent("Google Home → Paste Plain", "Ctrl+Shift+V sent", false), _overlay);
+            }
+        }
+
+        [Fact]
+        public async Task SupervisorEnvCarriesTheConfiguredMomentaryResetInterval()
+        {
+            _config.Current.MomentaryResetMs = 450;
+            const string script =
+                "console.log('MRESET=' + process.env.HTPC_BRIDGE_MOMENTARY_RESET_MS);" +
+                "process.stdin.resume();" +
+                "process.stdin.on('end', () => process.exit(0));" +
+                "setInterval(() => {}, 1000);";
+            using var host = CreateHost(
+                new SidecarSpec(TestSupport.RequireNodeExe(), ["-e", script], Path.GetTempPath()));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("MRESET=450"),
+                TimeSpan.FromSeconds(10),
+                "sidecar env to carry HTPC_BRIDGE_MOMENTARY_RESET_MS=450");
+        }
+
+        [Fact]
         public async Task UnknownCustomKeyNacksWithAReasonAndNeverHitsTheExecutor()
         {
             using var host = CreateHost(NodeClientSpec(

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using HtpcMatterBridge.Actions;
 
 namespace HtpcMatterBridge.Ui;
 
@@ -10,6 +11,9 @@ public enum SettingKind
 
     /// <summary>TCP port number (1–65535).</summary>
     Port,
+
+    /// <summary>Integer within the descriptor's <see cref="SettingDescriptor.Minimum"/>–<see cref="SettingDescriptor.Maximum"/> range.</summary>
+    Number,
 
     /// <summary>Required free text (must be non-empty to save).</summary>
     Text,
@@ -56,6 +60,12 @@ public sealed class SettingDescriptor
 
     /// <summary>Display labels parallel to <see cref="Choices"/>; empty = show the wire values.</summary>
     public IReadOnlyList<string> ChoiceLabels { get; init; } = [];
+
+    /// <summary>Lower bound for <see cref="SettingKind.Number"/>; unused otherwise.</summary>
+    public int Minimum { get; init; }
+
+    /// <summary>Upper bound for <see cref="SettingKind.Number"/>; unused otherwise.</summary>
+    public int Maximum { get; init; } = int.MaxValue;
 
     /// <summary>True = the row shows "takes effect next time the bridge is enabled" (ADR-004 §4).</summary>
     public bool NeedsBridgeRestart { get; init; }
@@ -174,6 +184,11 @@ public sealed class SettingsViewModel
             errors.Add(new SettingsValidationError("ipc-port", "Port must be between 1 and 65535."));
         }
 
+        if (Working.MomentaryResetMs is < 100 or > 2000)
+        {
+            errors.Add(new SettingsValidationError("momentary-reset-ms", "Reset delay must be between 100 and 2000 ms."));
+        }
+
         ValidateBuiltinName(errors, "speaker-name", Working.Commands.Speaker.Name);
         ValidateBuiltinName(errors, "play-pause-name", Working.Commands.PlayPause.Name);
         ValidateBuiltinName(errors, "next-name", Working.Commands.Next.Name);
@@ -199,6 +214,12 @@ public sealed class SettingsViewModel
             if (command.Action is LaunchActionConfig launch && ValidateLaunchPath(launch.Path) is { } pathError)
             {
                 errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {pathError}"));
+            }
+
+            if (command.Action is KeySequenceActionConfig keySequence
+                && ValidateKeySequence(keySequence.Sequence) is { } sequenceError)
+            {
+                errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {sequenceError}"));
             }
         }
 
@@ -248,11 +269,16 @@ public sealed class SettingsViewModel
         return _pathExists(path) ? null : "Program path does not exist.";
     }
 
-    /// <summary>Short human summary of a custom action for the command list ("Media key: stop" / "Launch: kodi.exe").</summary>
+    /// <summary>Validates a keySequence action's chord via the <see cref="KeyChord"/> grammar (S7-1). Null = valid; otherwise the parser's user-facing error.</summary>
+    public static string? ValidateKeySequence(string sequence) =>
+        KeyChord.TryParse(sequence, out _, out string? error) ? null : error;
+
+    /// <summary>Short human summary of a custom action for the command list ("Media key: stop" / "Launch: kodi.exe" / "Key sequence: Ctrl+Shift+V").</summary>
     public static string DescribeAction(CustomActionConfig action) => action switch
     {
         MediaKeyActionConfig mediaKey => $"Media key: {MediaKeyChoices.First(c => c.Key == mediaKey.KeyName).Label.ToLowerInvariant()}",
         LaunchActionConfig launch => $"Launch: {Path.GetFileName(launch.Path)}",
+        KeySequenceActionConfig keySequence => $"Key sequence: {keySequence.Sequence}",
         _ => throw new ArgumentOutOfRangeException(nameof(action), action.GetType().Name, "unknown custom action type"),
     };
 
@@ -365,6 +391,7 @@ public sealed class SettingsViewModel
     {
         into.Commands = Clone(from).Commands;
         into.IpcPort = from.IpcPort;
+        into.MomentaryResetMs = from.MomentaryResetMs;
         into.PowerOffAction = from.PowerOffAction;
         into.OverlayEnabled = from.OverlayEnabled;
         into.OverlayPosition = from.OverlayPosition;
@@ -452,6 +479,20 @@ public sealed class SettingsViewModel
                     ChoiceLabels = ["Displays off", "Pause, then displays off", "Sleep"],
                     Get = c => ToWireName(c.PowerOffAction),
                     Set = (c, v) => c.PowerOffAction = FromWireName((string)v!),
+                },
+                new SettingDescriptor
+                {
+                    // S7-1: config-driven momentary auto-reset (default 300,
+                    // range shared with the bridge's env validation).
+                    Id = "momentary-reset-ms",
+                    Label = "Tap reset delay (ms)",
+                    Description = "How quickly a tapped command's switch snaps back to off in Google Home.",
+                    Kind = SettingKind.Number,
+                    Minimum = 100,
+                    Maximum = 2000,
+                    NeedsBridgeRestart = true,
+                    Get = c => c.MomentaryResetMs,
+                    Set = (c, v) => c.MomentaryResetMs = (int)v!,
                 },
                 new SettingDescriptor
                 {
