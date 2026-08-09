@@ -1,5 +1,8 @@
 # MatterHelm
 
+[![CI](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml/badge.svg)](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **MatterHelm** — a standalone Windows tray application that makes your
 HTPC a **locally-paired Google Home device**. Say "Hey Google, set HTPC volume
 to 40 %", tap devices in the Home app, or wire routines ("movie time") — the
@@ -83,3 +86,22 @@ cd bridge && npm ci && npm run verify        # sidecar: lint + types + tests
 
 Requires Node 22 LTS (dev) — end users get a single-exe sidecar (Node SEA)
 bundled next to the tray app.
+
+## Contributing
+
+MatterHelm is currently a private, solo-maintained repository. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test workflow, the
+engineering bar, commit conventions, and the protocol-parity and ADR rules
+that govern changes here.
+
+## Security
+
+Please report suspected vulnerabilities privately per
+[`SECURITY.md`](SECURITY.md) (GitHub Security Advisories) rather than in a
+public issue.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). "Matter" and the Matter certification mark
+are trademarks of the Connectivity Standards Alliance; see
+[`NOTICE`](NOTICE) for the trademark note ahead of any public release.

@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in the bridge or tray app isn't working as expected.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The diagnostics bundle
+        below is the single most useful thing you can attach — it's
+        privacy-scrubbed (no machine name, no username, no file paths, no
+        tokens or commissioning secrets) before it's written, so it's safe
+        to upload here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. Said "Hey Google, set HTPC volume to 40%"
+        2. Expected the volume to change and the overlay to flash
+        3. Instead...
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: MatterHelm tray app version
+      description: Right-click the tray icon → About, or the version in the diagnostics bundle manifest.
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: bridge-version
+    attributes:
+      label: Bridge (sidecar) version
+      description: From `bridge/package.json` if running from source, or the diagnostics manifest's sidecarVersion field.
+      placeholder: "e.g. 0.0.1"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: home-context
+    attributes:
+      label: Google Home surface used
+      description: How did you trigger the action?
+      multiple: true
+      options:
+        - Voice ("Hey Google, ...")
+        - Google Home app (device tile / slider)
+        - Google Home app routine
+        - Physical Nest hub button/touch
+    validations:
+      required: false
+
+  - type: input
+    id: hub-device
+    attributes:
+      label: Matter hub device
+      description: Which Google/Nest device is acting as your Matter hub (Nest speaker/display, Nest Wifi Pro, Google TV Streamer, etc.)?
+      placeholder: "e.g. Nest hub"
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics bundle
+      description: |
+        In the tray app: Settings → Advanced → "Export diagnostics" produces
+        a zip (`matterhelm-diagnostics-<timestamp>Z.zip`) containing logs,
+        metrics, an environment manifest, and your config.json. It is
+        privacy-scrubbed (no machine name/username/paths; commissioning
+        secrets redacted) except for config.json, which is included verbatim
+        since it's user-authored (review it yourself if you've put anything
+        sensitive in a custom command path). Attach the zip here, or paste
+        relevant excerpts.
+      placeholder: Drag and drop the exported zip here, or paste relevant log lines.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Windows version, other relevant context.
+    validations:
+      required: false

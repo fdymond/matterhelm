@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an action, device surface, or workflow MatterHelm should support.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MatterHelm follows a YAGNI-aggressive backlog (see
+        `docs/DEVELOPMENT-PLAN.md`) — every feature needs a concrete use case,
+        not just "would be nice." The more specific the scenario, the easier
+        it is to turn into a backlog story.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the use case?
+      description: What are you trying to do that MatterHelm doesn't support today?
+      placeholder: |
+        e.g. "I want a Home app routine that launches a specific app on the
+        HTPC, not just media/volume/power actions."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What would you expect to happen — new Google Home surface, new config option, new tray/settings UI?
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried
+      description: Is there a custom command (Settings → Custom Commands) or config option that gets you partway there already?
+    validations:
+      required: false

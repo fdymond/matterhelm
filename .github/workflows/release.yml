@@ -1,0 +1,71 @@
+name: release
+
+# Tag-triggered release. Push a `v*` tag (e.g. `v0.1.0`) to run the full
+# verify/build/test gate and publish a GitHub Release with auto-generated
+# notes. Mirrors ci.yml's setup steps (node 22, dotnet 10.0.x) so this job
+# exercises exactly what CI already proved green on main.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install bridge deps
+        working-directory: bridge
+        run: npm ci
+
+      - name: Bridge verify (lint + typecheck + tests)
+        working-directory: bridge
+        run: npm run verify
+
+      - name: Bridge bundle
+        working-directory: bridge
+        run: npm run bundle
+
+      - name: App build (Release, warnings-as-errors)
+        run: dotnet build app/MatterHelm/MatterHelm.csproj -c Release
+
+      - name: App tests
+        run: dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
+
+      # PLACEHOLDER (S3-1, not yet landed): once build.ps1 exists it will
+      # produce a single self-contained dist/ folder (Node SEA sidecar exe +
+      # dotnet-publish tray exe together, no dev tools required on the
+      # target machine). That folder — not the raw bridge.cjs bundle below —
+      # is the intended release artifact. Replace this step with:
+      #   - name: Build dist
+      #     run: ./build.ps1
+      #   - name: Zip dist
+      #     run: Compress-Archive -Path dist/* -DestinationPath matterhelm-${{ github.ref_name }}-win-x64.zip
+      # and attach the zip in the release step's `files:` list instead of
+      # bridge/dist/bridge.cjs.
+      - name: (placeholder) note packaging gap
+        run: |
+          Write-Host "S3-1 (build.ps1 / full dist folder) has not landed yet."
+          Write-Host "This release attaches the bridge bundle only, as a provisional artifact."
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3.0.2
+        with:
+          generate_release_notes: true
+          files: bridge/dist/bridge.cjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

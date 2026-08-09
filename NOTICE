@@ -1,0 +1,26 @@
+MatterHelm — notices
+
+MatterHelm's code is MIT-licensed; see LICENSE.
+
+## Trademarks
+
+"Matter" and the Matter certification mark are trademarks of the Connectivity
+Standards Alliance (CSA). MatterHelm's product name includes the word
+"Matter" and its tray icon currently renders the Matter certification mark.
+The MIT license above covers this project's source code only — it grants no
+rights to the Matter name or mark.
+
+This repository is currently private and unreleased. Before any public
+release, distribution, or store listing, the icon and naming need a review
+against the CSA's brand/trademark guidelines (certification-mark usage is
+generally restricted to certified products, and "Matter"-containing product
+names may need adjustment or a permission request). Track that review as a
+pre-release checklist item — do not ship the current icon/name publicly
+without it.
+
+## Third-party components
+
+MatterHelm links open-source components (matter.js, zod, pino in `bridge/`;
+QRCoder in `app/`). See `bridge/package.json` / `app/MatterHelm/MatterHelm.csproj`
+for the current pinned versions and their own licenses; none are bundled or
+modified in this repository.
