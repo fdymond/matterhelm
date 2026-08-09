@@ -27,6 +27,7 @@ public sealed partial class SettingsWindow : Form
 
     private readonly SettingsViewModel _vm;
     private readonly Action? _overlayPreview;
+    private readonly Action? _factoryReset;
 
     private readonly TextBox _searchBox;
     private readonly ListBox _navList;
@@ -58,10 +59,20 @@ public sealed partial class SettingsWindow : Form
     /// <summary>Builds the window over <paramref name="viewModel"/>.</summary>
     /// <param name="viewModel">The staged settings state and rules.</param>
     /// <param name="overlayPreview">Invoked by the Overlay page's Preview button; null hides nothing but makes the button a no-op (demo).</param>
-    public SettingsWindow(SettingsViewModel viewModel, Action? overlayPreview = null)
+    /// <param name="factoryReset">
+    /// Invoked by the Advanced page's "Factory reset" button (confirmation +
+    /// the actual <see cref="MatterHelm.BridgeHost.FactoryReset"/> call live
+    /// in <c>TrayContext</c>/<c>Program</c>, not here — this window only asks
+    /// to be told when the button is pressed). Null (the default, e.g. demos)
+    /// leaves the button disabled rather than falling back to a no-op —
+    /// unlike Preview, a factory reset must never silently do nothing when
+    /// unwired.
+    /// </param>
+    public SettingsWindow(SettingsViewModel viewModel, Action? overlayPreview = null, Action? factoryReset = null)
     {
         _vm = viewModel;
         _overlayPreview = overlayPreview;
+        _factoryReset = factoryReset;
         _search = SettingsSearch.Filter(SettingsViewModel.Categories, "");
 
         Text = "Settings";
@@ -618,7 +629,7 @@ public sealed partial class SettingsWindow : Form
             "open-config-folder" => ("Open folder", () => OpenWithShell(CurrentConfigDir(), "config folder")),
             "export-diagnostics" => ("Export…", OnExportDiagnosticsClicked),
             "reload-config" => ("Reload", OnReloadConfigClicked),
-            "factory-reset" => ("Reset…", (Action?)null), // disabled until S3-2
+            "factory-reset" => ("Reset…", _factoryReset),
             _ => throw new ArgumentOutOfRangeException(nameof(setting), setting.Id, "unknown command setting"),
         };
 
@@ -628,10 +639,13 @@ public sealed partial class SettingsWindow : Form
             button.Enabled = false;
 
             // A disabled control gets no mouse events, so the tooltip sits on
-            // an enabled wrapper panel around the button instead.
+            // an enabled wrapper panel around the button instead. Currently
+            // only reachable for "factory-reset" when the window is built
+            // without the TrayContext-owned callback (demos, tests) — never
+            // in the production tray flow.
             var wrapper = new Panel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = Padding.Empty };
             wrapper.Controls.Add(button);
-            _toolTip.SetToolTip(wrapper, "arrives with the unpair story (S3-2)");
+            _toolTip.SetToolTip(wrapper, "not available without a running tray context");
             return wrapper;
         }
 

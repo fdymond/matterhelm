@@ -590,6 +590,117 @@ public static class BridgeHostTests
             }
         }
 
+        [Fact]
+        public void FactoryResetOnADisabledBridgeDeletesExistingStorageAndStaysDisabled()
+        {
+            // S3-2: "disabled-bridge path just deletes" — no sidecar was ever
+            // started in this test, so SetEnabled(false) inside FactoryReset
+            // is a no-op; only the directory delete does anything.
+            string storageDir = Path.Combine(_dir, "matter");
+            Directory.CreateDirectory(storageDir);
+            File.WriteAllText(Path.Combine(storageDir, "fabric.json"), "{}");
+
+            using BridgeHost host = CreateHost(NodeClientSpec());
+
+            FactoryResetResult result = host.FactoryReset();
+
+            Assert.True(result.Ok);
+            Assert.Null(result.Error);
+            Assert.False(Directory.Exists(storageDir), "storage dir must be gone");
+            Assert.Equal(BridgeState.Disabled, host.State);
+            Assert.True(_log.Contains("INFO", "factory reset complete"));
+        }
+
+        [Fact]
+        public void FactoryResetOnANeverPairedBridgeWithNoStorageDirSucceeds()
+        {
+            // No storage dir ever created — "already reset"/never-paired must
+            // count as success, not a delete failure.
+            using BridgeHost host = CreateHost(NodeClientSpec());
+
+            FactoryResetResult result = host.FactoryReset();
+
+            Assert.True(result.Ok);
+            Assert.Null(result.Error);
+        }
+
+        [Fact]
+        public async Task FactoryResetWhileRunningStopsDeletesStorageThenReEnablesTheBridge()
+        {
+            string storageDir = Path.Combine(_dir, "matter");
+            Directory.CreateDirectory(storageDir);
+            File.WriteAllText(Path.Combine(storageDir, "fabric.json"), "{}");
+
+            using BridgeHost host = CreateHost(NodeClientSpec()); // hello only; reconnects identically after restart
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => host.State == BridgeState.Connected,
+                TimeSpan.FromSeconds(10),
+                "bridge to connect before the reset");
+
+            FactoryResetResult result = host.FactoryReset();
+
+            Assert.True(result.Ok);
+            Assert.Null(result.Error);
+            Assert.False(Directory.Exists(storageDir), "storage dir must be gone");
+            lock (_gate)
+            {
+                Assert.Contains(
+                    new OverlayContent("Factory reset complete", "open Pair with Google Home to re-pair", false),
+                    _overlay);
+            }
+
+            // The bridge was running before the reset, so FactoryReset must
+            // bring it back up — the same stub script re-authenticates with a
+            // fresh identity, exactly as a real sidecar would after losing
+            // its persisted fabric (BLUEPRINT §2.5's designed re-pair flow).
+            await TestSupport.WaitUntilAsync(
+                () => host.State == BridgeState.Connected,
+                TimeSpan.FromSeconds(10),
+                "bridge to reconnect after the reset");
+        }
+
+        [Fact]
+        public async Task FactoryResetOnALockedStorageDirFailsGracefullyWithoutDeletingOrRestarting()
+        {
+            string storageDir = Path.Combine(_dir, "matter");
+            Directory.CreateDirectory(storageDir);
+            string lockedFile = Path.Combine(storageDir, "locked.db");
+            File.WriteAllText(lockedFile, "locked");
+
+            using BridgeHost host = CreateHost(NodeClientSpec());
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => host.State == BridgeState.Connected,
+                TimeSpan.FromSeconds(10),
+                "bridge to connect before the reset");
+
+            FactoryResetResult result;
+            using (new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                // Held open (no FileShare.Delete) for the whole retry window,
+                // so the delete must exhaust its retries and fail — never
+                // silently, never with a half-deleted directory.
+                result = host.FactoryReset();
+            }
+
+            Assert.False(result.Ok);
+            Assert.NotNull(result.Error);
+            Assert.True(Directory.Exists(storageDir), "a failed delete must not partially remove the directory");
+            Assert.True(File.Exists(lockedFile), "nothing inside the directory was touched either");
+            Assert.True(_log.Contains("WARN", "factory reset could not delete"));
+
+            // Never comes back up on a failed reset — the bridge stays
+            // disabled so nothing races a retry with a half-cleared fabric.
+            Assert.Equal(BridgeState.Disabled, host.State);
+            lock (_gate)
+            {
+                Assert.Contains(_overlay, c => c.Primary == "Factory reset failed" && c.IsError);
+            }
+        }
+
         private BridgeHost CreateHost(SidecarSpec spec)
         {
             var host = new BridgeHost(

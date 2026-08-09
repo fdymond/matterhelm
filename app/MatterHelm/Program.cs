@@ -172,6 +172,14 @@ internal static partial class Program
         // Start/stop happen on a worker: SetEnabled blocks for the child's
         // stop grace, and the UI thread must never wait on that.
         trayContext.EnableBridgeChanged += (_, enabled) => Task.Run(() => host.SetEnabled(enabled));
+
+        // FactoryReset blocks on the same child-stop grace plus delete
+        // retries (S3-2) — a worker thread, same reasoning as SetEnabled
+        // above. The confirmation dialog already ran (TrayContext); this only
+        // fires after the user said yes. Success/failure is already logged
+        // and (when enabled) flashed on the overlay inside FactoryReset —
+        // nothing else to marshal back to the UI here.
+        trayContext.FactoryResetRequested += (_, _) => Task.Run(() => host.FactoryReset());
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
         trayContext.OverlayPreviewRequested += (_, _) =>
         {
