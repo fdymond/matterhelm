@@ -41,22 +41,24 @@ support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
 
 ## Status
 
-**Phase: Sprint 2 built, awaiting hardware spikes.** CI green on every commit
-(bridge verify on ubuntu+windows, app build+tests on windows).
+**Phase: feature-complete and paired; packaging (v0.1.0) remains.** CI green
+on every commit (bridge verify+coverage on ubuntu/windows, app build+tests+
+coverage on windows). Commissioned against a real Nest Hub 2.
 
-- **Bridge (`bridge/`)**: IPC protocol schemas (S1-1), pure mapping layer with
-  lossless volume round-trip (S1-2), and the reconnecting WS client (S1-4) are
-  done — 122 tests. The matter.js device model (S1-3) + composition root
-  (S1-5) are gated on the S0-3 hardware spike.
-- **Tray app (`app/`)**: fully built and wired (S0-5, S2-1…S2-5) — supervisor,
-  loopback IPC server, CoreAudio/media-key/display executor, click-through
-  overlay HUD, pairing-QR window, config + tray states. 126 tests; a mock-
-  sidecar E2E proves action→execute→overlay→ack and state publishing.
-  Adversarial review (S2-R) in progress.
-- **Next human step**: run `docs/spikes/S0-3-pairing.md` (needs a Nest hub, the
-  Google Home app, and a one-time free Developer Console project) to validate
-  pairing + Speaker volume UX, then S1-3/S1-5 close the loop for real
-  "Hey Google" control.
+- **Bridge (`bridge/`)**: full Matter device model behind the adapter
+  boundary, protocol v2 with custom commands, structured diagnostics with
+  session observability, esbuild single-file bundle (one node process,
+  ~0.9 s cold start). 322 tests, pure modules gated at 90 %+.
+- **Tray app (`app/MatterHelm`)**: supervisor + loopback IPC, CoreAudio/
+  media-key/key-chord/display executor, click-through overlay HUD with
+  volume fill bar, settings window (categorized nav, search, custom-command
+  CRUD incl. key-sequence capture), dark mode, DPI-safe at 200 %, local
+  metrics + privacy-hardened diagnostics export. 402 tests. Budgets measured
+  and enforced (ADR-007).
+- **Sprints 0–7 delivered and adversarially reviewed** (five review passes).
+  Remaining: Sprint 3 packaging (`build.ps1`, single dist folder, factory
+  reset, user guide, v0.1.0) and continued hardware E2E validation.
+  Natural voice phrases: see `docs/routines.md`.
 
 ## Repository layout
 

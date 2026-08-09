@@ -76,7 +76,21 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S6-1 ✅ | Measured resource optimization: esbuild sidecar bundle (1 process, ~90MB private, 0.9s start), WinForms-baseline memory truth, churn probe (`--probe-resources`), metrics idle-churn fix; ADR-007 restates G6 | Before/after tables; probes PASS; all suites green | M | — | impl (Fable) |
 | S6-2 ✅ | Review findings applied: Program.cs 916→180 (Demos/ extraction + helper dedup), dead native window removed, TrayContext Dispose(bool) teardown (ghost-icon fix), audio-device-removed WARN | Behavior-preserving: 309 tests unmodified green; all 6 demos identical exit 0 | S | S6-R, S6-1 | impl (Sonnet) |
 
+## Sprint 7 — key actions, fast taps, MatterHelm rename, OSS setup (owner-directed)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S7-1 ✅ | keySequence custom actions (grammar, SendInput chords, capture UX) + configurable momentary reset (default 300 ms) | INPUT-array proof; both-side default pinned; 391+322 tests | M | — | impl (Fable) |
+| S7-2 ✅ | Rename product to MatterHelm (namespaces/dirs/mutex/meter/docs/CI) + atomic %APPDATA% migration preserving Matter fabric | Identity test files zero-diff; real migration performed at merge (log line verified, fabric present, old root gone) | M | S7-1 | impl (Fable) |
+| S7-3 | OSS-grade project setup: repo → `matterhelm` (private, history kept), LICENSE, CONTRIBUTING, SECURITY, CoC, issue/PR templates, release workflow (changelog+semver tags), branch/PR conventions | Files in place; release workflow dry-run green | M | S7-2 | impl (Sonnet) + integrator |
+
 ## Proposed (from agent reports, integrator-triaged)
+
+- **P-5** (S7-2 merge observation): a few supervisor tests log through the
+  static `Log` default directory, creating a stray `%APPDATA%\MatterHelm`
+  during test runs (violates ground rule 4's spirit; also nearly confused the
+  real migration). Route those tests through an injected log sink / temp
+  `Log.LogDirectory`.
 
 - ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.
 - **P-4**: tether robustness — when the tray app is hard-killed (not menu Exit), the sidecar was observed surviving ≥4s; index.ts listens for stdin "end"/"close" but a broken pipe may surface as "error". Add "error" handling + an S1-R check.
