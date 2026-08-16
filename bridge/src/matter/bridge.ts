@@ -60,12 +60,13 @@ export type { BuiltinEndpointKey, EndpointsConfig, MomentaryEndpointKey } from "
 export type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
 /**
- * §2.2 as amended by S7-1: default ms after `on` that momentary endpoints
- * auto-reset to `off`. Config-driven via `HTPC_BRIDGE_MOMENTARY_RESET_MS`
- * (100–2000); this default must equal the tray app's `momentaryResetMs`
- * default — the two sides ship as one product.
+ * §2.2 as amended by S7-1/S8-2: default ms after an On command that momentary
+ * endpoints auto-reset to `off` — 0 = the next tick after the command commits
+ * (safe post-ADR-008: the window is presentation only). Config-driven via
+ * `HTPC_BRIDGE_MOMENTARY_RESET_MS` (0–2000); this default must equal the tray
+ * app's `momentaryResetMs` default — the two sides ship as one product.
  */
-export const DEFAULT_MOMENTARY_RESET_MS = 300;
+export const DEFAULT_MOMENTARY_RESET_MS = 0;
 
 /** Sanctioned Matter test VID/PID defaults (ADR-002); both configurable. */
 export const DEFAULT_VENDOR_ID = 0xfff1;

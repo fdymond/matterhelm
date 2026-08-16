@@ -189,9 +189,10 @@ public sealed class BridgeConfig
     /// to "off", in milliseconds (S7-1; integer 0–2000, 0 = next-tick reset
     /// per S8-2 — safe since ADR-008 dispatches on the command). Threaded to the
     /// sidecar via <c>HTPC_BRIDGE_MOMENTARY_RESET_MS</c>; the default must
-    /// equal the bridge's <c>DEFAULT_MOMENTARY_RESET_MS</c> (300).
+    /// equal the bridge's <c>DEFAULT_MOMENTARY_RESET_MS</c> (0 = immediate
+    /// since S8-2 — the reset is presentation-only per ADR-008).
     /// </summary>
-    public int MomentaryResetMs { get; set; } = 300;
+    public int MomentaryResetMs { get; set; }
 
     /// <summary>Whether the overlay HUD flashes on commands.</summary>
     public bool OverlayEnabled { get; set; } = true;

@@ -148,9 +148,10 @@ The transport controls (Play Pause/Next/Previous) and Power show up as
 switches that flip briefly to "on" and snap back — that's expected (Google
 doesn't currently expose a plain "button" concept for locally-paired
 devices with a direct voice target), it isn't a bug. How long the tile
-stays "on" is the **Tap reset delay** setting (Devices & Commands); set it
-to 0 to snap back immediately — purely cosmetic either way, the command
-always fires.
+stays "on" is the **Tap reset delay** setting (Devices & Commands); the
+default is 0 — snap back immediately — and it's purely cosmetic either
+way, the command always fires. Raise it if you prefer seeing the tile
+light up briefly.
 
 **Shown as a plug/outlet instead of a switch?** On the Matter wire these
 devices are On/Off Plug-in Units (the only certified type Google both
@@ -182,8 +183,8 @@ click **Save** (closing the window with unsaved changes asks first).
   app's own log detail level (applies immediately, no restart).
 - **Devices & Commands** — rename or disable any of the five built-in
   devices, choose what the Power device does, tune how quickly a tapped
-  command's switch snaps back to "off" in Google Home (the default,
-  300 ms, works for nearly everyone), and manage **custom commands**:
+  command's switch snaps back to "off" in Google Home (default 0 =
+  immediately; purely cosmetic), and manage **custom commands**:
   - **Add…** creates a new command, which becomes its own Google Home
     device once you save and re-pair (new devices need a config reload of
     the bridge, which happens automatically the next time it starts).

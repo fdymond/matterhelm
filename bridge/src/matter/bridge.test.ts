@@ -59,6 +59,13 @@ describe("EchoSuppressor — value-based FIFO suppression of local writes", () =
   });
 });
 
+/**
+ * Fixed non-zero delay for the window-behavior specs below — deliberately NOT
+ * {@link DEFAULT_MOMENTARY_RESET_MS}, which is 0 since S8-2 (immediate reset)
+ * and would collapse every "before the window elapses" assertion.
+ */
+const TEST_RESET_MS = 300;
+
 describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -74,7 +81,7 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
   } {
     const resets: MomentaryEndpointKey[] = [];
     const scheduler = new MomentaryResetScheduler<MomentaryEndpointKey>(
-      DEFAULT_MOMENTARY_RESET_MS,
+      TEST_RESET_MS,
       (endpoint) => {
         resets.push(endpoint);
       },
@@ -85,7 +92,7 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
   it("resets a momentary endpoint exactly one reset window after its on write", () => {
     const { scheduler, resets } = makeScheduler();
     scheduler.noteOn("playPause");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS - 1);
+    vi.advanceTimersByTime(TEST_RESET_MS - 1);
     expect(resets).toEqual([]);
     vi.advanceTimersByTime(1);
     expect(resets).toEqual(["playPause"]);
@@ -94,16 +101,16 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
   it("fires only once per on write", () => {
     const { scheduler, resets } = makeScheduler();
     scheduler.noteOn("next");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS * 5);
+    vi.advanceTimersByTime(TEST_RESET_MS * 5);
     expect(resets).toEqual(["next"]);
   });
 
   it("restarts the window when a second on write lands before the reset", () => {
     const { scheduler, resets } = makeScheduler();
     scheduler.noteOn("playPause");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS - 100);
+    vi.advanceTimersByTime(TEST_RESET_MS - 100);
     scheduler.noteOn("playPause"); // rapid double-tap: last tap wins
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS - 1);
+    vi.advanceTimersByTime(TEST_RESET_MS - 1);
     expect(resets).toEqual([]);
     vi.advanceTimersByTime(1);
     expect(resets).toEqual(["playPause"]);
@@ -113,14 +120,14 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     const { scheduler, resets } = makeScheduler();
     scheduler.noteOn("previous");
     scheduler.noteOff("previous");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS * 2);
+    vi.advanceTimersByTime(TEST_RESET_MS * 2);
     expect(resets).toEqual([]);
   });
 
   it("tolerates an off write with no pending reset", () => {
     const { scheduler, resets } = makeScheduler();
     scheduler.noteOff("previous");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS * 2);
+    vi.advanceTimersByTime(TEST_RESET_MS * 2);
     expect(resets).toEqual([]);
   });
 
@@ -129,7 +136,7 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     scheduler.noteOn("playPause");
     vi.advanceTimersByTime(300);
     scheduler.noteOn("next");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS - 300);
+    vi.advanceTimersByTime(TEST_RESET_MS - 300);
     expect(resets).toEqual(["playPause"]);
     vi.advanceTimersByTime(300);
     expect(resets).toEqual(["playPause", "next"]);
@@ -141,12 +148,12 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     scheduler.noteOn("next");
     scheduler.noteOn("previous");
     scheduler.clear();
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS * 2);
+    vi.advanceTimersByTime(TEST_RESET_MS * 2);
     expect(resets).toEqual([]);
   });
 
-  it("defaults the reset delay to 300 ms (S7-1; must match the tray app's momentaryResetMs default)", () => {
-    expect(DEFAULT_MOMENTARY_RESET_MS).toBe(300);
+  it("defaults the reset delay to 0 ms (immediate, S8-2; must match the tray app's momentaryResetMs default)", () => {
+    expect(DEFAULT_MOMENTARY_RESET_MS).toBe(0);
   });
 
   it("resets on the next tick when the delay is 0 (S8-2 immediate mode)", () => {
@@ -178,16 +185,13 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
 
   it("schedules custom-plug endpoint ids exactly like built-in keys (ADR-004)", () => {
     const resets: string[] = [];
-    const scheduler = new MomentaryResetScheduler(
-      DEFAULT_MOMENTARY_RESET_MS,
-      (endpoint: string) => {
-        resets.push(endpoint);
-      },
-    );
+    const scheduler = new MomentaryResetScheduler(TEST_RESET_MS, (endpoint: string) => {
+      resets.push(endpoint);
+    });
     scheduler.noteOn("custom-movie-mode");
     scheduler.noteOn("playpause");
     scheduler.noteOff("playpause");
-    vi.advanceTimersByTime(DEFAULT_MOMENTARY_RESET_MS);
+    vi.advanceTimersByTime(TEST_RESET_MS);
     expect(resets).toEqual(["custom-movie-mode"]);
     scheduler.clear();
   });

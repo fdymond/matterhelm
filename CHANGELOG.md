@@ -27,6 +27,10 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 - Tap reset delay now accepts **0** (snap back to off immediately) — the
   floor was 100 ms while the reset was load-bearing; post-ADR-008 it's a pure
   UX knob (S8-2). Settings → Devices & Commands → "Tap reset delay (ms)".
+- **Default tap reset delay is now 0 ms** (was 300): tiles snap back
+  immediately, which also lets Google's device model accept rapid repeat
+  presses sooner. Existing installs keep whatever value their config.json
+  already stores.
 - User guide documents Google's per-device **Type** re-typing (device tile →
   gear → Type → Switch) for anyone who'd rather see the momentary commands as
   switches than plugs — Home-app metadata only, no bridge change.

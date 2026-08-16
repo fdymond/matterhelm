@@ -58,7 +58,7 @@ public sealed class ConfigTests : IDisposable
             builtin => Assert.True(builtin.Enabled));
         Assert.Empty(commands.Custom);
         Assert.Equal(39531, config.Current.IpcPort);
-        Assert.Equal(300, config.Current.MomentaryResetMs);
+        Assert.Equal(0, config.Current.MomentaryResetMs); // immediate reset (S8-2)
         Assert.Equal(PowerOffAction.PauseAndDisplaysOff, config.Current.PowerOffAction);
         Assert.True(config.Current.OverlayEnabled);
         Assert.Null(config.Current.MdnsInterface);
@@ -794,7 +794,7 @@ public sealed class ConfigTests : IDisposable
     [InlineData("2001")] // above the bridge's maximum
     [InlineData("300.5")] // non-integer
     [InlineData("\"fast\"")] // non-number
-    public void OutOfRangeOrWrongTypedMomentaryResetMsFallsBackTo300AndWarns(string rawValue)
+    public void OutOfRangeOrWrongTypedMomentaryResetMsFallsBackToDefaultAndWarns(string rawValue)
     {
         // The bridge env parser is strict (fatal on a bad value), so the tray
         // app must never hand over anything outside 0-2000.
@@ -802,7 +802,7 @@ public sealed class ConfigTests : IDisposable
 
         Config config = NewConfig();
 
-        Assert.Equal(300, config.Current.MomentaryResetMs);
+        Assert.Equal(0, config.Current.MomentaryResetMs);
         Assert.True(_log.Contains("WARN", "momentaryResetMs"));
     }
 

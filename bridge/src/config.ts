@@ -42,7 +42,7 @@ const DEFAULT_LOG_LEVEL = "info";
  */
 const MOMENTARY_RESET_MS_MIN = 0;
 const MOMENTARY_RESET_MS_MAX = 2000;
-const DEFAULT_MOMENTARY_RESET_MS = 300;
+const DEFAULT_MOMENTARY_RESET_MS = 0;
 
 /**
  * Built-in display-name defaults (BLUEPRINT §2.2's "HTPC …" voice targets).
@@ -136,7 +136,7 @@ export interface Config {
    * `HTPC_BRIDGE_MOMENTARY_RESET_MS` (S7-1) — how long after an `on` write a
    * momentary endpoint snaps back to `off`, in ms (integer 0–2000; default
    * {@link DEFAULT_MOMENTARY_RESET_MS}). Both sides of the env contract share
-   * the 300 ms default — the tray app's `momentaryResetMs` config field must
+   * the 0 ms default (immediate since S8-2) — the tray app's `momentaryResetMs` config field must
    * stay in lockstep.
    */
   momentaryResetMs: number;
