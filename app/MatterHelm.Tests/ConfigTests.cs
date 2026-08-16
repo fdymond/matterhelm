@@ -548,6 +548,93 @@ public sealed class ConfigTests : IDisposable
             Assert.Equal("Ctrl+Shift+V", action.GetProperty("sequence").GetString());
         }
 
+        [Fact]
+        public void SequenceActionLoadsItsTypedStepsInOrder()
+        {
+            // S8-3: macro of media key -> wait -> chord.
+            WriteConfig("""
+                {"commands": {"custom": [
+                    {"key": "movie-time", "name": "Movie Time",
+                     "action": {"type": "sequence", "steps": [
+                        {"type": "mediaKey", "keyName": "stop"},
+                        {"type": "delay", "ms": 250},
+                        {"type": "keySequence", "sequence": "ctrl+shift+v"}
+                     ]}}
+                ]}}
+                """);
+
+            Config config = NewConfig();
+
+            CustomCommandConfig command = Assert.Single(config.Current.Commands.Custom);
+            var sequence = Assert.IsType<SequenceActionConfig>(command.Action);
+            Assert.Equal(3, sequence.Steps.Count);
+            Assert.Equal(MediaKeyName.Stop, Assert.IsType<MediaKeyActionConfig>(sequence.Steps[0]).KeyName);
+            Assert.Equal(250, Assert.IsType<DelayActionConfig>(sequence.Steps[1]).Ms);
+            Assert.Equal("Ctrl+Shift+V", Assert.IsType<KeySequenceActionConfig>(sequence.Steps[2]).Sequence);
+        }
+
+        [Theory]
+        [InlineData("""{"type": "sequence", "steps": []}""")] // no steps
+        [InlineData("""{"type": "sequence", "steps": [{"type": "sequence", "steps": [{"type": "mediaKey", "keyName": "stop"}]}]}""")] // nested sequence
+        [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 0}]}""")] // delay below minimum
+        [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 5001}]}""")] // delay above per-step maximum
+        [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 5000}, {"type": "delay", "ms": 5000}, {"type": "delay", "ms": 1}]}""")] // summed delays over the cap
+        [InlineData("""{"type": "sequence", "steps": [{"type": "mediaKey", "keyName": "bogus"}]}""")] // broken step
+        [InlineData("""{"type": "delay", "ms": "fast"}""")] // non-numeric delay
+        public void InvalidSequenceOrDelayActionDropsTheEntryAndWarns(string actionJson)
+        {
+            WriteConfig($$"""
+                {"commands": {"custom": [
+                    {"key": "movie-time", "name": "Movie Time", "action": {{actionJson}} }
+                ]} }
+                """);
+
+            Config config = NewConfig();
+
+            Assert.Empty(config.Current.Commands.Custom);
+            Assert.True(Log.Contains("WARN", "commands.custom[0]"));
+        }
+
+        [Fact]
+        public void SequenceActionRoundTripsThroughSaveWithItsDiscriminators()
+        {
+            Config config = NewConfig();
+            config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "movie-time",
+                    Name = "Movie Time",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                            new DelayActionConfig { Ms = 250 },
+                            new LaunchActionConfig { Path = @"C:\apps\kodi.exe" },
+                        ],
+                    },
+                },
+            ];
+            config.Save();
+
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+            JsonElement action = document.RootElement
+                .GetProperty("commands").GetProperty("custom")[0].GetProperty("action");
+            Assert.Equal("sequence", action.GetProperty("type").GetString());
+            JsonElement steps = action.GetProperty("steps");
+            Assert.Equal(3, steps.GetArrayLength());
+            Assert.Equal("mediaKey", steps[0].GetProperty("type").GetString());
+            Assert.Equal("delay", steps[1].GetProperty("type").GetString());
+            Assert.Equal(250, steps[1].GetProperty("ms").GetInt32());
+            Assert.Equal("launch", steps[2].GetProperty("type").GetString());
+
+            // And the saved file loads back to the same typed model.
+            var reloaded = Assert.IsType<SequenceActionConfig>(
+                Assert.Single(NewConfig().Current.Commands.Custom).Action);
+            Assert.Equal(3, reloaded.Steps.Count);
+        }
+
         [Theory]
         [InlineData("\"Ctrl+Ctrl+V\"")] // duplicate modifier
         [InlineData("\"Ctrl+Bogus\"")] // unknown key

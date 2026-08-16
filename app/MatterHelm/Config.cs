@@ -41,14 +41,17 @@ public enum MediaKeyName
 
 /// <summary>
 /// What a custom command does when its endpoint fires (ADR-004 §1, extended
-/// by S7-1). Executed by the tray app only — the sidecar never sees actions.
-/// The wire form is polymorphic on <c>type</c>
-/// (<c>mediaKey</c> | <c>launch</c> | <c>keySequence</c>).
+/// by S7-1 and S8-3). Executed by the tray app only — the sidecar never sees
+/// actions. The wire form is polymorphic on <c>type</c>
+/// (<c>mediaKey</c> | <c>launch</c> | <c>keySequence</c> | <c>delay</c> |
+/// <c>sequence</c>).
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(MediaKeyActionConfig), "mediaKey")]
 [JsonDerivedType(typeof(LaunchActionConfig), "launch")]
 [JsonDerivedType(typeof(KeySequenceActionConfig), "keySequence")]
+[JsonDerivedType(typeof(DelayActionConfig), "delay")]
+[JsonDerivedType(typeof(SequenceActionConfig), "sequence")]
 public abstract class CustomActionConfig;
 
 /// <summary>Custom action injecting one media key (<c>{"type":"mediaKey","keyName":"stop"}</c>).</summary>
@@ -79,6 +82,47 @@ public sealed class KeySequenceActionConfig : CustomActionConfig
 {
     /// <summary>The chord in <see cref="KeyChord"/> grammar, canonical form (e.g. <c>Ctrl+Shift+V</c>).</summary>
     public required string Sequence { get; set; }
+}
+
+/// <summary>
+/// Custom action that waits (<c>{"type":"delay","ms":300}</c>, S8-3). Meant
+/// as a pacing step inside a <see cref="SequenceActionConfig"/> — the editor
+/// only offers it there — but harmless standalone. Executed with a blocking
+/// sleep on the IPC receive-loop thread (see <c>BridgeHost.OnActionReceived</c>:
+/// ordered execution is that thread's contract), which is why <see cref="MaxMs"/>
+/// stays small.
+/// </summary>
+public sealed class DelayActionConfig : CustomActionConfig
+{
+    /// <summary>Smallest accepted wait.</summary>
+    public const int MinMs = 1;
+
+    /// <summary>Largest accepted wait per step (blocking; see class doc).</summary>
+    public const int MaxMs = 5000;
+
+    /// <summary>Milliseconds to wait (<see cref="MinMs"/>–<see cref="MaxMs"/>).</summary>
+    public required int Ms { get; set; }
+}
+
+/// <summary>
+/// Custom action running several actions in order — a macro
+/// (<c>{"type":"sequence","steps":[{action}, …]}</c>, S8-3). Steps are the
+/// other action types (media key, launch, key sequence, delay); nesting a
+/// sequence inside a sequence is rejected on load and in the editor.
+/// Execution stops at the first failing step (the ack names it). The step
+/// count and the summed delay are capped so a macro can never stall the
+/// ordered action loop past the bridge's ~10 s ack-timing window.
+/// </summary>
+public sealed class SequenceActionConfig : CustomActionConfig
+{
+    /// <summary>Most steps a sequence may hold.</summary>
+    public const int MaxSteps = 16;
+
+    /// <summary>Cap on the sum of all delay steps in one sequence.</summary>
+    public const int MaxTotalDelayMs = 10000;
+
+    /// <summary>The steps, run in list order.</summary>
+    public required List<CustomActionConfig> Steps { get; set; }
 }
 
 /// <summary>
@@ -587,9 +631,19 @@ public sealed class Config
             return null;
         }
 
+        return ParseActionObject(action, $"{where}.action", allowSequence: true);
+    }
+
+    /// <summary>
+    /// Parses one action object — a top-level custom action or one sequence
+    /// step (S8-3; <paramref name="allowSequence"/> false inside a sequence,
+    /// so macros never nest). Null (after one WARN) = drop the whole entry.
+    /// </summary>
+    private CustomActionConfig? ParseActionObject(JsonElement action, string where, bool allowSequence)
+    {
         if (!action.TryGetProperty("type", out JsonElement type) || type.ValueKind != JsonValueKind.String)
         {
-            _log("WARN", $"config.json \"{where}.action.type\" must be a string; entry dropped.");
+            _log("WARN", $"config.json \"{where}.type\" must be a string; entry dropped.");
             return null;
         }
 
@@ -603,7 +657,7 @@ public sealed class Config
                         : null;
                 if (keyName is null)
                 {
-                    _log("WARN", $"config.json \"{where}.action.keyName\" must be one of playPause/next/previous/stop/mute/volumeUp/volumeDown; entry dropped.");
+                    _log("WARN", $"config.json \"{where}.keyName\" must be one of playPause/next/previous/stop/mute/volumeUp/volumeDown; entry dropped.");
                     return null;
                 }
 
@@ -616,7 +670,7 @@ public sealed class Config
                     || path.ValueKind != JsonValueKind.String
                     || path.GetString() is not { Length: > 0 } pathValue)
                 {
-                    _log("WARN", $"config.json \"{where}.action.path\" must be a non-empty string; entry dropped.");
+                    _log("WARN", $"config.json \"{where}.path\" must be a non-empty string; entry dropped.");
                     return null;
                 }
 
@@ -629,7 +683,7 @@ public sealed class Config
                     }
                     else
                     {
-                        _log("WARN", $"config.json \"{where}.action.args\" must be a string; using no arguments.");
+                        _log("WARN", $"config.json \"{where}.args\" must be a string; using no arguments.");
                     }
                 }
 
@@ -643,7 +697,7 @@ public sealed class Config
                     || sequence.GetString() is not { } raw
                     || !KeyChord.TryParse(raw, out ParsedKeyChord? chord, out _))
                 {
-                    _log("WARN", $"config.json \"{where}.action.sequence\" must be a valid key sequence like \"Ctrl+Shift+V\"; entry dropped.");
+                    _log("WARN", $"config.json \"{where}.sequence\" must be a valid key sequence like \"Ctrl+Shift+V\"; entry dropped.");
                     return null;
                 }
 
@@ -652,8 +706,74 @@ public sealed class Config
                 return new KeySequenceActionConfig { Sequence = chord.Canonical };
             }
 
+            case "delay":
+            {
+                if (!action.TryGetProperty("ms", out JsonElement ms)
+                    || ms.ValueKind != JsonValueKind.Number
+                    || !ms.TryGetInt32(out int msValue)
+                    || msValue is < DelayActionConfig.MinMs or > DelayActionConfig.MaxMs)
+                {
+                    _log("WARN", $"config.json \"{where}.ms\" must be an integer {DelayActionConfig.MinMs}-{DelayActionConfig.MaxMs}; entry dropped.");
+                    return null;
+                }
+
+                return new DelayActionConfig { Ms = msValue };
+            }
+
+            case "sequence":
+            {
+                if (!allowSequence)
+                {
+                    _log("WARN", $"config.json \"{where}\": a sequence cannot contain another sequence; entry dropped.");
+                    return null;
+                }
+
+                if (!action.TryGetProperty("steps", out JsonElement steps)
+                    || steps.ValueKind != JsonValueKind.Array
+                    || steps.GetArrayLength() is < 1 or > SequenceActionConfig.MaxSteps)
+                {
+                    _log("WARN", $"config.json \"{where}.steps\" must be an array of 1-{SequenceActionConfig.MaxSteps} actions; entry dropped.");
+                    return null;
+                }
+
+                var parsed = new List<CustomActionConfig>();
+                int index = 0;
+                int totalDelayMs = 0;
+                foreach (JsonElement step in steps.EnumerateArray())
+                {
+                    if (step.ValueKind != JsonValueKind.Object)
+                    {
+                        _log("WARN", $"config.json \"{where}.steps[{index}]\" must be an action object; entry dropped.");
+                        return null;
+                    }
+
+                    if (ParseActionObject(step, $"{where}.steps[{index}]", allowSequence: false) is not { } stepAction)
+                    {
+                        // The step parser already warned; a macro with a
+                        // broken step must not half-run.
+                        return null;
+                    }
+
+                    if (stepAction is DelayActionConfig delay)
+                    {
+                        totalDelayMs += delay.Ms;
+                    }
+
+                    parsed.Add(stepAction);
+                    index++;
+                }
+
+                if (totalDelayMs > SequenceActionConfig.MaxTotalDelayMs)
+                {
+                    _log("WARN", $"config.json \"{where}.steps\" delays sum to {totalDelayMs} ms, over the {SequenceActionConfig.MaxTotalDelayMs} ms cap; entry dropped.");
+                    return null;
+                }
+
+                return new SequenceActionConfig { Steps = parsed };
+            }
+
             default:
-                _log("WARN", $"config.json \"{where}.action.type\" is not a known action type (mediaKey/launch/keySequence); entry dropped.");
+                _log("WARN", $"config.json \"{where}.type\" is not a known action type (mediaKey/launch/keySequence/delay/sequence); entry dropped.");
                 return null;
         }
     }

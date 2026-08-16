@@ -208,19 +208,51 @@ public sealed class SettingsViewModel
                 errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {nameError}"));
             }
 
-            if (command.Action is LaunchActionConfig launch && ValidateLaunchPath(launch.Path) is { } pathError)
+            if (ValidateAction(command.Action, allowSequence: true) is { } actionError)
             {
-                errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {pathError}"));
-            }
-
-            if (command.Action is KeySequenceActionConfig keySequence
-                && ValidateKeySequence(keySequence.Sequence) is { } sequenceError)
-            {
-                errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {sequenceError}"));
+                errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {actionError}"));
             }
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// Validates one custom action — a command's own action or one sequence
+    /// step (S8-3; <paramref name="allowSequence"/> false for steps, so macros
+    /// never nest). Null = valid. Sequence errors carry the 1-based step
+    /// number; the caps mirror Config's load-time parser exactly.
+    /// </summary>
+    public string? ValidateAction(CustomActionConfig action, bool allowSequence) => action switch
+    {
+        LaunchActionConfig launch => ValidateLaunchPath(launch.Path),
+        KeySequenceActionConfig keySequence => ValidateKeySequence(keySequence.Sequence),
+        DelayActionConfig delay when delay.Ms is < DelayActionConfig.MinMs or > DelayActionConfig.MaxMs =>
+            $"Delay must be {DelayActionConfig.MinMs}–{DelayActionConfig.MaxMs} ms.",
+        SequenceActionConfig when !allowSequence => "A sequence cannot contain another sequence.",
+        SequenceActionConfig sequence => ValidateSequence(sequence),
+        _ => null,
+    };
+
+    private string? ValidateSequence(SequenceActionConfig sequence)
+    {
+        if (sequence.Steps.Count is < 1 or > SequenceActionConfig.MaxSteps)
+        {
+            return $"A sequence needs 1–{SequenceActionConfig.MaxSteps} steps.";
+        }
+
+        for (int i = 0; i < sequence.Steps.Count; i++)
+        {
+            if (ValidateAction(sequence.Steps[i], allowSequence: false) is { } stepError)
+            {
+                return $"Step {i + 1}: {stepError}";
+            }
+        }
+
+        int totalDelayMs = sequence.Steps.OfType<DelayActionConfig>().Sum(d => d.Ms);
+        return totalDelayMs > SequenceActionConfig.MaxTotalDelayMs
+            ? $"Delays sum to {totalDelayMs} ms — the cap is {SequenceActionConfig.MaxTotalDelayMs} ms."
+            : null;
     }
 
     /// <summary>
@@ -270,12 +302,14 @@ public sealed class SettingsViewModel
     public static string? ValidateKeySequence(string sequence) =>
         KeyChord.TryParse(sequence, out _, out string? error) ? null : error;
 
-    /// <summary>Short human summary of a custom action for the command list ("Media key: stop" / "Launch: kodi.exe" / "Key sequence: Ctrl+Shift+V").</summary>
+    /// <summary>Short human summary of a custom action for the command/step lists ("Media key: stop" / "Launch: kodi.exe" / "Key sequence: Ctrl+Shift+V" / "Wait: 300 ms" / "Sequence: 3 steps").</summary>
     public static string DescribeAction(CustomActionConfig action) => action switch
     {
         MediaKeyActionConfig mediaKey => $"Media key: {MediaKeyChoices.First(c => c.Key == mediaKey.KeyName).Label.ToLowerInvariant()}",
         LaunchActionConfig launch => $"Launch: {Path.GetFileName(launch.Path)}",
         KeySequenceActionConfig keySequence => $"Key sequence: {keySequence.Sequence}",
+        DelayActionConfig delay => $"Wait: {delay.Ms} ms",
+        SequenceActionConfig sequence => $"Sequence: {sequence.Steps.Count} step{(sequence.Steps.Count == 1 ? "" : "s")}",
         _ => throw new ArgumentOutOfRangeException(nameof(action), action.GetType().Name, "unknown custom action type"),
     };
 

@@ -7,8 +7,10 @@ namespace MatterHelm.Ui;
 /// S7-1). The key is locked when editing an existing command — it is the
 /// Matter endpoint id and wire identifier, so renames must never change it
 /// (stable identity, ADR-004 §1). The action editor switches between the
-/// media-key combo, the launch path/args rows, and the key-sequence row with
-/// the action-type combo. Validation is inline (via
+/// media-key combo, the launch path/args rows, the key-sequence row, and the
+/// macro step list (S8-3: an ordered list of steps edited via
+/// <see cref="SequenceStepDialog"/>) with the action-type combo. Validation
+/// is inline (via
 /// <see cref="SettingsViewModel"/>'s pure rules) and OK stays disabled while
 /// anything is invalid.
 ///
@@ -32,6 +34,7 @@ public sealed class CustomCommandDialog : Form
     private const int MediaKeyActionIndex = 0;
     private const int LaunchActionIndex = 1;
     private const int KeySequenceActionIndex = 2;
+    private const int SequenceMacroActionIndex = 3;
 
     private readonly SettingsViewModel _vm;
     private readonly string? _originalKey;
@@ -48,6 +51,13 @@ public sealed class CustomCommandDialog : Form
     private readonly TextBox _sequenceBox;
     private readonly CheckBox _captureToggle;
     private readonly TableLayoutPanel _sequenceRow;
+    private readonly ListBox _stepsList;
+    private readonly Button _editStepButton;
+    private readonly Button _removeStepButton;
+    private readonly Button _stepUpButton;
+    private readonly Button _stepDownButton;
+    private readonly TableLayoutPanel _macroRow;
+    private readonly List<CustomActionConfig> _steps = [];
     private readonly Label _errorLabel;
     private readonly Button _okButton;
 
@@ -96,6 +106,7 @@ public sealed class CustomCommandDialog : Form
         _actionTypeCombo.Items.Add("Press a media key");
         _actionTypeCombo.Items.Add("Launch a program");
         _actionTypeCombo.Items.Add("Key sequence");
+        _actionTypeCombo.Items.Add("Command sequence (macro)");
         _actionTypeCombo.SelectedIndexChanged += (_, _) => OnActionTypeChanged();
         AddRow(grid, "Action", _actionTypeCombo);
 
@@ -148,6 +159,48 @@ public sealed class CustomCommandDialog : Form
         _sequenceRow = SubGrid(grid);
         AddRow(_sequenceRow, "Sequence (e.g. Ctrl+Shift+V)", sequenceEditor);
 
+        // S8-3 macro editor: ordered step list + add/edit/remove/reorder.
+        // Steps open SequenceStepDialog (the non-sequence action types plus a
+        // wait); double-click edits.
+        _stepsList = new ListBox { Width = S(300), Height = S(110), IntegralHeight = false };
+        _stepsList.SelectedIndexChanged += (_, _) => UpdateStepButtons();
+        _stepsList.DoubleClick += (_, _) => EditStep();
+        var addStepButton = new Button { Text = "Add…", AutoSize = true };
+        addStepButton.Click += (_, _) => AddStep();
+        _editStepButton = new Button { Text = "Edit…", AutoSize = true, Enabled = false };
+        _editStepButton.Click += (_, _) => EditStep();
+        _removeStepButton = new Button { Text = "Remove", AutoSize = true, Enabled = false };
+        _removeStepButton.Click += (_, _) => RemoveStep();
+        _stepUpButton = new Button { Text = "Up", AutoSize = true, Enabled = false };
+        _stepUpButton.Click += (_, _) => MoveStep(-1);
+        _stepDownButton = new Button { Text = "Down", AutoSize = true, Enabled = false };
+        _stepDownButton.Click += (_, _) => MoveStep(+1);
+        var stepButtons = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = Padding.Empty,
+        };
+        stepButtons.Controls.Add(addStepButton);
+        stepButtons.Controls.Add(_editStepButton);
+        stepButtons.Controls.Add(_removeStepButton);
+        stepButtons.Controls.Add(_stepUpButton);
+        stepButtons.Controls.Add(_stepDownButton);
+        var stepsEditor = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = Padding.Empty,
+        };
+        stepsEditor.Controls.Add(_stepsList);
+        stepsEditor.Controls.Add(stepButtons);
+        _macroRow = SubGrid(grid);
+        AddRow(_macroRow, "Steps (run in order)", stepsEditor);
+
         _errorLabel = new Label
         {
             AutoSize = true,
@@ -187,6 +240,11 @@ public sealed class CustomCommandDialog : Form
             case KeySequenceActionConfig keySequence:
                 _actionTypeCombo.SelectedIndex = KeySequenceActionIndex;
                 _sequenceBox.Text = keySequence.Sequence;
+                break;
+            case SequenceActionConfig sequence:
+                _actionTypeCombo.SelectedIndex = SequenceMacroActionIndex;
+                _steps.AddRange(sequence.Steps);
+                RefreshStepsList();
                 break;
             default:
                 _actionTypeCombo.SelectedIndex = MediaKeyActionIndex;
@@ -238,11 +296,14 @@ public sealed class CustomCommandDialog : Form
 
     private bool IsKeySequenceAction => _actionTypeCombo.SelectedIndex == KeySequenceActionIndex;
 
+    private bool IsMacroAction => _actionTypeCombo.SelectedIndex == SequenceMacroActionIndex;
+
     private void OnActionTypeChanged()
     {
-        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction;
+        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction && !IsMacroAction;
         _launchRows.Visible = IsLaunchAction;
         _sequenceRow.Visible = IsKeySequenceAction;
+        _macroRow.Visible = IsMacroAction;
         _captureToggle.Checked = false; // leaving the row always disarms capture
         Revalidate();
     }
@@ -253,9 +314,93 @@ public sealed class CustomCommandDialog : Form
             _vm.ValidateCustomCommandKey(_keyBox.Text.Trim(), _originalKey)
             ?? SettingsViewModel.ValidateCustomCommandName(_nameBox.Text.Trim())
             ?? (IsLaunchAction ? _vm.ValidateLaunchPath(_pathBox.Text.Trim()) : null)
-            ?? (IsKeySequenceAction ? SettingsViewModel.ValidateKeySequence(_sequenceBox.Text.Trim()) : null);
+            ?? (IsKeySequenceAction ? SettingsViewModel.ValidateKeySequence(_sequenceBox.Text.Trim()) : null)
+            ?? (IsMacroAction ? _vm.ValidateAction(new SequenceActionConfig { Steps = _steps }, allowSequence: true) : null);
         _errorLabel.Text = error ?? "";
         _okButton.Enabled = error is null;
+    }
+
+    private void RefreshStepsList()
+    {
+        int selected = _stepsList.SelectedIndex;
+        _stepsList.BeginUpdate();
+        _stepsList.Items.Clear();
+        for (int i = 0; i < _steps.Count; i++)
+        {
+            _stepsList.Items.Add($"{i + 1}. {SettingsViewModel.DescribeAction(_steps[i])}");
+        }
+
+        _stepsList.EndUpdate();
+        if (_steps.Count > 0)
+        {
+            _stepsList.SelectedIndex = Math.Clamp(selected, 0, _steps.Count - 1);
+        }
+
+        UpdateStepButtons();
+        Revalidate();
+    }
+
+    private void UpdateStepButtons()
+    {
+        int index = _stepsList.SelectedIndex;
+        _editStepButton.Enabled = index >= 0;
+        _removeStepButton.Enabled = index >= 0;
+        _stepUpButton.Enabled = index > 0;
+        _stepDownButton.Enabled = index >= 0 && index < _steps.Count - 1;
+    }
+
+    private void AddStep()
+    {
+        using var dialog = new SequenceStepDialog(_vm, existing: null);
+        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.Result is { } step)
+        {
+            _steps.Add(step);
+            RefreshStepsList();
+            _stepsList.SelectedIndex = _steps.Count - 1;
+        }
+    }
+
+    private void EditStep()
+    {
+        int index = _stepsList.SelectedIndex;
+        if (index < 0)
+        {
+            return;
+        }
+
+        using var dialog = new SequenceStepDialog(_vm, _steps[index]);
+        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.Result is { } step)
+        {
+            _steps[index] = step;
+            RefreshStepsList();
+            _stepsList.SelectedIndex = index;
+        }
+    }
+
+    private void RemoveStep()
+    {
+        int index = _stepsList.SelectedIndex;
+        if (index < 0)
+        {
+            return;
+        }
+
+        _steps.RemoveAt(index);
+        RefreshStepsList();
+    }
+
+    private void MoveStep(int direction)
+    {
+        int index = _stepsList.SelectedIndex;
+        int target = index + direction;
+        if (index < 0 || target < 0 || target >= _steps.Count)
+        {
+            return;
+        }
+
+        (_steps[index], _steps[target]) = (_steps[target], _steps[index]);
+        RefreshStepsList();
+        _stepsList.SelectedIndex = target;
     }
 
     /// <inheritdoc />
@@ -280,72 +425,19 @@ public sealed class CustomCommandDialog : Form
             return true;
         }
 
-        if (keyCode is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin)
+        if (KeyChordCapture.IsPureModifier(keyCode))
         {
             return true; // pure modifier — hold it and press the main key
         }
 
-        if (TryMapCapturedKey(keyCode, out string keyName))
+        if (KeyChordCapture.TryCapture(keyData, out string? canonical))
         {
-            var modifiers = KeyChordModifiers.None;
-            if (keyData.HasFlag(Keys.Control))
-            {
-                modifiers |= KeyChordModifiers.Ctrl;
-            }
-
-            if (keyData.HasFlag(Keys.Alt))
-            {
-                modifiers |= KeyChordModifiers.Alt;
-            }
-
-            if (keyData.HasFlag(Keys.Shift))
-            {
-                modifiers |= KeyChordModifiers.Shift;
-            }
-
-            _sequenceBox.Text = new ParsedKeyChord(modifiers, KeyChord.Keys[keyName]).Canonical;
+            _sequenceBox.Text = canonical;
             _captureToggle.Checked = false;
         }
 
         // Unmappable non-modifier keys are swallowed and capture stays armed.
         return true;
-    }
-
-    /// <summary>Maps a captured <see cref="Keys"/> code onto its <see cref="KeyChord"/> table name; false = not in the curated set (capture ignores it).</summary>
-    private static bool TryMapCapturedKey(Keys keyCode, out string keyName)
-    {
-        keyName = keyCode switch
-        {
-            >= Keys.A and <= Keys.Z => keyCode.ToString(),
-            >= Keys.D0 and <= Keys.D9 => keyCode.ToString()[1..], // "D7" -> "7"
-            >= Keys.NumPad0 and <= Keys.NumPad9 =>
-                ((char)('0' + (keyCode - Keys.NumPad0))).ToString(),
-            >= Keys.F1 and <= Keys.F24 => keyCode.ToString(),
-            Keys.Enter => "Enter",
-            Keys.Tab => "Tab",
-            Keys.Space => "Space",
-            Keys.Up => "Up",
-            Keys.Down => "Down",
-            Keys.Left => "Left",
-            Keys.Right => "Right",
-            Keys.Home => "Home",
-            Keys.End => "End",
-            Keys.PageUp => "PageUp",
-            Keys.PageDown => "PageDown",
-            Keys.Insert => "Insert",
-            Keys.Delete => "Delete",
-            Keys.Back => "Backspace",
-            Keys.PrintScreen => "PrintScreen",
-            Keys.MediaPlayPause => "MediaPlayPause",
-            Keys.MediaNextTrack => "MediaNext",
-            Keys.MediaPreviousTrack => "MediaPrevious",
-            Keys.MediaStop => "MediaStop",
-            Keys.VolumeMute => "VolumeMute",
-            Keys.VolumeUp => "VolumeUp",
-            Keys.VolumeDown => "VolumeDown",
-            _ => "",
-        };
-        return keyName.Length > 0;
     }
 
     private void BrowseForProgram()
@@ -370,11 +462,13 @@ public sealed class CustomCommandDialog : Form
             return;
         }
 
-        CustomActionConfig action = IsLaunchAction
-            ? new LaunchActionConfig { Path = _pathBox.Text.Trim(), Args = _argsBox.Text.Trim() }
-            : IsKeySequenceAction
-                ? new KeySequenceActionConfig { Sequence = CanonicalSequence(_sequenceBox.Text.Trim()) }
-                : new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key };
+        CustomActionConfig action = _actionTypeCombo.SelectedIndex switch
+        {
+            LaunchActionIndex => new LaunchActionConfig { Path = _pathBox.Text.Trim(), Args = _argsBox.Text.Trim() },
+            KeySequenceActionIndex => new KeySequenceActionConfig { Sequence = CanonicalSequence(_sequenceBox.Text.Trim()) },
+            SequenceMacroActionIndex => new SequenceActionConfig { Steps = [.. _steps] },
+            _ => new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key },
+        };
         Result = new CustomCommandConfig
         {
             Key = _keyBox.Text.Trim(),

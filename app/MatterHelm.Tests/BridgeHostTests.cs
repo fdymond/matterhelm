@@ -540,6 +540,87 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public async Task CustomSequenceActionRunsItsStepsInOrderAndAcksOk()
+        {
+            // S8-3 macro: stop -> wait 1 ms -> chord, one endpoint fire.
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "movie-time",
+                    Name = "Movie Time",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                            new DelayActionConfig { Ms = 1 },
+                            new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" },
+                        ],
+                    },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
+            host.SetEnabled(true);
+
+            var expectedChord = new ParsedKeyChord(
+                KeyChordModifiers.Ctrl | KeyChordModifiers.Shift, KeyChord.Keys["V"]);
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("keySequence", (object?)expectedChord)),
+                TimeSpan.FromSeconds(10),
+                "executor to receive the macro's final chord step");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            // Both executor steps ran, in configured order (the delay step
+            // never touches the executor).
+            Assert.Equal(
+                [("mediaStop", null), ("keySequence", expectedChord)],
+                _executor.Calls.Where(c => c.Name is "mediaStop" or "keySequence"));
+
+            lock (_gate)
+            {
+                Assert.Contains(new OverlayContent("Google Home → Movie Time", "ran 3 steps", false), _overlay);
+            }
+        }
+
+        [Fact]
+        public async Task CustomSequenceActionStopsAtTheFirstFailingStepAndNacksWithItsNumber()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "movie-time",
+                    Name = "Movie Time",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Next },
+                        ],
+                    },
+                },
+            ];
+            _executor.NextResult = false; // every executor call fails
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("\"ok\":false") && _log.ContainsMessage("step 1 of 2"),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the nack naming the failing step");
+
+            // Execution stopped at step 1: the second media key never ran.
+            Assert.DoesNotContain(("next", (object?)null), _executor.Calls);
+        }
+
+        [Fact]
         public async Task SupervisorEnvCarriesTheConfiguredMomentaryResetInterval()
         {
             _config.Current.MomentaryResetMs = 450;

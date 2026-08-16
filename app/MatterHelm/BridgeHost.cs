@@ -942,16 +942,56 @@ public sealed class BridgeHost : IDisposable
             return (false, "failed", $"unknown or disabled custom command: {frame.Key}");
         }
 
-        return command.Action switch
+        return ExecuteCustomAction(frame.Key, command.Action);
+    }
+
+    /// <summary>
+    /// Executes one custom action — a command's own action or one sequence
+    /// step (S8-3). Sequences run their steps in order on this same thread
+    /// (the ordered IPC receive loop) and stop at the first failure, whose
+    /// error is prefixed with the 1-based step number; delay steps block, which
+    /// is why Config caps their per-step and summed durations.
+    /// </summary>
+    private (bool Ok, string Pill, string? Error) ExecuteCustomAction(string commandKey, CustomActionConfig action)
+    {
+        switch (action)
         {
-            MediaKeyActionConfig mediaKey => ExecuteMediaKey(mediaKey.KeyName),
-            LaunchActionConfig launch => (
-                _executor.Execute("launch", new LaunchRequest(launch.Path, launch.Args)),
-                $"launched {Path.GetFileName(launch.Path)}",
-                null),
-            KeySequenceActionConfig keySequence => ExecuteKeySequence(frame.Key, keySequence.Sequence),
-            _ => (false, "failed", $"unsupported action type for custom command: {frame.Key}"),
-        };
+            case MediaKeyActionConfig mediaKey:
+                return ExecuteMediaKey(mediaKey.KeyName);
+            case LaunchActionConfig launch:
+                return (
+                    _executor.Execute("launch", new LaunchRequest(launch.Path, launch.Args)),
+                    $"launched {Path.GetFileName(launch.Path)}",
+                    null);
+            case KeySequenceActionConfig keySequence:
+                return ExecuteKeySequence(commandKey, keySequence.Sequence);
+            case DelayActionConfig delay:
+                Thread.Sleep(delay.Ms);
+                return (true, $"waited {delay.Ms} ms", null);
+            case SequenceActionConfig sequence:
+            {
+                for (int i = 0; i < sequence.Steps.Count; i++)
+                {
+                    if (sequence.Steps[i] is SequenceActionConfig)
+                    {
+                        // Config rejects nesting on load; reaching one here means
+                        // the config mutated since — nack, never recurse.
+                        return (false, "failed", $"custom command {commandKey}: step {i + 1} is a nested sequence");
+                    }
+
+                    (bool stepOk, string stepPill, string? stepError) = ExecuteCustomAction(commandKey, sequence.Steps[i]);
+                    if (!stepOk)
+                    {
+                        return (false, "failed", $"custom command {commandKey}: step {i + 1} of {sequence.Steps.Count} failed: {stepError ?? stepPill}");
+                    }
+                }
+
+                return (true, $"ran {sequence.Steps.Count} steps", null);
+            }
+
+            default:
+                return (false, "failed", $"unsupported action type for custom command: {commandKey}");
+        }
     }
 
     /// <summary>

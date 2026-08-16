@@ -231,6 +231,75 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.True(vm.IsValid);
     }
 
+    [Fact]
+    public void ValidateActionAcceptsAWellFormedSequence()
+    {
+        SettingsViewModel vm = NewViewModel(pathExists: _ => true);
+        var sequence = new SequenceActionConfig
+        {
+            Steps =
+            [
+                new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                new DelayActionConfig { Ms = 250 },
+                new KeySequenceActionConfig { Sequence = "Ctrl+Shift+V" },
+            ],
+        };
+
+        Assert.Null(vm.ValidateAction(sequence, allowSequence: true));
+    }
+
+    [Fact]
+    public void ValidateActionRejectsANestedSequenceAndNamesTheStep()
+    {
+        SettingsViewModel vm = NewViewModel();
+        var sequence = new SequenceActionConfig
+        {
+            Steps =
+            [
+                new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                new SequenceActionConfig { Steps = [new MediaKeyActionConfig { KeyName = MediaKeyName.Next }] },
+            ],
+        };
+
+        string? error = vm.ValidateAction(sequence, allowSequence: true);
+        Assert.NotNull(error);
+        Assert.StartsWith("Step 2:", error, StringComparison.Ordinal);
+        Assert.Contains("cannot contain another sequence", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateActionRejectsAnEmptySequenceAndASummedDelayOverTheCap()
+    {
+        SettingsViewModel vm = NewViewModel();
+
+        Assert.Contains("1–16 steps", vm.ValidateAction(
+            new SequenceActionConfig { Steps = [] }, allowSequence: true), StringComparison.Ordinal);
+
+        var overCap = new SequenceActionConfig
+        {
+            Steps =
+            [
+                new DelayActionConfig { Ms = 5000 },
+                new DelayActionConfig { Ms = 5000 },
+                new DelayActionConfig { Ms = 1 },
+            ],
+        };
+        Assert.Contains("cap is 10000 ms", vm.ValidateAction(overCap, allowSequence: true), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DescribeActionSummarizesSequencesAndDelays()
+    {
+        Assert.Equal("Wait: 250 ms", SettingsViewModel.DescribeAction(new DelayActionConfig { Ms = 250 }));
+        Assert.Equal("Sequence: 1 step", SettingsViewModel.DescribeAction(
+            new SequenceActionConfig { Steps = [new DelayActionConfig { Ms = 1 }] }));
+        Assert.Equal("Sequence: 2 steps", SettingsViewModel.DescribeAction(
+            new SequenceActionConfig
+            {
+                Steps = [new DelayActionConfig { Ms = 1 }, new MediaKeyActionConfig { KeyName = MediaKeyName.Stop }],
+            }));
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(2001)]

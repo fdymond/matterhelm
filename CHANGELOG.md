@@ -10,7 +10,24 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+### Added
+
+- **Command sequences (macros)**: a custom command can now run several
+  actions in order — media keys, program launches, key chords, and waits
+  (1–5000 ms each; ≤16 steps, waits capped at 10 s total) — from a single
+  voice command or tile tap. Built in the Add/Edit command dialog's new
+  "Command sequence (macro)" type with an ordered, reorderable step list
+  (S8-3). Execution stops at the first failing step and the log names it.
+
 ### Fixed
+
+- **Every tap on a momentary tile now fires** (S8-4). Google Home's tile is
+  a toggle over Google's own state model, which lags the bridge's instant
+  auto-reset — so a tap could arrive as an `Off` command and was dropped,
+  leaving every other tap dead (and re-typing the device as "Switch" in the
+  Home app changes only the icon). Momentary endpoints now treat any OnOff
+  command as a press; consequently "turn **off** HTPC Next" also presses it.
+  HTPC Power keeps distinct on/off meanings.
 
 - Repeated identical commands are no longer dropped. Plug endpoints (the
   transport buttons, every custom command, and the power switch) now dispatch
