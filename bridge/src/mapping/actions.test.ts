@@ -138,9 +138,19 @@ describe("clusterWriteToAction — momentary switches (playPause/next/previous)"
     });
   });
 
-  it.each(momentaryNames)("returns null for %s's auto-reset `off` write (no action)", (name) => {
+  it.each(momentaryNames)("dispatches %s on the Off command too (S8-4)", (name) => {
+    // Google Home's tile is a toggle over its own (often stale) state model:
+    // a tap can arrive as Off when Google still believes the device is on.
+    // The endpoint is stateless, so any controller command is a press — and
+    // the auto-reset is a local attribute write that never reaches this
+    // mapping (ADR-008), so an Off here is never our own reset echo.
     const write: ClusterWrite = { endpoint: name, cluster: "onOff", on: false };
-    expect(clusterWriteToAction(write, id)).toBeNull();
+    expect(clusterWriteToAction(write, id)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "action",
+      id,
+      name,
+    });
   });
 });
 
@@ -169,22 +179,27 @@ describe("clusterWriteToAction — custom commands (ADR-004 momentary plugs)", (
       on: true,
     };
     const action = clusterWriteToAction(write, id);
-    expect(action).not.toBeNull();
-    if (action?.name === "custom") {
+    if (action.name === "custom") {
       expect(action.key).toBe("stop-media");
     } else {
       expect.fail("expected a custom action frame");
     }
   });
 
-  it("returns null for the auto-reset `off` write (no action, like built-in momentaries)", () => {
+  it("dispatches the custom action on the Off command too (S8-4, like built-in momentaries)", () => {
     const write: ClusterWrite = {
       endpoint: "custom",
       key: "movie-mode",
       cluster: "onOff",
       on: false,
     };
-    expect(clusterWriteToAction(write, id)).toBeNull();
+    expect(clusterWriteToAction(write, id)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "action",
+      id,
+      name: "custom",
+      key: "movie-mode",
+    });
   });
 });
 
@@ -215,7 +230,6 @@ describe("clusterWriteToAction — id passthrough", () => {
     const otherId = "00000000-0000-4000-8000-000000000000";
     const write: ClusterWrite = { endpoint: "power", cluster: "onOff", on: true };
     const action = clusterWriteToAction(write, otherId);
-    expect(action).not.toBeNull();
-    expect(action?.id).toBe(otherId);
+    expect(action.id).toBe(otherId);
   });
 });

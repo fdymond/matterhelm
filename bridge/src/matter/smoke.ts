@@ -18,7 +18,17 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { ClusterWrite } from "../mapping/actions.js";
 
-import { DEFAULT_MOMENTARY_RESET_MS, createBridge } from "./bridge.js";
+import { createBridge } from "./bridge.js";
+
+/**
+ * Explicit reset window for this script (not the product default of 0):
+ * long enough that both back-to-back On commands land while the attribute
+ * still reads `on` — the exact state the pre-ADR-008 wiring dropped — and
+ * that the reset transaction never overlaps the second synchronous local
+ * `act` (a harness artifact; real controller commands queue on the lock
+ * through matter.js's async interaction path).
+ */
+const SMOKE_RESET_MS = 400;
 
 const out = (line: string): void => {
   process.stdout.write(`${line}\n`);
@@ -37,6 +47,7 @@ const writes: ClusterWrite[] = [];
 const bridge = await createBridge({
   storageDir,
   port: 5543,
+  momentaryResetMs: SMOKE_RESET_MS,
   endpoints: {
     speaker: { name: "HTPC Speaker", enabled: true },
     playPause: { name: "HTPC Play Pause", enabled: true },
@@ -93,7 +104,7 @@ try {
   // The reset window then returns the attribute to off exactly once, and that
   // write invokes no command, so it cannot dispatch as a press.
   const beforeReset = writes.length;
-  await delay(DEFAULT_MOMENTARY_RESET_MS + 250);
+  await delay(SMOKE_RESET_MS + 250);
   ok(
     writes.length === beforeReset,
     `the auto-reset write emitted no further ClusterWrite — saw ${String(writes.length - beforeReset)}`,

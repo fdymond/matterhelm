@@ -30,11 +30,11 @@
  * commits between our read and our write can pair with the wrong queue entry
  * when it carries the identical value — the suppressed event is then the
  * remote one, which is harmless (the state it reports is exactly what the
- * tray app already has). Momentary resets are deliberately NOT suppressed:
- * their `false` change event flows to `onClusterWrite`, and
- * `mapping/actions.ts` maps it to `null` (no action) by design. The reset
- * write is a direct attribute write, invokes no command, and so cannot echo
- * back as a plug dispatch either (ADR-008).
+ * tray app already has). Momentary resets need no suppression at all: the
+ * reset is a direct attribute write, invokes no command, and so never reaches
+ * the command observer (ADR-008) — which is what makes it safe for
+ * `mapping/actions.ts` to treat EVERY controller command on a momentary
+ * endpoint, Off included, as a press (S8-4).
  *
  * Momentary auto-reset (§2.2, custom plugs included per ADR-004): a
  * momentary endpoint's On command schedules a write of `off`

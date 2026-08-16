@@ -229,7 +229,7 @@ describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
     },
   );
 
-  it("passes a momentary Off command through (mapping/actions.ts drops it)", () => {
+  it("passes a momentary Off command through (mapping/actions.ts dispatches it as a press, S8-4)", () => {
     expect(
       endpointEventToClusterWrite({ kind: "plugCommand", key: "playPause", on: false }),
     ).toEqual({ endpoint: "playPause", cluster: "onOff", on: false });
@@ -254,7 +254,7 @@ describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
     ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true });
   });
 
-  it("passes a custom plug's Off command through (mapping/actions.ts drops it)", () => {
+  it("passes a custom plug's Off command through (mapping/actions.ts dispatches it as a press, S8-4)", () => {
     expect(
       endpointEventToClusterWrite({ kind: "customCommand", customKey: "movie-mode", on: false }),
     ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: false });
@@ -308,7 +308,8 @@ describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
     handle(true);
     handle(false);
     expect(window).toEqual(["noteOn", "noteOff"]);
-    // The Off write reaches mapping/actions.ts, which drops it (no action).
+    // The Off command reaches mapping/actions.ts, which dispatches it as a
+    // press too (S8-4) — Google's toggle tile can send Off for a tap.
     expect(writes).toEqual([
       { endpoint: "playPause", cluster: "onOff", on: true },
       { endpoint: "playPause", cluster: "onOff", on: false },

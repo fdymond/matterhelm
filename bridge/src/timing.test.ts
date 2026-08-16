@@ -207,12 +207,15 @@ describe("makeActionDispatcher — {evt:'action.timing'} per cluster write", () 
     expect(events).toHaveLength(1);
   });
 
-  it("stays silent for a momentary auto-reset echo (null action)", () => {
+  it("dispatches a momentary Off command like any other write (S8-4: total mapping)", () => {
+    // The auto-reset never reaches the dispatcher (ADR-008: it's a local
+    // attribute write, not a command), so an Off here is a controller tap
+    // and must be sent, timed, and noted like an On.
     const { dispatch, sent, events, timings } = makeHarness();
     dispatch({ endpoint: "playPause", cluster: "onOff", on: false });
-    expect(sent).toEqual([]);
-    expect(events).toEqual([]);
-    expect(timings.size).toBe(0);
+    expect(sent).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(timings.size).toBe(1);
   });
 });
 

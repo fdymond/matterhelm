@@ -114,11 +114,15 @@ One **Aggregator (bridge)** node exposing:
 | `HTPC Previous` | On/Off Plug-in Unit (momentary) | OnOff | previous track |
 | `HTPC Power` | On/Off Plug-in Unit (stateful) | OnOff | configurable: pause + display off / sleep |
 
-Trigger semantics (amended by ADR-008): every plug endpoint above dispatches
-its action from the **OnOff command** it receives (`On`/`Off`/`Toggle`), not
-from the attribute change that command produces — Matter's `onOff` attribute is
-read-only, so commands are the complete observation point, and matter.js emits
-no change event for a command re-writing the value already held. A momentary
+Trigger semantics (amended by ADR-008/S8-4): every plug endpoint above
+dispatches its action from the **OnOff command** it receives
+(`On`/`Off`/`Toggle`), not from the attribute change that command produces —
+Matter's `onOff` attribute is read-only, so commands are the complete
+observation point, and matter.js emits no change event for a command
+re-writing the value already held. Momentary endpoints are stateless, so BOTH
+commands dispatch the same press (S8-4: Google's toggle tile sends `Off` when
+its state model lags the auto-reset — dropping it made every other tap dead);
+only the stateful `power` endpoint gives `On`/`Off` distinct meanings. A momentary
 endpoint additionally auto-resets to `off` after a configurable window
 (configurable since S7-1, env `HTPC_BRIDGE_MOMENTARY_RESET_MS`; default 0 =
 next-tick reset since S8-2) so voice, app taps, and routines *present* as one
