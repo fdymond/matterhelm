@@ -119,10 +119,11 @@ its action from the **OnOff command** it receives (`On`/`Off`/`Toggle`), not
 from the attribute change that command produces — Matter's `onOff` attribute is
 read-only, so commands are the complete observation point, and matter.js emits
 no change event for a command re-writing the value already held. A momentary
-endpoint additionally auto-resets to `off` after a configurable window (default
-300 ms since S7-1; env `HTPC_BRIDGE_MOMENTARY_RESET_MS`) so voice, app taps,
-and routines *present* as one button press; since ADR-008 that window is
-presentation only — repeated commands dispatch whether or not it has elapsed.
+endpoint additionally auto-resets to `off` after a configurable window
+(configurable since S7-1, env `HTPC_BRIDGE_MOMENTARY_RESET_MS`; default 0 =
+next-tick reset since S8-2) so voice, app taps, and routines *present* as one
+button press; since ADR-008 that window is presentation only — repeated
+commands dispatch whether or not it has elapsed.
 A true Matter "tap button" (Generic Switch) exists but Google grants it
 routine-trigger grammar only — no direct voice target — so the momentary plug
 remains the default (research 2026-08).
@@ -145,7 +146,7 @@ implement the same names):
 | `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
 | `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
-| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 0–2000 (0 = next-tick reset, S8-2); invalid = fatal (S7-1) | `300` |
+| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 0–2000 (0 = next-tick reset, S8-2); invalid = fatal (S7-1) | `0` |
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
 | `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed = fatal | unset |
 

@@ -35,7 +35,7 @@ describe("parseConfig", () => {
         power: { name: "HTPC Power", enabled: true },
         custom: [],
       },
-      momentaryResetMs: 300,
+      momentaryResetMs: 0,
     });
     expect(config.mdnsInterface).toBeUndefined();
     expect(config.matterPort).toBeUndefined();
@@ -430,14 +430,12 @@ describe("parseConfig", () => {
   });
 
   describe("HTPC_BRIDGE_MOMENTARY_RESET_MS (S7-1)", () => {
-    it("defaults to 300 ms when unset (must match the tray app's default)", () => {
-      expect(parseConfig(baseEnv()).momentaryResetMs).toBe(300);
+    it("defaults to 0 ms — immediate reset, S8-2 (must match the tray app's default)", () => {
+      expect(parseConfig(baseEnv()).momentaryResetMs).toBe(0);
     });
 
     it("treats an empty string like unset", () => {
-      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "" })).momentaryResetMs).toBe(
-        300,
-      );
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "" })).momentaryResetMs).toBe(0);
     });
 
     it("accepts the range boundaries 0 and 2000 (0 = immediate reset, S8-2)", () => {

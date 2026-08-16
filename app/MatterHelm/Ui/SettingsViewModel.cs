@@ -479,10 +479,10 @@ public sealed class SettingsViewModel
                 },
                 new SettingDescriptor
                 {
-                    // S7-1: config-driven momentary auto-reset (default 300,
-                    // range shared with the bridge's env validation; 0 =
+                    // S7-1: config-driven momentary auto-reset (default 0 =
                     // immediate per S8-2, safe since ADR-008 dispatches on
-                    // the command rather than the state change).
+                    // the command rather than the state change; range shared
+                    // with the bridge's env validation).
                     Id = "momentary-reset-ms",
                     Label = "Tap reset delay (ms)",
                     Description = "How quickly a tapped command's switch snaps back to off in Google Home. 0 = immediately.",
