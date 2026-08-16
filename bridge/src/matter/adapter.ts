@@ -26,11 +26,15 @@ import {
   LogDestination,
   LogFormat,
   Logger,
+  MaybePromise,
   ServerNode,
   VendorId,
 } from "@matter/main";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
-import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
+import {
+  OnOffPlugInUnitDevice,
+  OnOffPlugInUnitRequirements,
+} from "@matter/main/devices/on-off-plug-in-unit";
 import { SpeakerDevice } from "@matter/main/devices/speaker";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 
@@ -95,8 +99,61 @@ export interface MatterNodeOptions {
   matterLogFacilities?: Readonly<Record<string, MatterLogLevel>>;
 }
 
+/**
+ * OnOff **command** observers for plug endpoints, keyed by Matter endpoint id
+ * (ADR-008). Module-global because matter.js constructs behaviors itself —
+ * {@link CommandObservingOnOffServer} has no other channel back to the code
+ * that created the endpoint. Safe for the same reason the environment claim
+ * above is: this adapter supports exactly ONE {@link MatterNode} per process,
+ * and endpoint ids are unique within its aggregator. Cleared by
+ * {@link MatterNode.close}.
+ */
+const plugCommandObservers = new Map<string, (on: boolean) => void>();
+
+/**
+ * The plug's OnOff server, extended so every On/Off **command invocation** is
+ * observable — not just the attribute changes it produces (ADR-008).
+ *
+ * Why commands: Matter's `onOff` attribute is read-only, so a controller can
+ * only change it by invoking `On`/`Off`/`Toggle`, and matter.js emits NO
+ * `$Changed` event when a command writes the value the attribute already
+ * holds. Observing changes therefore dropped repeated identical commands
+ * ("turn on HTPC Next" twice inside the reset window); observing commands
+ * cannot. `toggle`, `offWithEffect`, `onWithRecallGlobalScene` and
+ * `onWithTimedOff` all delegate to `on()`/`off()` in matter.js's default
+ * implementation, so these two overrides cover every OnOff command form.
+ *
+ * Extends the device type's own feature-specialized server (`Lighting`, via
+ * {@link OnOffPlugInUnitRequirements}) rather than the bare `OnOffServer`, so
+ * cluster features and conformance are byte-identical to the default plug.
+ *
+ * The observer runs AFTER the base implementation has applied the state
+ * change, and — because the base implementation is synchronous — synchronously
+ * inside matter.js's command transaction: it must not write matter.js state
+ * (scheduling a timer or emitting plain data is fine). Local writes made
+ * through {@link PlugHandle.setOnOff} bypass the cluster commands entirely, so
+ * the bridge's own momentary resets never reach an observer — no echo
+ * suppression is needed on this path.
+ */
+class CommandObservingOnOffServer extends OnOffPlugInUnitRequirements.OnOffServer {
+  override on(): MaybePromise {
+    return MaybePromise.then(super.on(), () => {
+      plugCommandObservers.get(this.endpoint.id)?.(true);
+    });
+  }
+
+  override off(): MaybePromise {
+    return MaybePromise.then(super.off(), () => {
+      plugCommandObservers.get(this.endpoint.id)?.(false);
+    });
+  }
+}
+
 const SpeakerEndpointType = SpeakerDevice.with(BridgedDeviceBasicInformationServer);
-const PlugEndpointType = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer);
+const PlugEndpointType = OnOffPlugInUnitDevice.with(
+  BridgedDeviceBasicInformationServer,
+  CommandObservingOnOffServer,
+);
 
 /**
  * Guard for the process-global `Environment.default` mutation — see module
@@ -217,6 +274,10 @@ export class SpeakerHandle {
  * Opaque handle for an On/Off Plug-in Unit endpoint (momentary transport
  * buttons and the stateful power switch — BLUEPRINT §2.2). Constructed only
  * by {@link MatterNode.addPlug}.
+ *
+ * Reads and local writes only: controller activity on a plug arrives through
+ * the command observer passed to {@link MatterNode.addPlug}, not through an
+ * attribute subscription (ADR-008).
  */
 export class PlugHandle {
   readonly #endpoint: Endpoint<typeof PlugEndpointType>;
@@ -230,15 +291,26 @@ export class PlugHandle {
     return this.#endpoint.state.onOff.onOff;
   }
 
-  /** Writing the current value is a no-op (matter.js emits no event). */
+  /**
+   * Writes the attribute directly (the momentary auto-reset). Writing the
+   * current value is a no-op, and this path invokes no cluster command, so it
+   * never reaches a command observer.
+   */
   async setOnOff(on: boolean): Promise<void> {
     await this.#endpoint.set({ onOff: { onOff: on } });
   }
 
-  /** Fires on every OnOff change — remote (controller) AND local writes. */
-  onOnOffChanged(cb: (on: boolean) => void): void {
-    this.#endpoint.events.onOff.onOff$Changed.on((value) => {
-      cb(value);
+  /**
+   * Invokes the endpoint's OnOff **command** locally, exactly as a controller
+   * would — including the {@link CommandObservingOnOffServer} override, so the
+   * command observer fires. Product code never calls this: it exists so the
+   * boot smoke script can exercise the ADR-008 dispatch path against a live
+   * matter.js node without a Matter controller.
+   */
+  async invokeOnOff(on: boolean): Promise<void> {
+    await this.#endpoint.act(async (agent) => {
+      const onOff = agent.get(CommandObservingOnOffServer);
+      await (on ? onOff.on() : onOff.off());
     });
   }
 }
@@ -338,12 +410,23 @@ export class MatterNode {
     return new SpeakerHandle(endpoint);
   }
 
-  /** Adds an On/Off Plug-in Unit endpoint to the aggregator. */
-  async addPlug(info: BridgedDeviceInfo): Promise<PlugHandle> {
+  /**
+   * Adds an On/Off Plug-in Unit endpoint to the aggregator.
+   *
+   * `onCommand` is invoked for every OnOff **command** the endpoint receives
+   * (`true` for On, `false` for Off) — see {@link CommandObservingOnOffServer}
+   * for why commands rather than attribute changes, and for the callback's
+   * synchronous-in-transaction contract. Registered before the endpoint joins
+   * the aggregator so no command can slip past it.
+   */
+  async addPlug(info: BridgedDeviceInfo, onCommand?: (on: boolean) => void): Promise<PlugHandle> {
     const endpoint = new Endpoint(PlugEndpointType, {
       id: info.id,
       bridgedDeviceBasicInformation: bridgedBasicInformation(info),
     });
+    if (onCommand !== undefined) {
+      plugCommandObservers.set(info.id, onCommand);
+    }
     await this.#aggregator.add(endpoint);
     return new PlugHandle(endpoint);
   }
@@ -369,6 +452,7 @@ export class MatterNode {
     try {
       await this.#server.close();
     } finally {
+      plugCommandObservers.clear();
       environmentClaimed = false;
     }
   }

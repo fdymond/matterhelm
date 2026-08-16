@@ -10,7 +10,20 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- Repeated identical commands are no longer dropped. Plug endpoints (the
+  transport buttons, every custom command, and the power switch) now dispatch
+  from the Matter **OnOff command** instead of the attribute change it caused,
+  so "turn on HTPC Next" twice in a row skips twice and "turn off HTPC Power"
+  fires even when the tile already reads off (ADR-008, S8-1). No protocol,
+  identity or pairing change.
+
+### Changed
+
+- The momentary auto-reset window (default 300 ms) is now presentation only —
+  it returns the Home app tile to `off` after a press but no longer gates
+  dispatch. One subscription report per press instead of two.
 
 ## [0.1.0] — 2026-08-09
 

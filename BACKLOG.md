@@ -84,6 +84,12 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S7-2 ✅ | Rename product to MatterHelm (namespaces/dirs/mutex/meter/docs/CI) + atomic %APPDATA% migration preserving Matter fabric | Identity test files zero-diff; real migration performed at merge (log line verified, fabric present, old root gone) | M | S7-1 | impl (Fable) |
 | S7-3 ✅ (repo renamed to `matterhelm`; npm audit highs fixed; release workflow validates at first v* tag) | OSS-grade project setup: repo → `matterhelm` (private, history kept), LICENSE, CONTRIBUTING, SECURITY, CoC, issue/PR templates, release workflow (changelog+semver tags), branch/PR conventions | Files in place; release workflow dry-run green | M | S7-2 | impl (Sonnet) + integrator |
 
+## Sprint 8 — trigger mechanics (owner-directed)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S8-1 ✅ | Dispatch plug actions from OnOff **commands** (`OnOffServer.on()/off()` override) instead of attribute-change events: repeated identical commands stop being dropped, the momentary reset becomes cosmetic, one subscription report per press instead of two. Speaker (mute/volume) deliberately unchanged. ADR-008 | Repeat-command tests green; live-node smoke proves two dispatches from two `on` commands with no intervening `off`; no protocol change | M | — | impl (Fable) |
+
 ## Proposed (from agent reports, integrator-triaged)
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the

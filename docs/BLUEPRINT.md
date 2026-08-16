@@ -114,12 +114,18 @@ One **Aggregator (bridge)** node exposing:
 | `HTPC Previous` | On/Off Plug-in Unit (momentary) | OnOff | previous track |
 | `HTPC Power` | On/Off Plug-in Unit (stateful) | OnOff | configurable: pause + display off / sleep |
 
-Momentary semantics: an `on` write dispatches the action, then auto-resets to
-`off` after a configurable window (default 300 ms since S7-1; env
-`HTPC_BRIDGE_MOMENTARY_RESET_MS`) so voice, app taps, and routines behave as
-one button press. A true Matter "tap button" (Generic Switch) exists but
-Google grants it routine-trigger grammar only — no direct voice target — so
-the momentary plug remains the default (research 2026-08).
+Trigger semantics (amended by ADR-008): every plug endpoint above dispatches
+its action from the **OnOff command** it receives (`On`/`Off`/`Toggle`), not
+from the attribute change that command produces — Matter's `onOff` attribute is
+read-only, so commands are the complete observation point, and matter.js emits
+no change event for a command re-writing the value already held. A momentary
+endpoint additionally auto-resets to `off` after a configurable window (default
+300 ms since S7-1; env `HTPC_BRIDGE_MOMENTARY_RESET_MS`) so voice, app taps,
+and routines *present* as one button press; since ADR-008 that window is
+presentation only — repeated commands dispatch whether or not it has elapsed.
+A true Matter "tap button" (Generic Switch) exists but Google grants it
+routine-trigger grammar only — no direct voice target — so the momentary plug
+remains the default (research 2026-08).
 Endpoint names are user-configurable — they are the Google voice targets.
 
 ### 2.3 IPC protocol (localhost WebSocket, default port 39531)

@@ -1,17 +1,22 @@
 /**
  * Specification tests for matter/bridge.ts's controller-free units: echo
  * suppression, momentary reset scheduling (fake timers, per
- * docs/ENGINEERING-STANDARDS.md), and endpoint-event -> ClusterWrite
- * translation. Paths needing a live matter.js node are covered by the boot
- * smoke script (src/matter/smoke.ts), not by brittle mocks.
+ * docs/ENGINEERING-STANDARDS.md), plug command handling (ADR-008), and
+ * endpoint-event -> ClusterWrite translation. Paths needing a live matter.js
+ * node are covered by the boot smoke script (src/matter/smoke.ts), not by
+ * brittle mocks.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ClusterWrite } from "../mapping/actions.js";
 
 import {
   DEFAULT_MOMENTARY_RESET_MS,
   EchoSuppressor,
   MomentaryResetScheduler,
   endpointEventToClusterWrite,
+  makePlugCommandHandler,
+  type EndpointEvent,
   type MomentaryEndpointKey,
 } from "./bridge.js";
 
@@ -176,7 +181,7 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
 
 describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
   it("maps a speaker OnOff change to a speaker onOff write", () => {
-    expect(endpointEventToClusterWrite({ key: "speaker", attribute: "onOff", on: true })).toEqual({
+    expect(endpointEventToClusterWrite({ kind: "speakerOnOff", on: true })).toEqual({
       endpoint: "speaker",
       cluster: "onOff",
       on: true,
@@ -184,21 +189,21 @@ describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
   });
 
   it("maps a speaker level change to a levelControl write", () => {
-    expect(endpointEventToClusterWrite({ key: "speaker", attribute: "level", level: 127 })).toEqual(
-      { endpoint: "speaker", cluster: "levelControl", level: 127 },
-    );
+    expect(endpointEventToClusterWrite({ kind: "speakerLevel", level: 127 })).toEqual({
+      endpoint: "speaker",
+      cluster: "levelControl",
+      level: 127,
+    });
   });
 
   it("maps a null level (matter.js 'no level set') to no write", () => {
-    expect(endpointEventToClusterWrite({ key: "speaker", attribute: "level", level: null })).toBe(
-      null,
-    );
+    expect(endpointEventToClusterWrite({ kind: "speakerLevel", level: null })).toBe(null);
   });
 
   it.each(["playPause", "next", "previous"] as const)(
-    "maps a %s on write to its momentary onOff write",
+    "maps a %s On command to its momentary onOff write",
     (key) => {
-      expect(endpointEventToClusterWrite({ key, attribute: "onOff", on: true })).toEqual({
+      expect(endpointEventToClusterWrite({ kind: "plugCommand", key, on: true })).toEqual({
         endpoint: key,
         cluster: "onOff",
         on: true,
@@ -206,44 +211,126 @@ describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
     },
   );
 
-  it("passes a momentary off write through (mapping/actions.ts drops it)", () => {
+  it("passes a momentary Off command through (mapping/actions.ts drops it)", () => {
     expect(
-      endpointEventToClusterWrite({ key: "playPause", attribute: "onOff", on: false }),
+      endpointEventToClusterWrite({ kind: "plugCommand", key: "playPause", on: false }),
     ).toEqual({ endpoint: "playPause", cluster: "onOff", on: false });
   });
 
-  it("maps power OnOff changes to the stateful power endpoint's writes", () => {
-    expect(endpointEventToClusterWrite({ key: "power", attribute: "onOff", on: true })).toEqual({
+  it("maps power OnOff commands to the stateful power endpoint's writes", () => {
+    expect(endpointEventToClusterWrite({ kind: "plugCommand", key: "power", on: true })).toEqual({
       endpoint: "power",
       cluster: "onOff",
       on: true,
     });
-    expect(endpointEventToClusterWrite({ key: "power", attribute: "onOff", on: false })).toEqual({
+    expect(endpointEventToClusterWrite({ kind: "plugCommand", key: "power", on: false })).toEqual({
       endpoint: "power",
       cluster: "onOff",
       on: false,
     });
   });
 
-  it("maps a custom plug's on write to a custom write carrying its key (ADR-004)", () => {
+  it("maps a custom plug's On command to a custom write carrying its key (ADR-004)", () => {
     expect(
-      endpointEventToClusterWrite({
-        key: "custom",
-        customKey: "movie-mode",
-        attribute: "onOff",
-        on: true,
-      }),
+      endpointEventToClusterWrite({ kind: "customCommand", customKey: "movie-mode", on: true }),
     ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true });
   });
 
-  it("passes a custom plug's off write through (mapping/actions.ts drops it)", () => {
+  it("passes a custom plug's Off command through (mapping/actions.ts drops it)", () => {
     expect(
-      endpointEventToClusterWrite({
-        key: "custom",
-        customKey: "movie-mode",
-        attribute: "onOff",
-        on: false,
-      }),
+      endpointEventToClusterWrite({ kind: "customCommand", customKey: "movie-mode", on: false }),
     ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: false });
+  });
+});
+
+describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
+  function makeMomentary(key: "playPause" | "next" | "previous" = "next"): {
+    handle: (on: boolean) => void;
+    writes: (ClusterWrite | null)[];
+    window: string[];
+  } {
+    const writes: (ClusterWrite | null)[] = [];
+    const window: string[] = [];
+    const handle = makePlugCommandHandler(
+      (on): EndpointEvent => ({ kind: "plugCommand", key, on }),
+      (event) => {
+        writes.push(endpointEventToClusterWrite(event));
+      },
+      {
+        noteOn: () => window.push("noteOn"),
+        noteOff: () => window.push("noteOff"),
+      },
+    );
+    return { handle, writes, window };
+  }
+
+  it("dispatches EVERY repeated On command — the defect ADR-008 fixes", () => {
+    const { handle, writes } = makeMomentary();
+    handle(true);
+    handle(true);
+    handle(true);
+    // Pre-ADR-008 the 2nd and 3rd were invisible: the attribute was already
+    // `true`, so matter.js emitted no change event and no action was sent.
+    expect(writes).toEqual([
+      { endpoint: "next", cluster: "onOff", on: true },
+      { endpoint: "next", cluster: "onOff", on: true },
+      { endpoint: "next", cluster: "onOff", on: true },
+    ]);
+  });
+
+  it("re-arms the reset window on every On command (last press wins)", () => {
+    const { handle, window } = makeMomentary();
+    handle(true);
+    handle(true);
+    expect(window).toEqual(["noteOn", "noteOn"]);
+  });
+
+  it("cancels the pending reset on an Off command and dispatches no action", () => {
+    const { handle, writes, window } = makeMomentary("playPause");
+    handle(true);
+    handle(false);
+    expect(window).toEqual(["noteOn", "noteOff"]);
+    // The Off write reaches mapping/actions.ts, which drops it (no action).
+    expect(writes).toEqual([
+      { endpoint: "playPause", cluster: "onOff", on: true },
+      { endpoint: "playPause", cluster: "onOff", on: false },
+    ]);
+  });
+
+  it("dispatches a custom plug's repeated On commands exactly like a built-in", () => {
+    const writes: (ClusterWrite | null)[] = [];
+    const window: string[] = [];
+    const handle = makePlugCommandHandler(
+      (on): EndpointEvent => ({ kind: "customCommand", customKey: "movie-mode", on }),
+      (event) => {
+        writes.push(endpointEventToClusterWrite(event));
+      },
+      { noteOn: () => window.push("noteOn"), noteOff: () => window.push("noteOff") },
+    );
+    handle(true);
+    handle(true);
+    expect(writes).toEqual([
+      { endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true },
+      { endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true },
+    ]);
+    expect(window).toEqual(["noteOn", "noteOn"]);
+  });
+
+  it("dispatches a repeated Off command on the stateful power plug (no reset window)", () => {
+    const writes: (ClusterWrite | null)[] = [];
+    const handle = makePlugCommandHandler(
+      (on): EndpointEvent => ({ kind: "plugCommand", key: "power", on }),
+      (event) => {
+        writes.push(endpointEventToClusterWrite(event));
+      },
+    );
+    handle(false);
+    handle(false);
+    // "Hey Google, turn off HTPC Power" when it already reads off used to do
+    // nothing at all; both invocations now reach the executor.
+    expect(writes).toEqual([
+      { endpoint: "power", cluster: "onOff", on: false },
+      { endpoint: "power", cluster: "onOff", on: false },
+    ]);
   });
 });
