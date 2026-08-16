@@ -18,7 +18,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { ClusterWrite } from "../mapping/actions.js";
 
-import { createBridge } from "./bridge.js";
+import { DEFAULT_MOMENTARY_RESET_MS, createBridge } from "./bridge.js";
 
 const out = (line: string): void => {
   process.stdout.write(`${line}\n`);
@@ -77,6 +77,36 @@ try {
   ok(
     writes.length === 0,
     `local writes emitted no ClusterWrite (echo suppression) — saw ${String(writes.length)}`,
+  );
+
+  // ADR-008: two On commands with no intervening Off must dispatch TWICE.
+  // Pre-ADR-008 (attribute-change wiring) the second one was invisible —
+  // matter.js emits no $Changed for a command writing the value already held.
+  await bridge.invokePlugOnOff("playpause", true);
+  await bridge.invokePlugOnOff("playpause", true);
+  await delay(250);
+  const playPauseOns = writes.filter((write) => write.endpoint === "playPause" && write.on);
+  ok(
+    playPauseOns.length === 2,
+    `two On commands with no intervening Off dispatched twice — saw ${String(playPauseOns.length)}`,
+  );
+  // The reset window then returns the attribute to off exactly once, and that
+  // write invokes no command, so it cannot dispatch as a press.
+  const beforeReset = writes.length;
+  await delay(DEFAULT_MOMENTARY_RESET_MS + 250);
+  ok(
+    writes.length === beforeReset,
+    `the auto-reset write emitted no further ClusterWrite — saw ${String(writes.length - beforeReset)}`,
+  );
+
+  // A repeated Off command on the stateful power plug also dispatches twice.
+  await bridge.invokePlugOnOff("power", false);
+  await bridge.invokePlugOnOff("power", false);
+  await delay(250);
+  const powerOffs = writes.filter((write) => write.endpoint === "power" && !write.on);
+  ok(
+    powerOffs.length === 2,
+    `two Off commands on the already-off power plug dispatched twice — saw ${String(powerOffs.length)}`,
   );
 } finally {
   await bridge.close();

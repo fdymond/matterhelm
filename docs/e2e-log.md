@@ -60,6 +60,22 @@ last one.
 | App tile: tap HTPC Power off | Same power-off behavior | | | |
 | Voice: "Hey Google, turn on HTPC Power" (if power-on is configured/expected) | Displays wake | | | |
 
+## Repeat commands (ADR-008 command interception)
+
+Pre-ADR-008 a repeated identical command was silently dropped (the attribute
+was already at the target value, so matter.js emitted no change event and no
+action was sent). The bridge now dispatches from the OnOff command itself —
+proven against a live node in `src/matter/smoke.ts`. What only hardware can
+settle is the ADR-008 **Watch** item: whether Google's Home client bothers to
+*send* the redundant command.
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Voice: "Hey Google, turn on HTPC Next" twice in a row, the second within ~1 s of the first (inside the 300 ms reset window and just after it) | Track skips **twice**. If only the first skips, note whether the Home app tile flickered on the second — that distinguishes "Google didn't send it" from a bridge-side drop | | | |
+| App tile: tap HTPC Play Pause twice in rapid succession | Media toggles twice (pause then play) | | | |
+| Voice: "Hey Google, turn off HTPC Power" when the tile already reads off | The configured power-off behavior fires again (pre-ADR-008 this did nothing) | | | |
+| Voice: repeat a custom **key sequence** command twice in a row | The chord is sent twice | | | |
+
 ## Custom command
 
 | Step | Expected | Observed | Verdict | Timestamp (UTC) |

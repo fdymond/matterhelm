@@ -6,7 +6,18 @@
  * surface (`createBridge`, `BridgeOptions`, `BridgeHandle`) is plain data —
  * matter.js stays behind ./adapter.js, the only module importing `@matter/*`.
  *
- * Echo suppression (local-write loop): matter.js fires `$Changed` for local
+ * Trigger source (ADR-008): plug endpoints — the momentary transport buttons,
+ * every custom command, and the stateful power switch — dispatch from the
+ * OnOff **command** matter.js received, not from the attribute change it
+ * produced. Matter's `onOff` attribute is read-only, so every controller
+ * change arrives as a command, while matter.js emits no change event for a
+ * command that writes the value already held: observing changes silently
+ * dropped repeated identical commands ("turn on HTPC Next" twice inside the
+ * reset window, "turn off HTPC Power" when it already reads off). The Speaker
+ * endpoint keeps attribute observation — its state is written locally by the
+ * tray app and read back, which is what echo suppression below exists for.
+ *
+ * Echo suppression (local-write loop, Speaker only): matter.js fires `$Changed` for local
  * attribute writes exactly like remote ones, so applying tray-app state via
  * {@link BridgeHandle.setSpeakerState} would echo straight back out as a
  * `ClusterWrite`. Suppression is value-based and FIFO per attribute
@@ -21,15 +32,18 @@
  * remote one, which is harmless (the state it reports is exactly what the
  * tray app already has). Momentary resets are deliberately NOT suppressed:
  * their `false` change event flows to `onClusterWrite`, and
- * `mapping/actions.ts` maps it to `null` (no action) by design.
+ * `mapping/actions.ts` maps it to `null` (no action) by design. The reset
+ * write is a direct attribute write, invokes no command, and so cannot echo
+ * back as a plug dispatch either (ADR-008).
  *
  * Momentary auto-reset (§2.2, custom plugs included per ADR-004): a
- * momentary endpoint's `on` write schedules a write of `off`
+ * momentary endpoint's On command schedules a write of `off`
  * {@link BridgeOptions.momentaryResetMs} (default
- * {@link DEFAULT_MOMENTARY_RESET_MS}) later, so voice, app taps, and
- * routines behave as one button press. A second `on` before the reset restarts the window
- * (last tap wins — matter.js emits no event for a value-unchanged write, so
- * consecutive `on` events imply an interleaved `off`); an `off` from the
+ * {@link DEFAULT_MOMENTARY_RESET_MS}) later, so voice, app taps, and routines
+ * present as one button press in the Home app. Since ADR-008 this window is
+ * **presentation only** — dispatch no longer depends on the attribute having
+ * been returned to `off` first. A second On command before the reset restarts
+ * the window (last press wins) and dispatches again; an Off command from the
  * controller cancels it. Timers are keyed by Matter endpoint id and cleared
  * on {@link BridgeHandle.close}.
  */
@@ -150,6 +164,13 @@ export interface BridgeHandle {
    * that is an internal bug, not an input.
    */
   resetMomentary(endpointId: string): Promise<void>;
+  /**
+   * Invokes a plug endpoint's OnOff **command** locally, exactly as a
+   * controller would (ADR-008). Product code never calls this — it exists so
+   * `smoke.ts` can prove command interception against a live node without a
+   * Matter controller. An id that names no plug throws.
+   */
+  invokePlugOnOff(endpointId: string, on: boolean): Promise<void>;
 }
 
 /**
@@ -233,40 +254,81 @@ export class MomentaryResetScheduler<K extends string = string> {
   }
 }
 
-/** A change event observed on one of our endpoints, as plain data. */
+/** The built-in roles carried by an On/Off Plug-in Unit endpoint. */
+export type PlugEndpointKey = Exclude<BuiltinEndpointKey, "speaker">;
+
+/**
+ * Something observed on one of our endpoints, as plain data. The `kind`
+ * discriminant also names the observation channel (ADR-008): the speaker is
+ * watched by attribute subscription, plugs by OnOff command invocation.
+ */
 export type EndpointEvent =
-  | { key: BuiltinEndpointKey; attribute: "onOff"; on: boolean }
-  | { key: "speaker"; attribute: "level"; level: number | null }
-  | { key: "custom"; customKey: string; attribute: "onOff"; on: boolean };
+  /** Speaker OnOff attribute change (mute); echo-suppressed for local writes. */
+  | { kind: "speakerOnOff"; on: boolean }
+  /** Speaker LevelControl change; `null` is matter.js's "no level set". */
+  | { kind: "speakerLevel"; level: number | null }
+  /** A built-in plug's OnOff command — `on` is the command, not a new state. */
+  | { kind: "plugCommand"; key: PlugEndpointKey; on: boolean }
+  /** A custom command plug's OnOff command (ADR-004). */
+  | { kind: "customCommand"; customKey: string; on: boolean };
 
 /**
  * Translates an observed endpoint event into the `ClusterWrite` descriptor
  * `mapping/actions.ts` consumes, or `null` for a LevelControl `null` level
  * (matter.js's "no level set" — nothing to tell the tray app).
+ *
+ * `ClusterWrite` keeps its pre-ADR-008 shape: what changed for plugs is where
+ * the observation comes from, not what the rest of the pipeline (and the IPC
+ * protocol behind it) sees.
  */
 export function endpointEventToClusterWrite(event: EndpointEvent): ClusterWrite | null {
-  if (event.attribute === "level") {
-    if (event.level === null) {
-      return null;
-    }
-    return { endpoint: "speaker", cluster: "levelControl", level: event.level };
-  }
-  switch (event.key) {
-    case "speaker": {
+  switch (event.kind) {
+    case "speakerOnOff": {
       return { endpoint: "speaker", cluster: "onOff", on: event.on };
     }
-    case "power": {
-      return { endpoint: "power", cluster: "onOff", on: event.on };
+    case "speakerLevel": {
+      if (event.level === null) {
+        return null;
+      }
+      return { endpoint: "speaker", cluster: "levelControl", level: event.level };
     }
-    case "playPause":
-    case "next":
-    case "previous": {
-      return { endpoint: event.key, cluster: "onOff", on: event.on };
+    case "plugCommand": {
+      // Split so each literal endpoint name matches its own ClusterWrite member.
+      return event.key === "power"
+        ? { endpoint: "power", cluster: "onOff", on: event.on }
+        : { endpoint: event.key, cluster: "onOff", on: event.on };
     }
-    case "custom": {
+    case "customCommand": {
       return { endpoint: "custom", key: event.customKey, cluster: "onOff", on: event.on };
     }
   }
+}
+
+/**
+ * Builds one plug endpoint's OnOff command handler: emit the event the
+ * command means, and — for a momentary endpoint — (re)arm or cancel its
+ * auto-reset window. `reset` is omitted for the stateful power plug, which
+ * has no window.
+ *
+ * Every invocation emits, including a repeat of the command the endpoint just
+ * received: that repetition is exactly what the pre-ADR-008 attribute-change
+ * wiring could not see.
+ */
+export function makePlugCommandHandler(
+  event: (on: boolean) => EndpointEvent,
+  emit: (event: EndpointEvent) => void,
+  reset?: { noteOn: () => void; noteOff: () => void },
+): (on: boolean) => void {
+  return (on) => {
+    if (reset !== undefined) {
+      if (on) {
+        reset.noteOn();
+      } else {
+        reset.noteOff();
+      }
+    }
+    emit(event(on));
+  };
 }
 
 /**
@@ -304,11 +366,13 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     }
   };
 
-  /** Momentary plugs by Matter endpoint id — the reset targets. */
-  const momentaryPlugs = new Map<string, PlugHandle>();
+  /** Every plug endpoint by Matter endpoint id. */
+  const plugs = new Map<string, PlugHandle>();
+  /** The subset that auto-resets — the reset targets. */
+  const momentaryIds = new Set<string>();
 
   const resetMomentary = async (endpointId: string): Promise<void> => {
-    const plug = momentaryPlugs.get(endpointId);
+    const plug = momentaryIds.has(endpointId) ? plugs.get(endpointId) : undefined;
     if (plug === undefined) {
       // Fail loud: only this module schedules resets, so an unknown id is a bug.
       throw new Error(
@@ -335,20 +399,15 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
   const constructed: ConstructedEndpoint[] = [];
   let speaker: SpeakerHandle | undefined;
 
-  const wireMomentary = (
-    plug: PlugHandle,
-    id: string,
-    event: (on: boolean) => EndpointEvent,
-  ): void => {
-    plug.onOnOffChanged((on) => {
-      if (on) {
-        scheduler.noteOn(id);
-      } else {
-        scheduler.noteOff(id);
-      }
-      emit(event(on));
-    });
-  };
+  /** The momentary endpoints' half of the command handler: their reset window. */
+  const resetWindowFor = (id: string): { noteOn: () => void; noteOff: () => void } => ({
+    noteOn: () => {
+      scheduler.noteOn(id);
+    },
+    noteOff: () => {
+      scheduler.noteOff(id);
+    },
+  });
 
   for (const spec of specs) {
     if (spec.role === "speaker") {
@@ -358,41 +417,60 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
         if (suppressor.check(SPEAKER_ONOFF, on)) {
           return;
         }
-        emit({ key: "speaker", attribute: "onOff", on });
+        emit({ kind: "speakerOnOff", on });
       });
       speakerHandle.onLevelChanged((level) => {
         if (level !== null && suppressor.check(SPEAKER_LEVEL, level)) {
           return;
         }
-        emit({ key: "speaker", attribute: "level", level });
+        emit({ kind: "speakerLevel", level });
       });
     } else {
-      const plug = await node.addPlug(spec.info);
+      const id = spec.info.id;
       switch (spec.role) {
         case "custom": {
           const customKey = spec.key;
-          momentaryPlugs.set(spec.info.id, plug);
-          wireMomentary(plug, spec.info.id, (on) => ({
-            key: "custom",
-            customKey,
-            attribute: "onOff",
-            on,
-          }));
+          plugs.set(
+            id,
+            await node.addPlug(
+              spec.info,
+              makePlugCommandHandler(
+                (on) => ({ kind: "customCommand", customKey, on }),
+                emit,
+                resetWindowFor(id),
+              ),
+            ),
+          );
+          momentaryIds.add(id);
           break;
         }
         case "playPause":
         case "next":
         case "previous": {
           const key = spec.role;
-          momentaryPlugs.set(spec.info.id, plug);
-          wireMomentary(plug, spec.info.id, (on) => ({ key, attribute: "onOff", on }));
+          plugs.set(
+            id,
+            await node.addPlug(
+              spec.info,
+              makePlugCommandHandler(
+                (on) => ({ kind: "plugCommand", key, on }),
+                emit,
+                resetWindowFor(id),
+              ),
+            ),
+          );
+          momentaryIds.add(id);
           break;
         }
         case "power": {
-          // The stateful power toggle: no reset window, every write dispatches.
-          plug.onOnOffChanged((on) => {
-            emit({ key: "power", attribute: "onOff", on });
-          });
+          // The stateful power toggle: no reset window, every command dispatches.
+          plugs.set(
+            id,
+            await node.addPlug(
+              spec.info,
+              makePlugCommandHandler((on) => ({ kind: "plugCommand", key: "power", on }), emit),
+            ),
+          );
           break;
         }
       }
@@ -447,5 +525,12 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
       await speaker.setState(patch);
     },
     resetMomentary,
+    invokePlugOnOff: async (endpointId, on): Promise<void> => {
+      const plug = plugs.get(endpointId);
+      if (plug === undefined) {
+        throw new Error(`invokePlugOnOff: no plug endpoint with id ${JSON.stringify(endpointId)}`);
+      }
+      await plug.invokeOnOff(on);
+    },
   };
 }
