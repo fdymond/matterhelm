@@ -69,12 +69,23 @@ proven against a live node in `src/matter/smoke.ts`. What only hardware can
 settle is the ADR-008 **Watch** item: whether Google's Home client bothers to
 *send* the redundant command.
 
+**Owner observation 2026-08-16 (real hardware, resolved the Watch item)**:
+with the reset at 0 ms, Google's tile state lagged the bridge — the tile
+stayed "on", so the next tap arrived as an `Off` command and did nothing;
+the user had to toggle off manually before the following tap fired
+(re-typing the device to "Switch" in the Home app changed the icon only).
+Fixed the same day by S8-4: momentary endpoints now dispatch on **both**
+OnOff commands, so any tap fires regardless of what state Google believes.
+The rows below re-verify tap-tap-tap behavior on the S8-4 build.
+
 | Step | Expected | Observed | Verdict | Timestamp (UTC) |
 |---|---|---|---|---|
 | Voice: "Hey Google, turn on HTPC Next" twice in a row, the second within ~1 s of the first (inside the 300 ms reset window and just after it) | Track skips **twice**. If only the first skips, note whether the Home app tile flickered on the second — that distinguishes "Google didn't send it" from a bridge-side drop | | | |
 | App tile: tap HTPC Play Pause twice in rapid succession | Media toggles twice (pause then play) | | | |
 | Voice: "Hey Google, turn off HTPC Power" when the tile already reads off | The configured power-off behavior fires again (pre-ADR-008 this did nothing) | | | |
 | Voice: repeat a custom **key sequence** command twice in a row | The chord is sent twice | | | |
+| App tile: tap HTPC Next three times in a row at natural speed (S8-4) | Track skips three times — every tap fires, whether the tile happened to show on or off when tapped | | | |
+| Voice: "Hey Google, turn **off** HTPC Next" (S8-4 semantics) | Next-track fires (any command on a stateless tap endpoint is a press) | | | |
 
 ## Custom command
 

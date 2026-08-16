@@ -23,13 +23,11 @@ import { PROTOCOL_VERSION, type ActionFrame } from "../ipc/protocol.js";
  * - `speaker` / `levelControl`: the Speaker endpoint's LevelControl
  *   `currentLevel` attribute, 0-254.
  * - `playPause` | `next` | `previous`: the momentary On/Off Plug-in Unit
- *   endpoints; `on` is the write's new OnOff value (the endpoint auto-resets
- *   to `off` 800ms later — that reset write also flows through here, see
- *   {@link clusterWriteToAction}).
+ *   endpoints; `on` is the OnOff COMMAND the controller invoked (ADR-008) —
+ *   the auto-reset is a local attribute write that never reaches this module.
  * - `power`: the stateful On/Off Plug-in Unit endpoint.
  * - `custom`: a user-defined command's momentary On/Off plug (ADR-004);
- *   `key` is the command's slug, and the auto-reset `off` echo maps to no
- *   action exactly like the built-in momentaries.
+ *   `key` is the command's slug.
  */
 export type ClusterWrite =
   | { endpoint: "speaker"; cluster: "onOff"; on: boolean }
@@ -70,17 +68,21 @@ export function onOffToMuted(on: boolean): boolean {
 
 /**
  * Converts one observed Matter cluster write into the `action` frame the
- * sidecar should send to the tray app, or `null` when the write is not a
- * user-initiated action.
+ * sidecar should send to the tray app.
  *
- * The only `null` case is a momentary switch's auto-reset `off` write —
- * built-in or custom (BLUEPRINT §2.2 / ADR-004: the endpoint resets itself
- * 800ms after `on` so voice/app taps/routines read as one button press) —
- * that echo must not be double-dispatched as an action.
+ * Momentary endpoints (built-in transport + custom) dispatch on BOTH the On
+ * and the Off command (S8-4, amending ADR-008): the endpoint is stateless, so
+ * any OnOff command a controller sends it is a button press. This matters on
+ * real hardware — Google Home's tile is a toggle driven by its own (often
+ * stale) state model, so a tap can arrive as `Off` when Google still believes
+ * the device is on; dropping it made every other tap dead. Safe since
+ * ADR-008: the auto-reset is a local attribute write that never reaches the
+ * command observer, so an `off` here is always controller-sent, never our own
+ * reset echo — which is why this function no longer has a `null` case.
  *
  * `id` is the frame's uuid, supplied by the caller (this function is pure).
  */
-export function clusterWriteToAction(write: ClusterWrite, id: string): ActionFrame | null {
+export function clusterWriteToAction(write: ClusterWrite, id: string): ActionFrame {
   const v = PROTOCOL_VERSION;
   switch (write.endpoint) {
     case "speaker": {
@@ -95,15 +97,9 @@ export function clusterWriteToAction(write: ClusterWrite, id: string): ActionFra
     case "playPause":
     case "next":
     case "previous": {
-      if (!write.on) {
-        return null;
-      }
       return { v, type: "action", id, name: write.endpoint };
     }
     case "custom": {
-      if (!write.on) {
-        return null;
-      }
       return { v, type: "action", id, name: "custom", key: write.key };
     }
   }

@@ -96,3 +96,28 @@ This amends BLUEPRINT §2.2's "Momentary semantics" paragraph.
   back-to-back identical voice phrases inside the window would still be lost —
   Google-side, not bridge-tunable. Only real hardware can decide this; rows are
   in `docs/e2e-log.md`.
+
+## Amendment 2026-08-16 (S8-4): momentary endpoints dispatch on Off too
+
+The watch item resolved on real hardware the same day, in a sharper form than
+predicted: the Home app's tile is a **toggle over Google's own state model**,
+and that model lags or ignores the bridge's instant auto-reset. With the tile
+stuck showing "on", the next tap arrives as an `Off` command — which the
+mapping dropped as a non-action, so every other tap was dead and the user had
+to toggle off manually before the next press worked (owner-reported;
+re-typing the device to "Switch" in the Home app changes the icon only, not
+the toggle semantics).
+
+Decision: a momentary endpoint is stateless, so **any** OnOff command a
+controller sends it is a button press — `mapping/actions.ts` now dispatches
+the momentary built-ins and custom commands on both `On` and `Off`
+(`clusterWriteToAction` became total; the stateful `power` endpoint keeps its
+distinct on/off meanings). This is only safe because of this ADR's core
+change: the auto-reset is a local attribute write that never reaches the
+command observer, so an observed `Off` is always controller-sent, never our
+own reset echo. Pre-ADR-008 this fix was impossible — the reset echo and the
+controller's Off were indistinguishable on the attribute-change path.
+
+Consequence: voice "turn **off** HTPC Next" now also presses next. That reads
+as intent (the phrase names the device) and is the price of taps that always
+fire; documented in the user guide.
