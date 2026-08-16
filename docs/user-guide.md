@@ -153,6 +153,12 @@ default is 0 — snap back immediately — and it's purely cosmetic either
 way, the command always fires. Raise it if you prefer seeing the tile
 light up briefly.
 
+Because these commands are stateless buttons, **any** on/off command fires
+them: tapping the tile always works no matter which state the Home app
+happens to display (Google's shown state can lag the bridge), and saying
+"turn **off** HTPC Next" presses it just like "turn on" would. Only HTPC
+Power keeps distinct on/off meanings.
+
 **Shown as a plug/outlet instead of a switch?** On the Matter wire these
 devices are On/Off Plug-in Units (the only certified type Google both
 voice-targets and lets a bridge control), so the Home app defaults their
@@ -201,6 +207,14 @@ click **Save** (closing the window with unsaved changes asks first).
       focus. Click into the sequence field and press the keys you want —
       the dialog captures them and shows the resulting chord text so you
       can confirm it before saving.
+    - **Command sequence (macro)** — runs several of the above in order
+      from one voice command or tile tap. Build the step list with **Add…**
+      (each step is a media key, launch, key sequence, or a **Wait** of
+      1–5000 ms for pacing between steps; up to 16 steps, waits summing to
+      at most 10 s), reorder with Up/Down, and double-click a step to edit
+      it. If a step fails, the macro stops there and the log names the
+      failing step. Example — "movie time": launch Kodi → wait 2000 ms →
+      `F11` for fullscreen.
   - Uncheck a command's box to keep it configured but stop publishing it to
     Google Home (its tile disappears from Home the next time the bridge
     restarts).
