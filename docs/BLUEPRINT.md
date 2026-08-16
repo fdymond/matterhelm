@@ -145,7 +145,7 @@ implement the same names):
 | `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
 | `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
-| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 100–2000; invalid = fatal (S7-1) | `300` |
+| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 0–2000 (0 = next-tick reset, S8-2); invalid = fatal (S7-1) | `300` |
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
 | `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed = fatal | unset |
 

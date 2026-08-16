@@ -440,9 +440,9 @@ describe("parseConfig", () => {
       );
     });
 
-    it("accepts the range boundaries 100 and 2000", () => {
-      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "100" })).momentaryResetMs).toBe(
-        100,
+    it("accepts the range boundaries 0 and 2000 (0 = immediate reset, S8-2)", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "0" })).momentaryResetMs).toBe(
+        0,
       );
       expect(
         parseConfig(baseEnv({ HTPC_BRIDGE_MOMENTARY_RESET_MS: "2000" })).momentaryResetMs,
@@ -450,7 +450,7 @@ describe("parseConfig", () => {
     });
 
     it.each([
-      ["below the minimum", "99"],
+      ["below the minimum", "-1"],
       ["above the maximum", "2001"],
       ["a non-integer", "300.5"],
       ["a non-numeric string", "fast"],

@@ -149,6 +149,20 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     expect(DEFAULT_MOMENTARY_RESET_MS).toBe(300);
   });
 
+  it("resets on the next tick when the delay is 0 (S8-2 immediate mode)", () => {
+    const resets: string[] = [];
+    const scheduler = new MomentaryResetScheduler(0, (endpoint: string) => {
+      resets.push(endpoint);
+    });
+    scheduler.noteOn("next");
+    // Never synchronously — the On command's handler runs inside the matter.js
+    // transaction, and the reset write must land after it commits.
+    expect(resets).toEqual([]);
+    vi.advanceTimersByTime(0);
+    expect(resets).toEqual(["next"]);
+    scheduler.clear();
+  });
+
   it("honors a configured (non-default) delay", () => {
     const resets: string[] = [];
     const scheduler = new MomentaryResetScheduler(1234, (endpoint: string) => {

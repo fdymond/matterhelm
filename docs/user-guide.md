@@ -147,7 +147,19 @@ options.
 The transport controls (Play Pause/Next/Previous) and Power show up as
 switches that flip briefly to "on" and snap back — that's expected (Google
 doesn't currently expose a plain "button" concept for locally-paired
-devices with a direct voice target), it isn't a bug.
+devices with a direct voice target), it isn't a bug. How long the tile
+stays "on" is the **Tap reset delay** setting (Devices & Commands); set it
+to 0 to snap back immediately — purely cosmetic either way, the command
+always fires.
+
+**Shown as a plug/outlet instead of a switch?** On the Matter wire these
+devices are On/Off Plug-in Units (the only certified type Google both
+voice-targets and lets a bridge control), so the Home app defaults their
+icon/category to "Outlet". Google supports re-typing them per device: open
+the device's tile → gear icon → **Type** (under Device information) →
+choose **Switch**. This is Home-app metadata only — voice targets, routines
+and behavior are unchanged, no re-pairing — but you'll need to redo it if
+you ever factory-reset and re-pair.
 
 ### Natural voice phrasing
 
