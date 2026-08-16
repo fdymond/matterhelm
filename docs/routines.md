@@ -25,6 +25,19 @@ Google Home app → Automations → **+ New** → *When I say to Google Assistan
 | "movie time" | Turn on your custom command endpoint (e.g. *Movie Mode*), optionally + lights |
 | "shut down the theater" | Turn **off** *HTPC Power* |
 
+## Stateless button tiles (routine favorites)
+
+The Home app renders every controllable Matter device as a stateful toggle —
+there is no momentary-button presentation for a bridged endpoint (Generic
+Switch is stateless but is an event source Google only accepts as a routine
+starter, not a tappable control). Since S8-4 the toggle's shown state is
+purely cosmetic (any tap fires), but if you want tiles that behave like real
+buttons — tap, brief flash, back to idle, no on/off state — pin the
+**routines themselves**: each routine added to the Home app's Favorites is a
+one-tap "run" button with no state. Create one routine per command you tap
+often (starter phrase + "Turn on <device>" action) and tap the routine tile
+instead of the device tile.
+
 Notes:
 - Play/pause is a single toggle on the PC, so "pause" and "play" both press
   the same button — both phrases exist purely so either feels natural.
