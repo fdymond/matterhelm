@@ -583,7 +583,7 @@ public sealed class BridgeHost : IDisposable
                         .Where(c => c.Enabled)
                         .Select(c => new SidecarCustomEndpointEntry(c.Key, c.Name))]),
                 SidecarEnvJsonContext.Default.SidecarEndpointsEnv),
-            // S7-1: momentary auto-reset window; Config guarantees 100–2000
+            // S7-1: momentary auto-reset window; Config guarantees 0–2000
             // (the bridge parser is strict and would exit on anything else).
             ["HTPC_BRIDGE_MOMENTARY_RESET_MS"] = config.MomentaryResetMs.ToString(CultureInfo.InvariantCulture),
         };

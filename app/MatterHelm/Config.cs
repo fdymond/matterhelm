@@ -186,7 +186,8 @@ public sealed class BridgeConfig
 
     /// <summary>
     /// How long after an "on" tap a momentary Google Home switch snaps back
-    /// to "off", in milliseconds (S7-1; integer 100–2000). Threaded to the
+    /// to "off", in milliseconds (S7-1; integer 0–2000, 0 = next-tick reset
+    /// per S8-2 — safe since ADR-008 dispatches on the command). Threaded to the
     /// sidecar via <c>HTPC_BRIDGE_MOMENTARY_RESET_MS</c>; the default must
     /// equal the bridge's <c>DEFAULT_MOMENTARY_RESET_MS</c> (300).
     /// </summary>
@@ -718,13 +719,13 @@ public sealed class Config
         // The bridge's env parser is strict and treats an out-of-range value
         // as FATAL — same discipline as logLevel (S4-R RISK-2): never hand
         // the sidecar a value that would crash-loop it.
-        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int ms) && ms is >= 100 and <= 2000)
+        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int ms) && ms is >= 0 and <= 2000)
         {
             result.MomentaryResetMs = ms;
             return;
         }
 
-        _log("WARN", $"config.json \"momentaryResetMs\" must be an integer 100-2000; using default {result.MomentaryResetMs}.");
+        _log("WARN", $"config.json \"momentaryResetMs\" must be an integer 0-2000; using default {result.MomentaryResetMs}.");
     }
 
     private void ApplyPowerOffAction(JsonElement root, BridgeConfig result)

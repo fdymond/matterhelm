@@ -34,8 +34,13 @@ const PORT_MAX = 65535;
 const DEFAULT_IPC_PORT = 39531;
 const DEFAULT_LOG_LEVEL = "info";
 
-/** `HTPC_BRIDGE_MOMENTARY_RESET_MS` bounds and default (S7-1, owner request). */
-const MOMENTARY_RESET_MS_MIN = 100;
+/**
+ * `HTPC_BRIDGE_MOMENTARY_RESET_MS` bounds and default (S7-1, owner request).
+ * 0 = reset on the next tick after the On command — safe since ADR-008 made
+ * the window presentation-only (dispatch happens on the command itself), and
+ * the fastest tile snap-back Google's controller model allows (S8-2).
+ */
+const MOMENTARY_RESET_MS_MIN = 0;
 const MOMENTARY_RESET_MS_MAX = 2000;
 const DEFAULT_MOMENTARY_RESET_MS = 300;
 
@@ -129,7 +134,7 @@ export interface Config {
   endpoints: EndpointsConfig;
   /**
    * `HTPC_BRIDGE_MOMENTARY_RESET_MS` (S7-1) — how long after an `on` write a
-   * momentary endpoint snaps back to `off`, in ms (integer 100–2000; default
+   * momentary endpoint snaps back to `off`, in ms (integer 0–2000; default
    * {@link DEFAULT_MOMENTARY_RESET_MS}). Both sides of the env contract share
    * the 300 ms default — the tray app's `momentaryResetMs` config field must
    * stay in lockstep.

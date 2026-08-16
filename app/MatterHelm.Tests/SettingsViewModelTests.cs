@@ -232,7 +232,7 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Theory]
-    [InlineData(99)]
+    [InlineData(-1)]
     [InlineData(2001)]
     public void OutOfRangeMomentaryResetFailsValidationOnItsOwnRow(int ms)
     {

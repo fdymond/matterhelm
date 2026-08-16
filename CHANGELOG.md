@@ -24,6 +24,12 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 - The momentary auto-reset window (default 300 ms) is now presentation only —
   it returns the Home app tile to `off` after a press but no longer gates
   dispatch. One subscription report per press instead of two.
+- Tap reset delay now accepts **0** (snap back to off immediately) — the
+  floor was 100 ms while the reset was load-bearing; post-ADR-008 it's a pure
+  UX knob (S8-2). Settings → Devices & Commands → "Tap reset delay (ms)".
+- User guide documents Google's per-device **Type** re-typing (device tile →
+  gear → Type → Switch) for anyone who'd rather see the momentary commands as
+  switches than plugs — Home-app metadata only, no bridge change.
 
 ## [0.1.0] — 2026-08-09
 

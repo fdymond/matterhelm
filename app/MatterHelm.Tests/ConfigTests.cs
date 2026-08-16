@@ -779,7 +779,7 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Theory]
-    [InlineData(100)]
+    [InlineData(0)] // immediate reset (S8-2)
     [InlineData(450)]
     [InlineData(2000)]
     public void MomentaryResetMsLoadsValuesAcrossTheAllowedRange(int ms)
@@ -790,14 +790,14 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Theory]
-    [InlineData("99")] // below the bridge's minimum
+    [InlineData("-1")] // below the bridge's minimum
     [InlineData("2001")] // above the bridge's maximum
     [InlineData("300.5")] // non-integer
     [InlineData("\"fast\"")] // non-number
     public void OutOfRangeOrWrongTypedMomentaryResetMsFallsBackTo300AndWarns(string rawValue)
     {
         // The bridge env parser is strict (fatal on a bad value), so the tray
-        // app must never hand over anything outside 100-2000.
+        // app must never hand over anything outside 0-2000.
         File.WriteAllText(_path, $$"""{"momentaryResetMs": {{rawValue}}}""");
 
         Config config = NewConfig();

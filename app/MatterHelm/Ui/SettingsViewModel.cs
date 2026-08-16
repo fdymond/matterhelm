@@ -181,9 +181,9 @@ public sealed class SettingsViewModel
             errors.Add(new SettingsValidationError("ipc-port", "Port must be between 1 and 65535."));
         }
 
-        if (Working.MomentaryResetMs is < 100 or > 2000)
+        if (Working.MomentaryResetMs is < 0 or > 2000)
         {
-            errors.Add(new SettingsValidationError("momentary-reset-ms", "Reset delay must be between 100 and 2000 ms."));
+            errors.Add(new SettingsValidationError("momentary-reset-ms", "Reset delay must be between 0 and 2000 ms."));
         }
 
         ValidateBuiltinName(errors, "speaker-name", Working.Commands.Speaker.Name);
@@ -480,12 +480,14 @@ public sealed class SettingsViewModel
                 new SettingDescriptor
                 {
                     // S7-1: config-driven momentary auto-reset (default 300,
-                    // range shared with the bridge's env validation).
+                    // range shared with the bridge's env validation; 0 =
+                    // immediate per S8-2, safe since ADR-008 dispatches on
+                    // the command rather than the state change).
                     Id = "momentary-reset-ms",
                     Label = "Tap reset delay (ms)",
-                    Description = "How quickly a tapped command's switch snaps back to off in Google Home.",
+                    Description = "How quickly a tapped command's switch snaps back to off in Google Home. 0 = immediately.",
                     Kind = SettingKind.Number,
-                    Minimum = 100,
+                    Minimum = 0,
                     Maximum = 2000,
                     NeedsBridgeRestart = true,
                     Get = c => c.MomentaryResetMs,

@@ -99,8 +99,8 @@ export interface BridgeOptions {
   endpoints: EndpointsConfig;
   /**
    * Momentary auto-reset window in ms (S7-1); unset =
-   * {@link DEFAULT_MOMENTARY_RESET_MS}. `config.ts` validates the 100–2000
-   * range — this module trusts its caller.
+   * {@link DEFAULT_MOMENTARY_RESET_MS}. `config.ts` validates the 0–2000
+   * range (0 = next-tick reset, S8-2) — this module trusts its caller.
    */
   momentaryResetMs?: number;
   /** Pins the mDNS interface for multi-NIC hosts; see `./adapter.js`. */

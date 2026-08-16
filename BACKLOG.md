@@ -89,6 +89,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
 | S8-1 ✅ | Dispatch plug actions from OnOff **commands** (`OnOffServer.on()/off()` override) instead of attribute-change events: repeated identical commands stop being dropped, the momentary reset becomes cosmetic, one subscription report per press instead of two. Speaker (mute/volume) deliberately unchanged. ADR-008 | Repeat-command tests green; live-node smoke proves two dispatches from two `on` commands with no intervening `off`; no protocol change | M | — | impl (Fable) |
+| S8-2 ✅ | Tap reset delay floor 100→0 ms both sides (0 = next-tick reset; safe post-ADR-008) + user-guide note on Google's per-device Type re-typing (plug tile → Switch) | Both range validators + tests updated (bridge 328, app 411 green); Settings shows "0 = immediately" | S | S8-1 | integrator |
 
 ## Proposed (from agent reports, integrator-triaged)
 
