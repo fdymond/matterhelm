@@ -156,6 +156,21 @@ public sealed class SettingsViewModel
         (MediaKeyName.VolumeDown, "Volume down"),
     ];
 
+    /// <summary>Friendly labels for the S8-5 system commands, in <see cref="SystemCommandName"/> declaration order.</summary>
+    public static IReadOnlyList<(SystemCommandName Command, string Label)> SystemCommandChoices { get; } =
+    [
+        (SystemCommandName.StartScreenSaver, "Start screensaver"),
+        (SystemCommandName.StopScreenSaver, "Stop screensaver"),
+        (SystemCommandName.DisplaysOff, "Displays off"),
+        (SystemCommandName.DisplaysOn, "Displays on"),
+        (SystemCommandName.Sleep, "Sleep"),
+        (SystemCommandName.Hibernate, "Hibernate"),
+        (SystemCommandName.Lock, "Lock the PC"),
+        (SystemCommandName.CloseForegroundProgram, "Close focused program"),
+        (SystemCommandName.Shutdown, "Shut down"),
+        (SystemCommandName.Restart, "Restart"),
+    ];
+
     /// <summary>Where the bridge keeps Matter fabric state (BLUEPRINT §2.5) — display-only on the Advanced page. Derived from <see cref="AppPaths.Root"/> so the S7-2 migration fallback shows the directory actually in use.</summary>
     public static string StorageDirDisplay => Path.Combine(AppPaths.Root, "matter");
 
@@ -308,6 +323,8 @@ public sealed class SettingsViewModel
         MediaKeyActionConfig mediaKey => $"Media key: {MediaKeyChoices.First(c => c.Key == mediaKey.KeyName).Label.ToLowerInvariant()}",
         LaunchActionConfig launch => $"Launch: {Path.GetFileName(launch.Path)}",
         KeySequenceActionConfig keySequence => $"Key sequence: {keySequence.Sequence}",
+        SystemActionConfig system =>
+            $"System: {SystemCommandChoices.First(c => c.Command == system.Command).Label.ToLowerInvariant()}",
         DelayActionConfig delay => $"Wait: {delay.Ms} ms",
         SequenceActionConfig sequence => $"Sequence: {sequence.Steps.Count} step{(sequence.Steps.Count == 1 ? "" : "s")}",
         _ => throw new ArgumentOutOfRangeException(nameof(action), action.GetType().Name, "unknown custom action type"),

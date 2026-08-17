@@ -59,6 +59,23 @@ public sealed class ActionExecutor : IDisposable
                     return DisplayPower.WakeDisplays();
                 case "powerOff":
                     return _displayPower.DisplaysOff();
+                // S8-5 system commands (the `system` custom-action type).
+                case "startScreenSaver":
+                    return SystemCommands.StartScreenSaver();
+                case "stopScreenSaver":
+                    // The same net-zero mouse nudge that wakes displays also
+                    // dismisses a running screensaver.
+                    return DisplayPower.WakeDisplays();
+                case "lock":
+                    return SystemCommands.LockWorkstation();
+                case "closeForeground":
+                    return SystemCommands.CloseForegroundProgram();
+                case "hibernate":
+                    return SystemCommands.Hibernate();
+                case "shutdown":
+                    return SystemCommands.Shutdown();
+                case "restart":
+                    return SystemCommands.Restart();
                 default:
                     Log.Warn($"ActionExecutor: unknown or malformed action '{name}' (value: {value ?? "none"}).");
                     return false;

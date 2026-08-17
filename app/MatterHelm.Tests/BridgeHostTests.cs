@@ -540,6 +540,39 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public async Task CustomSystemActionDispatchesItsExecutorVerbAndAcksOk()
+        {
+            // S8-5: lock is the safe representative (the fake executor
+            // records the verb; no real side effect in tests).
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "lock-pc",
+                    Name = "Lock PC",
+                    Action = new SystemActionConfig { Command = SystemCommandName.Lock },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"lock-pc"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("lock", (object?)null)),
+                TimeSpan.FromSeconds(10),
+                "executor to receive the lock verb");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            lock (_gate)
+            {
+                Assert.Contains(new OverlayContent("Google Home → Lock PC", "workstation locked", false), _overlay);
+            }
+        }
+
+        [Fact]
         public async Task CustomSequenceActionRunsItsStepsInOrderAndAcksOk()
         {
             // S8-3 macro: stop -> wait 1 ms -> chord, one endpoint fire.

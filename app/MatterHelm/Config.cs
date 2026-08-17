@@ -50,9 +50,51 @@ public enum MediaKeyName
 [JsonDerivedType(typeof(MediaKeyActionConfig), "mediaKey")]
 [JsonDerivedType(typeof(LaunchActionConfig), "launch")]
 [JsonDerivedType(typeof(KeySequenceActionConfig), "keySequence")]
+[JsonDerivedType(typeof(SystemActionConfig), "system")]
 [JsonDerivedType(typeof(DelayActionConfig), "delay")]
 [JsonDerivedType(typeof(SequenceActionConfig), "sequence")]
 public abstract class CustomActionConfig;
+
+/// <summary>The functional command a <c>system</c> custom action performs (S8-5).</summary>
+public enum SystemCommandName
+{
+    /// <summary>Start the user's configured Windows screensaver.</summary>
+    StartScreenSaver,
+
+    /// <summary>Dismiss a running screensaver (net-zero mouse nudge).</summary>
+    StopScreenSaver,
+
+    /// <summary>Put all displays into their low-power state.</summary>
+    DisplaysOff,
+
+    /// <summary>Wake the displays.</summary>
+    DisplaysOn,
+
+    /// <summary>Suspend the machine.</summary>
+    Sleep,
+
+    /// <summary>Hibernate the machine (fails when hibernation is disabled).</summary>
+    Hibernate,
+
+    /// <summary>Lock the workstation (Win+L).</summary>
+    Lock,
+
+    /// <summary>Gracefully close the foreground program (WM_CLOSE, like the title-bar X).</summary>
+    CloseForegroundProgram,
+
+    /// <summary>Shut the machine down immediately.</summary>
+    Shutdown,
+
+    /// <summary>Restart the machine immediately.</summary>
+    Restart,
+}
+
+/// <summary>Custom action running one functional system command (<c>{"type":"system","command":"startScreenSaver"}</c>, S8-5).</summary>
+public sealed class SystemActionConfig : CustomActionConfig
+{
+    /// <summary>Which command to run.</summary>
+    public required SystemCommandName Command { get; set; }
+}
 
 /// <summary>Custom action injecting one media key (<c>{"type":"mediaKey","keyName":"stop"}</c>).</summary>
 public sealed class MediaKeyActionConfig : CustomActionConfig
@@ -706,6 +748,21 @@ public sealed class Config
                 return new KeySequenceActionConfig { Sequence = chord.Canonical };
             }
 
+            case "system":
+            {
+                SystemCommandName? command =
+                    action.TryGetProperty("command", out JsonElement commandElement) && commandElement.ValueKind == JsonValueKind.String
+                        ? ParseSystemCommandName(commandElement.GetString())
+                        : null;
+                if (command is null)
+                {
+                    _log("WARN", $"config.json \"{where}.command\" must be one of startScreenSaver/stopScreenSaver/displaysOff/displaysOn/sleep/hibernate/lock/closeForegroundProgram/shutdown/restart; entry dropped.");
+                    return null;
+                }
+
+                return new SystemActionConfig { Command = command.Value };
+            }
+
             case "delay":
             {
                 if (!action.TryGetProperty("ms", out JsonElement ms)
@@ -773,10 +830,25 @@ public sealed class Config
             }
 
             default:
-                _log("WARN", $"config.json \"{where}.type\" is not a known action type (mediaKey/launch/keySequence/delay/sequence); entry dropped.");
+                _log("WARN", $"config.json \"{where}.type\" is not a known action type (mediaKey/launch/keySequence/system/delay/sequence); entry dropped.");
                 return null;
         }
     }
+
+    private static SystemCommandName? ParseSystemCommandName(string? wireName) => wireName switch
+    {
+        "startScreenSaver" => SystemCommandName.StartScreenSaver,
+        "stopScreenSaver" => SystemCommandName.StopScreenSaver,
+        "displaysOff" => SystemCommandName.DisplaysOff,
+        "displaysOn" => SystemCommandName.DisplaysOn,
+        "sleep" => SystemCommandName.Sleep,
+        "hibernate" => SystemCommandName.Hibernate,
+        "lock" => SystemCommandName.Lock,
+        "closeForegroundProgram" => SystemCommandName.CloseForegroundProgram,
+        "shutdown" => SystemCommandName.Shutdown,
+        "restart" => SystemCommandName.Restart,
+        _ => null,
+    };
 
     private static MediaKeyName? ParseMediaKeyName(string? wireName) => wireName switch
     {

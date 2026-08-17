@@ -207,9 +207,15 @@ click **Save** (closing the window with unsaved changes asks first).
       focus. Click into the sequence field and press the keys you want —
       the dialog captures them and shows the resulting chord text so you
       can confirm it before saving.
+    - **System command** — one functional Windows action: start/stop the
+      screensaver, displays off/on, sleep, hibernate, lock the PC, close
+      the focused program (a graceful close, like the title-bar X — apps
+      may still prompt to save), shut down, or restart. Shut down and
+      restart act immediately — no confirmation on the PC — so consider
+      keeping those out of easily-tapped tiles.
     - **Command sequence (macro)** — runs several of the above in order
       from one voice command or tile tap. Build the step list with **Add…**
-      (each step is a media key, launch, key sequence, or a **Wait** of
+      (each step is a media key, launch, key sequence, system command, or a **Wait** of
       1–5000 ms for pacing between steps; up to 16 steps, waits summing to
       at most 10 s), reorder with Up/Down, and double-click a step to edit
       it. If a step fails, the macro stops there and the log names the

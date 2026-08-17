@@ -548,6 +548,92 @@ public sealed class ConfigTests : IDisposable
             Assert.Equal("Ctrl+Shift+V", action.GetProperty("sequence").GetString());
         }
 
+        [Theory]
+        [InlineData("startScreenSaver", SystemCommandName.StartScreenSaver)]
+        [InlineData("lock", SystemCommandName.Lock)]
+        [InlineData("closeForegroundProgram", SystemCommandName.CloseForegroundProgram)]
+        [InlineData("shutdown", SystemCommandName.Shutdown)]
+        public void SystemActionLoadsItsCommand(string wireName, SystemCommandName expected)
+        {
+            WriteConfig($$"""
+                {"commands": {"custom": [
+                    {"key": "sys-cmd", "name": "Sys Cmd",
+                     "action": {"type": "system", "command": "{{wireName}}" } }
+                ]} }
+                """);
+
+            Config config = NewConfig();
+
+            CustomCommandConfig command = Assert.Single(config.Current.Commands.Custom);
+            Assert.Equal(expected, Assert.IsType<SystemActionConfig>(command.Action).Command);
+        }
+
+        [Theory]
+        [InlineData("""{"type": "system", "command": "bogus"}""")] // unknown command
+        [InlineData("""{"type": "system", "command": 3}""")] // numeric — wire names only
+        [InlineData("""{"type": "system"}""")] // missing command
+        public void InvalidSystemActionDropsTheEntryAndWarns(string actionJson)
+        {
+            WriteConfig($$"""
+                {"commands": {"custom": [
+                    {"key": "sys-cmd", "name": "Sys Cmd", "action": {{actionJson}} }
+                ]} }
+                """);
+
+            Config config = NewConfig();
+
+            Assert.Empty(config.Current.Commands.Custom);
+            Assert.True(Log.Contains("WARN", "commands.custom[0]"));
+        }
+
+        [Fact]
+        public void SystemActionRoundTripsThroughSaveInCamelCase()
+        {
+            Config config = NewConfig();
+            config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "screensaver-on",
+                    Name = "Screensaver",
+                    Action = new SystemActionConfig { Command = SystemCommandName.StartScreenSaver },
+                },
+            ];
+            config.Save();
+
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+            JsonElement action = document.RootElement
+                .GetProperty("commands").GetProperty("custom")[0].GetProperty("action");
+            Assert.Equal("system", action.GetProperty("type").GetString());
+            Assert.Equal("startScreenSaver", action.GetProperty("command").GetString());
+
+            var reloaded = Assert.IsType<SystemActionConfig>(
+                Assert.Single(NewConfig().Current.Commands.Custom).Action);
+            Assert.Equal(SystemCommandName.StartScreenSaver, reloaded.Command);
+        }
+
+        [Fact]
+        public void SequenceActionAcceptsASystemStep()
+        {
+            WriteConfig("""
+                {"commands": {"custom": [
+                    {"key": "goodnight", "name": "Goodnight",
+                     "action": {"type": "sequence", "steps": [
+                        {"type": "mediaKey", "keyName": "stop"},
+                        {"type": "system", "command": "displaysOff"}
+                     ]}}
+                ]}}
+                """);
+
+            Config config = NewConfig();
+
+            var sequence = Assert.IsType<SequenceActionConfig>(
+                Assert.Single(config.Current.Commands.Custom).Action);
+            Assert.Equal(
+                SystemCommandName.DisplaysOff,
+                Assert.IsType<SystemActionConfig>(sequence.Steps[1]).Command);
+        }
+
         [Fact]
         public void SequenceActionLoadsItsTypedStepsInOrder()
         {
