@@ -4,8 +4,8 @@ namespace MatterHelm.Ui;
 
 /// <summary>
 /// Modal add/edit dialog for one step of a command sequence (S8-3). Offers
-/// the non-sequence action types — media key, launch, key sequence, and a
-/// wait — with the same editors and key-capture UX as
+/// the non-sequence action types — media key, launch, key sequence, system
+/// command (S8-5), and a wait — with the same editors and key-capture UX as
 /// <see cref="CustomCommandDialog"/> (capture mapping shared via
 /// <see cref="KeyChordCapture"/>). Nested sequences are excluded by
 /// construction: this dialog simply has no "sequence" choice.
@@ -15,7 +15,8 @@ public sealed class SequenceStepDialog : Form
     private const int MediaKeyIndex = 0;
     private const int LaunchIndex = 1;
     private const int KeySequenceIndex = 2;
-    private const int DelayIndex = 3;
+    private const int SystemIndex = 3;
+    private const int DelayIndex = 4;
 
     private readonly SettingsViewModel _vm;
 
@@ -28,6 +29,8 @@ public sealed class SequenceStepDialog : Form
     private readonly TextBox _sequenceBox;
     private readonly CheckBox _captureToggle;
     private readonly TableLayoutPanel _sequenceRow;
+    private readonly ComboBox _systemCombo;
+    private readonly TableLayoutPanel _systemRow;
     private readonly NumericUpDown _delayInput;
     private readonly TableLayoutPanel _delayRow;
     private readonly Label _errorLabel;
@@ -64,6 +67,7 @@ public sealed class SequenceStepDialog : Form
         _typeCombo.Items.Add("Press a media key");
         _typeCombo.Items.Add("Launch a program");
         _typeCombo.Items.Add("Key sequence");
+        _typeCombo.Items.Add("System command");
         _typeCombo.Items.Add("Wait");
         _typeCombo.SelectedIndexChanged += (_, _) => OnTypeChanged();
         AddRow(grid, "Step", _typeCombo);
@@ -114,6 +118,17 @@ public sealed class SequenceStepDialog : Form
         sequenceEditor.Controls.Add(_captureToggle);
         _sequenceRow = SubGrid(grid);
         AddRow(_sequenceRow, "Sequence (e.g. Ctrl+Shift+V)", sequenceEditor);
+
+        // S8-5 system commands: one combo, always valid.
+        _systemCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(240) };
+        foreach ((_, string label) in SettingsViewModel.SystemCommandChoices)
+        {
+            _systemCombo.Items.Add(label);
+        }
+
+        _systemCombo.SelectedIndex = 0;
+        _systemRow = SubGrid(grid);
+        AddRow(_systemRow, "Command", _systemCombo);
 
         _delayInput = new NumericUpDown
         {
@@ -166,6 +181,12 @@ public sealed class SequenceStepDialog : Form
                 _typeCombo.SelectedIndex = KeySequenceIndex;
                 _sequenceBox.Text = keySequence.Sequence;
                 break;
+            case SystemActionConfig system:
+                _typeCombo.SelectedIndex = SystemIndex;
+                _systemCombo.SelectedIndex = Math.Max(
+                    0,
+                    SettingsViewModel.SystemCommandChoices.ToList().FindIndex(c => c.Command == system.Command));
+                break;
             case DelayActionConfig delay:
                 _typeCombo.SelectedIndex = DelayIndex;
                 _delayInput.Value = Math.Clamp(delay.Ms, DelayActionConfig.MinMs, DelayActionConfig.MaxMs);
@@ -191,13 +212,16 @@ public sealed class SequenceStepDialog : Form
 
     private bool IsKeySequence => _typeCombo.SelectedIndex == KeySequenceIndex;
 
+    private bool IsSystem => _typeCombo.SelectedIndex == SystemIndex;
+
     private bool IsDelay => _typeCombo.SelectedIndex == DelayIndex;
 
     private void OnTypeChanged()
     {
-        _mediaKeyRow.Visible = !IsLaunch && !IsKeySequence && !IsDelay;
+        _mediaKeyRow.Visible = !IsLaunch && !IsKeySequence && !IsSystem && !IsDelay;
         _launchRows.Visible = IsLaunch;
         _sequenceRow.Visible = IsKeySequence;
+        _systemRow.Visible = IsSystem;
         _delayRow.Visible = IsDelay;
         _captureToggle.Checked = false; // leaving the row always disarms capture
         Revalidate();
@@ -298,6 +322,10 @@ public sealed class SequenceStepDialog : Form
         {
             LaunchIndex => new LaunchActionConfig { Path = _pathBox.Text.Trim(), Args = _argsBox.Text.Trim() },
             KeySequenceIndex => new KeySequenceActionConfig { Sequence = CanonicalSequence(_sequenceBox.Text.Trim()) },
+            SystemIndex => new SystemActionConfig
+            {
+                Command = SettingsViewModel.SystemCommandChoices[Math.Max(0, _systemCombo.SelectedIndex)].Command,
+            },
             DelayIndex => new DelayActionConfig { Ms = (int)_delayInput.Value },
             _ => new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key },
         };

@@ -965,6 +965,8 @@ public sealed class BridgeHost : IDisposable
                     null);
             case KeySequenceActionConfig keySequence:
                 return ExecuteKeySequence(commandKey, keySequence.Sequence);
+            case SystemActionConfig system:
+                return ExecuteSystemCommand(system.Command);
             case DelayActionConfig delay:
                 Thread.Sleep(delay.Ms);
                 return (true, $"waited {delay.Ms} ms", null);
@@ -1009,6 +1011,26 @@ public sealed class BridgeHost : IDisposable
 
         return (_executor.Execute("keySequence", chord), $"{chord.Canonical} sent", null);
     }
+
+    /// <summary>
+    /// Executes a <c>system</c> custom action (S8-5), mapping the configured
+    /// command onto its executor verb. Sleep reuses the adapter's
+    /// <c>"sleep"</c> mapping; displays reuse the power verbs.
+    /// </summary>
+    private (bool Ok, string Pill, string? Error) ExecuteSystemCommand(SystemCommandName command) => command switch
+    {
+        SystemCommandName.StartScreenSaver => (_executor.Execute("startScreenSaver"), "screensaver started", null),
+        SystemCommandName.StopScreenSaver => (_executor.Execute("stopScreenSaver"), "screensaver dismissed", null),
+        SystemCommandName.DisplaysOff => (_executor.Execute("powerOff"), "displays off", null),
+        SystemCommandName.DisplaysOn => (_executor.Execute("powerOn"), "displays woken", null),
+        SystemCommandName.Sleep => (_executor.Execute("sleep"), "sleeping", null),
+        SystemCommandName.Hibernate => (_executor.Execute("hibernate"), "hibernating", null),
+        SystemCommandName.Lock => (_executor.Execute("lock"), "workstation locked", null),
+        SystemCommandName.CloseForegroundProgram => (_executor.Execute("closeForeground"), "close sent to focused program", null),
+        SystemCommandName.Shutdown => (_executor.Execute("shutdown"), "shutting down", null),
+        SystemCommandName.Restart => (_executor.Execute("restart"), "restarting", null),
+        _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+    };
 
     private (bool Ok, string Pill, string? Error) ExecuteMediaKey(MediaKeyName keyName) => keyName switch
     {

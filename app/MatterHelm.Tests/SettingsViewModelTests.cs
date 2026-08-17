@@ -288,6 +288,25 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void DescribeActionSummarizesSystemCommands()
+    {
+        Assert.Equal("System: start screensaver", SettingsViewModel.DescribeAction(
+            new SystemActionConfig { Command = SystemCommandName.StartScreenSaver }));
+        Assert.Equal("System: close focused program", SettingsViewModel.DescribeAction(
+            new SystemActionConfig { Command = SystemCommandName.CloseForegroundProgram }));
+    }
+
+    [Fact]
+    public void SystemCommandChoicesCoverEveryEnumMemberInOrder()
+    {
+        // The dialogs index this list by combo position, so it must stay in
+        // declaration order and complete.
+        Assert.Equal(
+            Enum.GetValues<SystemCommandName>(),
+            SettingsViewModel.SystemCommandChoices.Select(c => c.Command));
+    }
+
+    [Fact]
     public void DescribeActionSummarizesSequencesAndDelays()
     {
         Assert.Equal("Wait: 250 ms", SettingsViewModel.DescribeAction(new DelayActionConfig { Ms = 250 }));

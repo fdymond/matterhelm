@@ -34,7 +34,8 @@ public sealed class CustomCommandDialog : Form
     private const int MediaKeyActionIndex = 0;
     private const int LaunchActionIndex = 1;
     private const int KeySequenceActionIndex = 2;
-    private const int SequenceMacroActionIndex = 3;
+    private const int SystemActionIndex = 3;
+    private const int SequenceMacroActionIndex = 4;
 
     private readonly SettingsViewModel _vm;
     private readonly string? _originalKey;
@@ -51,6 +52,8 @@ public sealed class CustomCommandDialog : Form
     private readonly TextBox _sequenceBox;
     private readonly CheckBox _captureToggle;
     private readonly TableLayoutPanel _sequenceRow;
+    private readonly ComboBox _systemCombo;
+    private readonly TableLayoutPanel _systemRow;
     private readonly ListBox _stepsList;
     private readonly Button _editStepButton;
     private readonly Button _removeStepButton;
@@ -106,6 +109,7 @@ public sealed class CustomCommandDialog : Form
         _actionTypeCombo.Items.Add("Press a media key");
         _actionTypeCombo.Items.Add("Launch a program");
         _actionTypeCombo.Items.Add("Key sequence");
+        _actionTypeCombo.Items.Add("System command");
         _actionTypeCombo.Items.Add("Command sequence (macro)");
         _actionTypeCombo.SelectedIndexChanged += (_, _) => OnActionTypeChanged();
         AddRow(grid, "Action", _actionTypeCombo);
@@ -158,6 +162,17 @@ public sealed class CustomCommandDialog : Form
         sequenceEditor.Controls.Add(_captureToggle);
         _sequenceRow = SubGrid(grid);
         AddRow(_sequenceRow, "Sequence (e.g. Ctrl+Shift+V)", sequenceEditor);
+
+        // S8-5 system commands: one combo, always valid.
+        _systemCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(240) };
+        foreach ((_, string label) in SettingsViewModel.SystemCommandChoices)
+        {
+            _systemCombo.Items.Add(label);
+        }
+
+        _systemCombo.SelectedIndex = 0;
+        _systemRow = SubGrid(grid);
+        AddRow(_systemRow, "Command", _systemCombo);
 
         // S8-3 macro editor: ordered step list + add/edit/remove/reorder.
         // Steps open SequenceStepDialog (the non-sequence action types plus a
@@ -241,6 +256,12 @@ public sealed class CustomCommandDialog : Form
                 _actionTypeCombo.SelectedIndex = KeySequenceActionIndex;
                 _sequenceBox.Text = keySequence.Sequence;
                 break;
+            case SystemActionConfig system:
+                _actionTypeCombo.SelectedIndex = SystemActionIndex;
+                _systemCombo.SelectedIndex = Math.Max(
+                    0,
+                    SettingsViewModel.SystemCommandChoices.ToList().FindIndex(c => c.Command == system.Command));
+                break;
             case SequenceActionConfig sequence:
                 _actionTypeCombo.SelectedIndex = SequenceMacroActionIndex;
                 _steps.AddRange(sequence.Steps);
@@ -296,13 +317,16 @@ public sealed class CustomCommandDialog : Form
 
     private bool IsKeySequenceAction => _actionTypeCombo.SelectedIndex == KeySequenceActionIndex;
 
+    private bool IsSystemAction => _actionTypeCombo.SelectedIndex == SystemActionIndex;
+
     private bool IsMacroAction => _actionTypeCombo.SelectedIndex == SequenceMacroActionIndex;
 
     private void OnActionTypeChanged()
     {
-        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction && !IsMacroAction;
+        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction && !IsSystemAction && !IsMacroAction;
         _launchRows.Visible = IsLaunchAction;
         _sequenceRow.Visible = IsKeySequenceAction;
+        _systemRow.Visible = IsSystemAction;
         _macroRow.Visible = IsMacroAction;
         _captureToggle.Checked = false; // leaving the row always disarms capture
         Revalidate();
@@ -466,6 +490,10 @@ public sealed class CustomCommandDialog : Form
         {
             LaunchActionIndex => new LaunchActionConfig { Path = _pathBox.Text.Trim(), Args = _argsBox.Text.Trim() },
             KeySequenceActionIndex => new KeySequenceActionConfig { Sequence = CanonicalSequence(_sequenceBox.Text.Trim()) },
+            SystemActionIndex => new SystemActionConfig
+            {
+                Command = SettingsViewModel.SystemCommandChoices[Math.Max(0, _systemCombo.SelectedIndex)].Command,
+            },
             SequenceMacroActionIndex => new SequenceActionConfig { Steps = [.. _steps] },
             _ => new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key },
         };

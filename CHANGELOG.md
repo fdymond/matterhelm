@@ -12,6 +12,10 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Added
 
+- **System commands** as a custom-command action type (and macro step):
+  start/stop screensaver, displays off/on, sleep, hibernate, lock, close the
+  focused program (graceful WM_CLOSE), shut down, restart (S8-5). Shut
+  down/restart act immediately with no PC-side confirmation.
 - **Command sequences (macros)**: a custom command can now run several
   actions in order — media keys, program launches, key chords, and waits
   (1–5000 ms each; ≤16 steps, waits capped at 10 s total) — from a single
