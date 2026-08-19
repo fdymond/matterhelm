@@ -10,6 +10,15 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] — 2026-08-19
+
+Sprint 8: trigger mechanics and command power. Repeated commands work, taps
+always fire, macros and system commands arrive, and the whole pipeline stops
+queueing behind slow actions. No protocol, identity, or pairing change —
+updating from 0.1.0 needs no re-pair.
+
 ### Added
 
 - **System commands** as a custom-command action type (and macro step):

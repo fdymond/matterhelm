@@ -44,26 +44,29 @@ support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
 
 ## Status
 
-**Phase: v0.1.0 released** (packaged dist, factory reset, user guide,
-budget gate — see `CHANGELOG.md`). CI green on every commit (bridge
-verify+coverage on ubuntu/windows, app build+tests+coverage on windows).
-Commissioned against a real Nest hub.
+**Phase: v0.2.0 released** (Sprint 8 trigger mechanics — see
+`CHANGELOG.md`). CI green on every commit (bridge verify+coverage on
+ubuntu/windows, app build+tests+coverage on windows). Commissioned against
+a real Nest hub.
 
 - **Bridge (`bridge/`)**: full Matter device model behind the adapter
-  boundary, protocol v2 with custom commands, structured diagnostics with
-  session observability, esbuild single-file bundle (one node process,
-  ~0.9 s cold start). 322 tests, pure modules gated at 90 %+.
+  boundary; actions dispatch from OnOff **commands** (ADR-008 — repeats
+  never drop, every tile tap fires), protocol v2 with custom commands,
+  structured diagnostics with session observability, esbuild single-file
+  bundle (one node process, ~0.9 s cold start). 328 tests, pure modules
+  gated at 90 %+.
 - **Tray app (`app/MatterHelm`)**: supervisor + loopback IPC, CoreAudio/
-  media-key/key-chord/display executor, click-through overlay HUD with
-  volume fill bar, settings window (categorized nav, search, custom-command
-  CRUD incl. key-sequence capture), dark mode, DPI-safe at 200 %, local
-  metrics + privacy-hardened diagnostics export. 402 tests. Budgets measured
-  and enforced (ADR-007).
-- **Sprints 0–7 delivered and adversarially reviewed** (five review passes),
-  including Sprint 3 packaging (`build.ps1` single dist folder, Node SEA
-  sidecar, factory reset, user guide) and the v0.1.0 release gate.
-  Remaining: the full hardware E2E checklist (`docs/e2e-log.md`) against
-  the packaged dist. Natural voice phrases: see `docs/routines.md`.
+  media-key/key-chord/system-command/display executor, command macros with
+  a non-blocking background runner, click-through overlay HUD with volume
+  fill bar, settings window (categorized nav, search, custom-command CRUD
+  incl. key-sequence capture and macro steps), dark mode, DPI-safe at
+  200 %, local metrics + privacy-hardened diagnostics export. 439 tests.
+  Budgets measured and enforced (ADR-007).
+- **Sprints 0–8 delivered and adversarially reviewed**, including Sprint 3
+  packaging (`build.ps1` single dist folder, Node SEA sidecar, factory
+  reset, user guide) and the Sprint 8 deep-review pass. Remaining: the full
+  hardware E2E checklist (`docs/e2e-log.md`) against the packaged dist.
+  Natural voice phrases: see `docs/routines.md`.
 
 ## Repository layout
 
