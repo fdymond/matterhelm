@@ -219,8 +219,10 @@ click **Save** (closing the window with unsaved changes asks first).
       1–5000 ms for pacing between steps; up to 16 steps, waits summing to
       at most 10 s), reorder with Up/Down, and double-click a step to edit
       it. If a step fails, the macro stops there and the log names the
-      failing step. Example — "movie time": launch Kodi → wait 2000 ms →
-      `F11` for fullscreen.
+      failing step. A macro containing waits runs in the background so it
+      never delays other commands — the overlay shows "running N steps"
+      when it starts and the outcome when it finishes. Example — "movie
+      time": launch Kodi → wait 2000 ms → `F11` for fullscreen.
   - Uncheck a command's box to keep it configured but stop publishing it to
     Google Home (its tile disappears from Home the next time the bridge
     restarts).

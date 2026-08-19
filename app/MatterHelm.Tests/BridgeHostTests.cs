@@ -575,7 +575,9 @@ public static class BridgeHostTests
         [Fact]
         public async Task CustomSequenceActionRunsItsStepsInOrderAndAcksOk()
         {
-            // S8-3 macro: stop -> wait 1 ms -> chord, one endpoint fire.
+            // S8-3 macro: stop -> wait 1 ms -> chord, one endpoint fire. The
+            // delay step routes it through the S8-6 background runner: the
+            // ack reports "started", the completion overlay the outcome.
             _config.Current.Commands.Custom =
             [
                 new CustomCommandConfig
@@ -606,7 +608,7 @@ public static class BridgeHostTests
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage($$"""recv {"v":2,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
-                "stub to receive the ok ack");
+                "stub to receive the ok (started) ack");
 
             // Both executor steps ran, in configured order (the delay step
             // never touches the executor).
@@ -614,10 +616,58 @@ public static class BridgeHostTests
                 [("mediaStop", null), ("keySequence", expectedChord)],
                 _executor.Calls.Where(c => c.Name is "mediaStop" or "keySequence"));
 
+            // Start overlay first, completion overlay when the runner finishes.
+            await TestSupport.WaitUntilAsync(
+                () =>
+                {
+                    lock (_gate)
+                    {
+                        return _overlay.Contains(new OverlayContent("Google Home → Movie Time", "ran 3 steps", false));
+                    }
+                },
+                TimeSpan.FromSeconds(10),
+                "the macro-completed overlay");
             lock (_gate)
             {
-                Assert.Contains(new OverlayContent("Google Home → Movie Time", "ran 3 steps", false), _overlay);
+                Assert.Contains(new OverlayContent("Google Home → Movie Time", "running 3 steps", false), _overlay);
             }
+        }
+
+        [Fact]
+        public async Task DelayBearingMacroDoesNotBlockTheActionPipeline()
+        {
+            // S8-6 regression: the receive loop is the WebSocket read loop —
+            // pre-fix, this macro's 3 s wait stalled the volume frame queued
+            // right behind it (and its ack) for the full 3 s.
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "slow-macro",
+                    Name = "Slow Macro",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new DelayActionConfig { Ms = 3000 },
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                        ],
+                    },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"slow-macro"}""",
+                """{"v":2,"type":"action","id":"7f9be2e6-9d0a-4f7e-9a76-1a2b3c4d5e70","name":"setVolume","value":25}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("setVolume", (object?)25)),
+                TimeSpan.FromSeconds(10),
+                "the volume frame queued behind the macro to execute");
+
+            // The volume executed while the macro is still inside its 3 s
+            // delay — its media-key step must not have run yet.
+            Assert.DoesNotContain(("mediaStop", (object?)null), _executor.Calls);
         }
 
         [Fact]

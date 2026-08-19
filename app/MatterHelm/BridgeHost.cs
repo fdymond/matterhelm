@@ -293,6 +293,9 @@ public sealed class BridgeHost : IDisposable
     private BridgeState _state = BridgeState.Disabled;
     private bool _disposed;
 
+    /// <summary>Cancels in-flight background-macro delay waits on dispose (S8-6), so app exit never waits out a macro.</summary>
+    private readonly CancellationTokenSource _macroCts = new();
+
     // Volume echo dead-band state (guarded by _gate; see the constants above).
     private int? _lastCommandedVolume;
     private bool _lastCommandedMuted;
@@ -427,6 +430,11 @@ public sealed class BridgeHost : IDisposable
             _disposed = true;
         }
 
+        // Wake any background macro sleeping in a delay step; the CTS itself
+        // is deliberately not disposed — a still-draining macro thread may
+        // touch the token, and WaitDelayStep treats a disposed handle as
+        // cancelled anyway.
+        _macroCts.Cancel();
         _executor.VolumeChanged -= OnVolumeChanged;
         lock (_publishGate)
         {
@@ -947,10 +955,13 @@ public sealed class BridgeHost : IDisposable
 
     /// <summary>
     /// Executes one custom action — a command's own action or one sequence
-    /// step (S8-3). Sequences run their steps in order on this same thread
-    /// (the ordered IPC receive loop) and stop at the first failure, whose
-    /// error is prefixed with the 1-based step number; delay steps block, which
-    /// is why Config caps their per-step and summed durations.
+    /// step (S8-3). Instant sequences (no delay steps) run inline on the IPC
+    /// receive loop so their ack reports the real outcome; a sequence with
+    /// delays is handed to a background macro runner instead (S8-6) — the
+    /// receive loop is the WebSocket read loop, so blocking it would freeze
+    /// EVERY later frame (a 10 s macro would stall volume commands behind it
+    /// and hold app shutdown hostage). Its ack means "started"; the outcome
+    /// arrives via log + overlay when the macro finishes.
     /// </summary>
     private (bool Ok, string Pill, string? Error) ExecuteCustomAction(string commandKey, CustomActionConfig action)
     {
@@ -968,32 +979,95 @@ public sealed class BridgeHost : IDisposable
             case SystemActionConfig system:
                 return ExecuteSystemCommand(system.Command);
             case DelayActionConfig delay:
-                Thread.Sleep(delay.Ms);
-                return (true, $"waited {delay.Ms} ms", null);
+                return WaitDelayStep(delay.Ms);
+            case SequenceActionConfig sequence when sequence.Steps.Any(step => step is DelayActionConfig):
+                StartBackgroundSequence(commandKey, sequence);
+                return (true, $"running {sequence.Steps.Count} steps", null);
             case SequenceActionConfig sequence:
-            {
-                for (int i = 0; i < sequence.Steps.Count; i++)
-                {
-                    if (sequence.Steps[i] is SequenceActionConfig)
-                    {
-                        // Config rejects nesting on load; reaching one here means
-                        // the config mutated since — nack, never recurse.
-                        return (false, "failed", $"custom command {commandKey}: step {i + 1} is a nested sequence");
-                    }
-
-                    (bool stepOk, string stepPill, string? stepError) = ExecuteCustomAction(commandKey, sequence.Steps[i]);
-                    if (!stepOk)
-                    {
-                        return (false, "failed", $"custom command {commandKey}: step {i + 1} of {sequence.Steps.Count} failed: {stepError ?? stepPill}");
-                    }
-                }
-
-                return (true, $"ran {sequence.Steps.Count} steps", null);
-            }
-
+                return RunSequenceSteps(commandKey, sequence);
             default:
                 return (false, "failed", $"unsupported action type for custom command: {commandKey}");
         }
+    }
+
+    /// <summary>Runs a sequence's steps in order, stopping at the first failure (error carries the 1-based step number).</summary>
+    private (bool Ok, string Pill, string? Error) RunSequenceSteps(string commandKey, SequenceActionConfig sequence)
+    {
+        for (int i = 0; i < sequence.Steps.Count; i++)
+        {
+            if (sequence.Steps[i] is SequenceActionConfig)
+            {
+                // Config rejects nesting on load; reaching one here means
+                // the config mutated since — nack, never recurse.
+                return (false, "failed", $"custom command {commandKey}: step {i + 1} is a nested sequence");
+            }
+
+            (bool stepOk, string stepPill, string? stepError) = ExecuteCustomAction(commandKey, sequence.Steps[i]);
+            if (!stepOk)
+            {
+                return (false, "failed", $"custom command {commandKey}: step {i + 1} of {sequence.Steps.Count} failed: {stepError ?? stepPill}");
+            }
+        }
+
+        return (true, $"ran {sequence.Steps.Count} steps", null);
+    }
+
+    /// <summary>
+    /// A macro's delay step: a cancellable wait, so app shutdown never hangs
+    /// behind a sleeping macro (<see cref="Dispose"/> cancels <see cref="_macroCts"/>).
+    /// </summary>
+    private (bool Ok, string Pill, string? Error) WaitDelayStep(int ms)
+    {
+        try
+        {
+            if (_macroCts.Token.WaitHandle.WaitOne(ms))
+            {
+                return (false, "failed", "macro cancelled (shutting down)");
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            return (false, "failed", "macro cancelled (shutting down)");
+        }
+
+        return (true, $"waited {ms} ms", null);
+    }
+
+    /// <summary>
+    /// Runs a delay-bearing sequence on a worker thread (S8-6). Completion or
+    /// failure is reported via log + overlay — the action's ack already went
+    /// out as "started", because holding the WebSocket receive loop for up to
+    /// 10 s of configured delays would stall every frame behind it.
+    /// </summary>
+    private void StartBackgroundSequence(string commandKey, SequenceActionConfig sequence)
+    {
+        string name = FindCustomCommand(commandKey)?.Name ?? commandKey;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                (bool ok, string pill, string? error) = RunSequenceSteps(commandKey, sequence);
+                if (ok)
+                {
+                    _log("INFO", $"bridge: macro '{commandKey}' completed ({pill}).");
+                }
+                else
+                {
+                    _log("ERROR", $"bridge: macro '{commandKey}' failed: {error ?? pill}");
+                }
+
+                if (_config.Current.OverlayEnabled)
+                {
+                    _overlaySink?.Invoke(new OverlayContent($"Google Home → {name}", ok ? pill : "failed", !ok));
+                }
+            }
+            catch (Exception ex)
+            {
+                // Executor contract is no-throw; this guard keeps a bug from
+                // surfacing as an unobserved task exception.
+                _log("ERROR", $"bridge: macro '{commandKey}' threw: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>
