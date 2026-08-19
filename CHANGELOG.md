@@ -25,6 +25,13 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- **Macros no longer stall other commands** (S8-6, deep-review finding): a
+  macro's waits used to run on the IPC receive loop — the WebSocket read
+  loop itself — so a long macro froze every command behind it (volume,
+  taps) and could hold app exit hostage for up to 10 s. Delay-bearing
+  macros now run on a background runner (ack = "started", outcome via
+  log + overlay), waits are cancelled instantly on app exit, and instant
+  macros keep their precise inline ack.
 - **Every tap on a momentary tile now fires** (S8-4). Google Home's tile is
   a toggle over Google's own state model, which lags the bridge's instant
   auto-reset — so a tap could arrive as an `Off` command and was dropped,

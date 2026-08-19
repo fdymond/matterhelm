@@ -129,10 +129,10 @@ public sealed class KeySequenceActionConfig : CustomActionConfig
 /// <summary>
 /// Custom action that waits (<c>{"type":"delay","ms":300}</c>, S8-3). Meant
 /// as a pacing step inside a <see cref="SequenceActionConfig"/> — the editor
-/// only offers it there — but harmless standalone. Executed with a blocking
-/// sleep on the IPC receive-loop thread (see <c>BridgeHost.OnActionReceived</c>:
-/// ordered execution is that thread's contract), which is why <see cref="MaxMs"/>
-/// stays small.
+/// only offers it there — but harmless standalone. A sequence containing any
+/// delay runs on a background macro runner (S8-6), so waits never block the
+/// IPC receive loop; <see cref="MaxMs"/> still bounds each step so a macro's
+/// total runtime stays predictable.
 /// </summary>
 public sealed class DelayActionConfig : CustomActionConfig
 {
@@ -151,9 +151,11 @@ public sealed class DelayActionConfig : CustomActionConfig
 /// (<c>{"type":"sequence","steps":[{action}, …]}</c>, S8-3). Steps are the
 /// other action types (media key, launch, key sequence, delay); nesting a
 /// sequence inside a sequence is rejected on load and in the editor.
-/// Execution stops at the first failing step (the ack names it). The step
-/// count and the summed delay are capped so a macro can never stall the
-/// ordered action loop past the bridge's ~10 s ack-timing window.
+/// Execution stops at the first failing step. An instant sequence (no delay
+/// steps) runs inline and its ack/nack names the failing step; a
+/// delay-bearing sequence runs on a background macro runner (S8-6) — its ack
+/// means "started" and the outcome lands in the log + overlay. The step count
+/// and summed delay stay capped so a macro's total runtime is bounded.
 /// </summary>
 public sealed class SequenceActionConfig : CustomActionConfig
 {
