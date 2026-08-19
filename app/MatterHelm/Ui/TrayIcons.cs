@@ -5,18 +5,17 @@ using Microsoft.Win32;
 namespace MatterHelm.Ui;
 
 /// <summary>
-/// Runtime-drawn tray iconography (no .ico assets): a Fluent-inspired house
-/// silhouette (the Google Home nod) with the Matter tri-node motif knocked
-/// out of its body, plus a corner status dot carrying the bridge state.
-/// The glyph is monochrome and theme-aware — near-white on a dark taskbar,
-/// near-black on a light one — matching how Windows 11 system tray glyphs
-/// (OneDrive, Teams, Defender) read. Everything is drawn proportionally to
-/// the requested pixel size so 16 px tray reality and larger exports stay
-/// crisp from the same geometry.
+/// Runtime-drawn tray iconography (no .ico assets): the Matter certification
+/// mark as the single glyph, tinted by bridge state. When idle it is
+/// monochrome and theme-aware — near-white on a dark taskbar, near-black on
+/// a light one — matching how Windows 11 system tray glyphs (OneDrive,
+/// Teams, Defender) read. Everything is drawn proportionally to the
+/// requested pixel size so 16 px tray reality and larger exports stay crisp
+/// from the same geometry.
 /// </summary>
 public static class TrayIcons
 {
-    /// <summary>Status-dot fill per bridge state (same palette the tray previously used as full-circle icons).</summary>
+    /// <summary>Glyph tint per bridge state (same palette the tray previously used as full-circle icons).</summary>
     private static readonly Dictionary<BridgeState, Color> DotColors = new()
     {
         [BridgeState.Disabled] = Color.FromArgb(158, 158, 158),
@@ -67,11 +66,10 @@ public static class TrayIcons
 
     /// <summary>
     /// Renders one state's icon into a fresh 32bpp bitmap of the given square
-    /// size. Owner-specified state language: the glyph itself carries the
-    /// state (no badge dot) — a LARGE Matter tri-node with a house at its
-    /// center while the bridge is not operating (white/theme silhouette =
-    /// disabled, amber = enabling/connecting, red = faulted), flipping to a
-    /// green house with the Matter motif inside once connected.
+    /// size. Owner-specified state language (2026-08-19: one glyph, tint only):
+    /// always the Matter certification mark, tinted by state — white/theme
+    /// silhouette = disabled, amber = enabling/connecting, green = bridge
+    /// running (hub-connected), red = faulted.
     /// </summary>
     public static Bitmap Render(BridgeState state, int size, bool darkTaskbar)
     {
@@ -89,20 +87,13 @@ public static class TrayIcons
             _ => darkTaskbar ? Color.FromArgb(245, 245, 245) : Color.FromArgb(32, 32, 32),
         };
 
-        if (state == BridgeState.Connected)
-        {
-            DrawHouseWithMatterKnockout(g, size, glyph);
-        }
-        else
-        {
-            DrawMatterMark(g, size, glyph);
-        }
-
+        DrawMatterMark(g, size, glyph);
         return bitmap;
     }
 
     /// <summary>
-    /// The "not operating" composition (owner request 2026-08-09): a faithful
+    /// The Matter mark, the sole glyph since 2026-08-19 (owner request
+    /// 2026-08-09 for the shape): a faithful
     /// rendition of the Matter certification mark — three units at 120°
     /// rotational symmetry, each a thick radial arm plus an arc whose circle
     /// is centered on that arm's OUTER tip (proportions measured from the
@@ -151,72 +142,6 @@ public static class TrayIcons
                 outwardDeg + 180f - (ArcSweepDegrees / 2f),
                 ArcSweepDegrees);
         }
-    }
-
-    /// <summary>
-    /// Fills the rounded house silhouette, then punches the Matter tri-node
-    /// motif out of its body (SourceCopy + transparent fill keeps the holes
-    /// anti-aliased instead of region-jagged).
-    /// </summary>
-    private static void DrawHouseWithMatterKnockout(Graphics g, int size, Color glyph)
-    {
-        float s = size;
-        using var house = new GraphicsPath();
-        // Roof apex → right eave → right wall → floor → left wall → left eave.
-        house.AddPolygon(
-        [
-            new PointF(0.50f * s, 0.05f * s),
-            new PointF(0.95f * s, 0.44f * s),
-            new PointF(0.83f * s, 0.44f * s),
-            new PointF(0.83f * s, 0.90f * s),
-            new PointF(0.17f * s, 0.90f * s),
-            new PointF(0.17f * s, 0.44f * s),
-            new PointF(0.05f * s, 0.44f * s),
-        ]);
-
-        using (var fill = new SolidBrush(glyph))
-        {
-            g.FillPath(fill, house);
-            // Rounded joins: restroke the silhouette with a round-join pen so
-            // the roof apex and corners lose their GDI+ needle points.
-            using var soften = new Pen(glyph, Math.Max(1.4f, 0.09f * s))
-            {
-                LineJoin = LineJoin.Round,
-                StartCap = LineCap.Round,
-                EndCap = LineCap.Round,
-            };
-            g.DrawPath(soften, house);
-        }
-
-        // Matter tri-node: a center node linked to three satellites (one up,
-        // two down) — knocked out of the filled body so it shows the taskbar
-        // through the glyph. Center sits up-left of the body's middle so the
-        // motif never collides with the bottom-right status badge; node and
-        // line sizes are floored in device pixels to stay legible at 16 px.
-        var center = new PointF(0.46f * s, 0.60f * s);
-        float arm = 0.145f * s;
-        float nodeR = Math.Max(1.5f, 0.065f * s);
-        float lineW = Math.Max(1.2f, 0.05f * s);
-
-        CompositingMode previous = g.CompositingMode;
-        g.CompositingMode = CompositingMode.SourceCopy;
-        using (var hole = new SolidBrush(Color.Transparent))
-        using (var holePen = new Pen(Color.Transparent, lineW))
-        {
-            for (int i = 0; i < 3; i++)
-            {
-                double angle = (-90 + (i * 120)) * Math.PI / 180.0;
-                var satellite = new PointF(
-                    center.X + (float)(arm * Math.Cos(angle)),
-                    center.Y + (float)(arm * Math.Sin(angle)));
-                g.DrawLine(holePen, center, satellite);
-                g.FillEllipse(hole, satellite.X - nodeR, satellite.Y - nodeR, 2 * nodeR, 2 * nodeR);
-            }
-
-            g.FillEllipse(hole, center.X - nodeR, center.Y - nodeR, 2 * nodeR, 2 * nodeR);
-        }
-
-        g.CompositingMode = previous;
     }
 
     /// <summary>Clones the bitmap into a GDI+-owned <see cref="Icon"/> and destroys the intermediate native handle.</summary>
