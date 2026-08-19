@@ -25,9 +25,6 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
-- **Tray icon**: one glyph for every state — the Matter mark, tinted by bridge
-  state (theme silhouette = off, amber = connecting, green = running, red =
-  faulted). The green house composition is gone.
 - **Macros no longer stall other commands** (S8-6, deep-review finding): a
   macro's waits used to run on the IPC receive loop — the WebSocket read
   loop itself — so a long macro froze every command behind it (volume,
@@ -52,6 +49,9 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Changed
 
+- **Tray icon**: one glyph for every state — the Matter mark, tinted by bridge
+  state (theme silhouette = off, amber = connecting, green = running, red =
+  faulted). The green house composition is gone.
 - The momentary auto-reset window (default 300 ms) is now presentation only —
   it returns the Home app tile to `off` after a press but no longer gates
   dispatch. One subscription report per press instead of two.
