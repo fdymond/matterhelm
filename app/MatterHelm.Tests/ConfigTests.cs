@@ -209,6 +209,57 @@ public sealed class ConfigTests : IDisposable
         Assert.True(_log.Contains("WARN", "overlayPosition"), "expected a WARN naming overlayPosition");
     }
 
+    [Theory]
+    [InlineData("system", OverlayTheme.System)]
+    [InlineData("dark", OverlayTheme.Dark)]
+    [InlineData("light", OverlayTheme.Light)]
+    public void OverlayThemeLoadsEveryWireName(string wireName, OverlayTheme expected)
+    {
+        File.WriteAllText(_path, $$"""{"overlayTheme":"{{wireName}}"}""");
+        Assert.Equal(expected, NewConfig().Current.OverlayTheme);
+    }
+
+    [Theory]
+    [InlineData("\"neon\"")] // unknown member
+    [InlineData("\"1\"")] // numeric string (digit guard)
+    [InlineData("2")] // number
+    public void InvalidOverlayThemeFallsBackToSystemWithAWarn(string rawJsonValue)
+    {
+        File.WriteAllText(_path, $$"""{"overlayTheme":{{rawJsonValue}} }""");
+        Config config = NewConfig();
+        Assert.Equal(OverlayTheme.System, config.Current.OverlayTheme);
+        Assert.True(_log.Contains("WARN", "overlayTheme"));
+    }
+
+    [Theory]
+    [InlineData("29")] // below minimum
+    [InlineData("101")] // above maximum
+    [InlineData("\"solid\"")] // non-number
+    public void InvalidOverlayOpacityFallsBackTo100WithAWarn(string rawJsonValue)
+    {
+        File.WriteAllText(_path, $$"""{"overlayOpacityPercent":{{rawJsonValue}} }""");
+        Config config = NewConfig();
+        Assert.Equal(100, config.Current.OverlayOpacityPercent);
+        Assert.True(_log.Contains("WARN", "overlayOpacityPercent"));
+    }
+
+    [Fact]
+    public void OverlayThemeAndOpacityRoundTripThroughSaveInCamelCase()
+    {
+        Config config = NewConfig();
+        config.Current.OverlayTheme = OverlayTheme.Light;
+        config.Current.OverlayOpacityPercent = 65;
+        config.Save();
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_path));
+        Assert.Equal("light", document.RootElement.GetProperty("overlayTheme").GetString());
+        Assert.Equal(65, document.RootElement.GetProperty("overlayOpacityPercent").GetInt32());
+
+        Config reloaded = NewConfig();
+        Assert.Equal(OverlayTheme.Light, reloaded.Current.OverlayTheme);
+        Assert.Equal(65, reloaded.Current.OverlayOpacityPercent);
+    }
+
     [Fact]
     public void OverlayPositionRoundTripsThroughSaveInCamelCase()
     {

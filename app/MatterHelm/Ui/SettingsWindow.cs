@@ -26,7 +26,7 @@ public sealed partial class SettingsWindow : Form
     private const int EmSetCueBanner = 0x1501;
 
     private readonly SettingsViewModel _vm;
-    private readonly Action<OverlayPosition>? _overlayPreview;
+    private readonly Action<OverlayPreviewRequest>? _overlayPreview;
     private readonly Action? _factoryReset;
 
     private readonly TextBox _searchBox;
@@ -58,7 +58,7 @@ public sealed partial class SettingsWindow : Form
 
     /// <summary>Builds the window over <paramref name="viewModel"/>.</summary>
     /// <param name="viewModel">The staged settings state and rules.</param>
-    /// <param name="overlayPreview">Invoked by the Overlay page's Preview button with the STAGED overlay position (S9-1: the preview must show where the overlay would land after Save, not where the live config still has it); null makes the button a no-op (demo).</param>
+    /// <param name="overlayPreview">Invoked by the Overlay page's Preview button with the STAGED overlay position/theme/opacity (S9-1/S9-4: the preview must show what the overlay would look like after Save, not what the live config still has); null makes the button a no-op (demo).</param>
     /// <param name="factoryReset">
     /// Invoked by the Advanced page's "Factory reset" button (confirmation +
     /// the actual <see cref="MatterHelm.BridgeHost.FactoryReset"/> call live
@@ -68,7 +68,7 @@ public sealed partial class SettingsWindow : Form
     /// unlike Preview, a factory reset must never silently do nothing when
     /// unwired.
     /// </param>
-    public SettingsWindow(SettingsViewModel viewModel, Action<OverlayPosition>? overlayPreview = null, Action? factoryReset = null)
+    public SettingsWindow(SettingsViewModel viewModel, Action<OverlayPreviewRequest>? overlayPreview = null, Action? factoryReset = null)
     {
         _vm = viewModel;
         _overlayPreview = overlayPreview;
@@ -844,7 +844,8 @@ public sealed partial class SettingsWindow : Form
         (string text, Action? onClick) = setting.Id switch
         {
             "overlay-preview" => ("Preview", _overlayPreview is { } preview
-                ? () => preview(_vm.Working.OverlayPosition)
+                ? () => preview(new OverlayPreviewRequest(
+                    _vm.Working.OverlayPosition, _vm.Working.OverlayTheme, _vm.Working.OverlayOpacityPercent))
                 : () => { }),
             "open-config-file" => ("Open file", () => OpenWithShell(Config.DefaultPath, "config.json")),
             "open-config-folder" => ("Open folder", () => OpenWithShell(CurrentConfigDir(), "config folder")),

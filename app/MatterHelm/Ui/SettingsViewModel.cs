@@ -221,6 +221,11 @@ public sealed class SettingsViewModel
             errors.Add(new SettingsValidationError("momentary-reset-ms", "Reset delay must be between 0 and 2000 ms."));
         }
 
+        if (Working.OverlayOpacityPercent is < 30 or > 100)
+        {
+            errors.Add(new SettingsValidationError("overlay-opacity", "Overlay opacity must be between 30 and 100 %."));
+        }
+
         ValidateBuiltinName(errors, "speaker-name", Working.Commands.Speaker.Name);
         ValidateBuiltinName(errors, "play-pause-name", Working.Commands.PlayPause.Name);
         ValidateBuiltinName(errors, "next-name", Working.Commands.Next.Name);
@@ -463,6 +468,8 @@ public sealed class SettingsViewModel
         into.PowerOffAction = from.PowerOffAction;
         into.OverlayEnabled = from.OverlayEnabled;
         into.OverlayPosition = from.OverlayPosition;
+        into.OverlayTheme = from.OverlayTheme;
+        into.OverlayOpacityPercent = from.OverlayOpacityPercent;
         into.BridgeEnabled = from.BridgeEnabled;
         into.MdnsInterface = from.MdnsInterface;
         into.LogLevel = from.LogLevel;
@@ -624,6 +631,41 @@ public sealed class SettingsViewModel
                     ],
                     Get = c => OverlayPositionToWire(c.OverlayPosition),
                     Set = (c, v) => c.OverlayPosition = OverlayPositionFromWire((string)v!),
+                },
+                new SettingDescriptor
+                {
+                    // S9-4: overlay color theme; default follows the Windows
+                    // apps light/dark setting.
+                    Id = "overlay-theme",
+                    Label = "Overlay theme",
+                    Description = "Panel colors: follow the Windows light/dark setting, or force one.",
+                    Kind = SettingKind.Choice,
+                    Choices = ["system", "dark", "light"],
+                    ChoiceLabels = ["Follow system", "Dark", "Light"],
+                    Get = c => c.OverlayTheme switch
+                    {
+                        OverlayTheme.Dark => "dark",
+                        OverlayTheme.Light => "light",
+                        _ => "system",
+                    },
+                    Set = (c, v) => c.OverlayTheme = (string)v! switch
+                    {
+                        "dark" => OverlayTheme.Dark,
+                        "light" => OverlayTheme.Light,
+                        _ => OverlayTheme.System,
+                    },
+                },
+                new SettingDescriptor
+                {
+                    // S9-4: layered-window constant alpha, 30-100 %.
+                    Id = "overlay-opacity",
+                    Label = "Overlay opacity (%)",
+                    Description = "How opaque the overlay panel is. 100 = solid, lower = more see-through.",
+                    Kind = SettingKind.Number,
+                    Minimum = 30,
+                    Maximum = 100,
+                    Get = c => c.OverlayOpacityPercent,
+                    Set = (c, v) => c.OverlayOpacityPercent = (int)v!,
                 },
                 new SettingDescriptor
                 {

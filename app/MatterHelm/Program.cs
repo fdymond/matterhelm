@@ -153,11 +153,18 @@ internal static partial class Program
         {
             Visible = trayContext.Config.Current.OverlayEnabled,
             Position = trayContext.Config.Current.OverlayPosition,
+            Theme = trayContext.Config.Current.OverlayTheme,
+            OpacityPercent = trayContext.Config.Current.OverlayOpacityPercent,
         };
 
-        // Settings-window saves reload the config; re-anchor the HUD so a
-        // position change applies live, no restart needed.
-        trayContext.Config.Changed += (_, e) => overlay.Position = e.NewConfig.OverlayPosition;
+        // Settings-window saves reload the config; re-apply the HUD look so
+        // position/theme/opacity changes apply live, no restart needed.
+        trayContext.Config.Changed += (_, e) =>
+        {
+            overlay.Position = e.NewConfig.OverlayPosition;
+            overlay.Theme = e.NewConfig.OverlayTheme;
+            overlay.OpacityPercent = e.NewConfig.OverlayOpacityPercent;
+        };
         using var host = new BridgeHost(
             trayContext.Config,
             executor,
@@ -181,22 +188,27 @@ internal static partial class Program
         // nothing else to marshal back to the UI here.
         trayContext.FactoryResetRequested += (_, _) => Task.Run(() => host.FactoryReset());
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
-        // S9-1: preview at the STAGED position (the settings window passes its
-        // unsaved working value), then restore the live-config position once
-        // the flash has faded (hold ~2.5 s + fade ~0.3 s) so real commands
-        // keep rendering where the saved config says until the user saves.
+        // S9-1/S9-4: preview with the STAGED position/theme/opacity (the
+        // settings window passes its unsaved working values), then restore the
+        // live-config look once the flash has faded (hold ~2.5 s + fade
+        // ~0.3 s) so real commands keep the saved config's rendering until
+        // the user saves.
         var previewRestore = new System.Windows.Forms.Timer { Interval = 3_200 };
         previewRestore.Tick += (_, _) =>
         {
             previewRestore.Stop();
             overlay.Position = trayContext.Config.Current.OverlayPosition;
+            overlay.Theme = trayContext.Config.Current.OverlayTheme;
+            overlay.OpacityPercent = trayContext.Config.Current.OverlayOpacityPercent;
         };
-        trayContext.OverlayPreviewRequested += (_, stagedPosition) =>
+        trayContext.OverlayPreviewRequested += (_, staged) =>
         {
             // A preview must show even while the feature toggle is off — the
             // Visible flag only gates Show, so flip it around the one call.
             bool wasVisible = overlay.Visible;
-            overlay.Position = stagedPosition;
+            overlay.Position = staged.Position;
+            overlay.Theme = staged.Theme;
+            overlay.OpacityPercent = staged.OpacityPercent;
             overlay.Visible = true;
             overlay.Show("Overlay preview", "Settings", isError: false);
             overlay.Visible = wasVisible;

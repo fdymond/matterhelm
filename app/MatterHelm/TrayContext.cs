@@ -153,8 +153,8 @@ public sealed class TrayContext : ApplicationContext
     /// <summary>"Overlay pop-ups" was toggled (already persisted to <see cref="Config"/> by the time this fires); <c>Program</c> flips the live <c>OverlayHud</c>.</summary>
     public event EventHandler<bool>? OverlayEnabledChanged;
 
-    /// <summary>The settings window's "Preview" button was clicked; the payload is the STAGED overlay position (S9-1 — preview where the overlay would land after Save). <c>Program</c> shows a sample pop-up there (the HUD lives there, not here).</summary>
-    public event EventHandler<OverlayPosition>? OverlayPreviewRequested;
+    /// <summary>The settings window's "Preview" button was clicked; the payload is the STAGED overlay position/theme/opacity (S9-1/S9-4). <c>Program</c> shows a sample pop-up with those values (the HUD lives there, not here).</summary>
+    public event EventHandler<Ui.OverlayPreviewRequest>? OverlayPreviewRequested;
 
     /// <summary>"Exit" was clicked, before teardown; subscribers should synchronously stop anything they own (e.g. the sidecar).</summary>
     public event EventHandler? ExitRequested;
@@ -315,7 +315,7 @@ public sealed class TrayContext : ApplicationContext
         {
             _settingsWindow = new SettingsWindow(
                 new SettingsViewModel(Config),
-                overlayPreview: position => OverlayPreviewRequested?.Invoke(this, position),
+                overlayPreview: request => OverlayPreviewRequested?.Invoke(this, request),
                 factoryReset: () => ConfirmAndRequestFactoryReset(_settingsWindow));
         }
 

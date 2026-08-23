@@ -20,6 +20,9 @@ public sealed record OverlayContent(string Primary, string Pill, bool IsError)
     public bool Muted { get; init; }
 }
 
+/// <summary>What the Settings Preview button wants flashed (S9-4): the STAGED position, theme, and opacity — not the saved config values.</summary>
+public sealed record OverlayPreviewRequest(OverlayPosition Position, OverlayTheme Theme, int OpacityPercent);
+
 /// <summary>
 /// Persistent, click-through, non-activating flash overlay (BLUEPRINT §2.4,
 /// ADR-003 item 5). <see cref="Show(OverlayContent)"/> updates the same window
@@ -70,6 +73,44 @@ public sealed class OverlayHud : IDisposable
             }
 
             _window.Position = value;
+        }
+    }
+
+    /// <summary>
+    /// Color theme (S9-4; default follow-system). Safe to set from any thread;
+    /// applies to the next flash (a visible flash keeps its rendered palette).
+    /// </summary>
+    public OverlayTheme Theme
+    {
+        get => _window.Theme;
+        set
+        {
+            if (_window.InvokeRequired)
+            {
+                _window.BeginInvoke(new Action(() => _window.Theme = value));
+                return;
+            }
+
+            _window.Theme = value;
+        }
+    }
+
+    /// <summary>
+    /// Panel opacity percent 30–100 (S9-4; 100 = the classic look). Safe to
+    /// set from any thread; applies to the next flash/fade push.
+    /// </summary>
+    public int OpacityPercent
+    {
+        get => _window.OpacityPercent;
+        set
+        {
+            if (_window.InvokeRequired)
+            {
+                _window.BeginInvoke(new Action(() => _window.OpacityPercent = value));
+                return;
+            }
+
+            _window.OpacityPercent = value;
         }
     }
 
@@ -166,6 +207,72 @@ public sealed class OverlayHud : IDisposable
         private OverlayContent? _last;
         private long _fadeStartTicks;
         private OverlayPosition _position = OverlayPosition.BottomCenter;
+
+        /// <summary>Color theme (S9-4); System resolves against the Windows apps theme per flash.</summary>
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        internal OverlayTheme Theme { get; set; } = OverlayTheme.System;
+
+        /// <summary>Panel opacity percent 30–100 (S9-4); scales every layered-window push, fade included.</summary>
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        internal int OpacityPercent { get; set; } = 100;
+
+        /// <summary>
+        /// The palette one flash renders with, resolved from <see cref="Theme"/>
+        /// (S9-4). Pill/accent colors are shared — the green/red chips with
+        /// white text read correctly on both panels.
+        /// </summary>
+        private readonly record struct Palette(Color Panel, Color PrimaryText, Color VolumeTrack, Color MutedLabel)
+        {
+            public static Palette Dark { get; } = new(
+                Color.FromArgb(235, 26, 26, 30),
+                Color.White,
+                Color.FromArgb(45, 255, 255, 255),
+                Color.FromArgb(255, 176, 176, 184));
+
+            public static Palette Light { get; } = new(
+                Color.FromArgb(242, 246, 246, 249),
+                Color.FromArgb(255, 26, 26, 30),
+                Color.FromArgb(40, 0, 0, 0),
+                Color.FromArgb(255, 110, 110, 118));
+        }
+
+        /// <summary>
+        /// Resolves the effective palette: forced themes directly, System via
+        /// the Windows "apps use light theme" value (read per flash — flashes
+        /// are rare, and this keeps a mid-session theme flip honored without
+        /// change notifications; missing value = dark, like the tray icon).
+        /// </summary>
+        private Palette ResolvePalette()
+        {
+            if (Theme == OverlayTheme.Dark)
+            {
+                return Palette.Dark;
+            }
+
+            if (Theme == OverlayTheme.Light)
+            {
+                return Palette.Light;
+            }
+
+            try
+            {
+                object? value = Microsoft.Win32.Registry.GetValue(
+                    @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                    "AppsUseLightTheme",
+                    0);
+                return value is int light && light != 0 ? Palette.Light : Palette.Dark;
+            }
+            catch
+            {
+                return Palette.Dark;
+            }
+        }
+
+        /// <summary>Scales a push alpha by <see cref="OpacityPercent"/> (S9-4); the fade multiplies through naturally.</summary>
+        private byte ScaleAlpha(byte alpha) =>
+            (byte)(alpha * Math.Clamp(OpacityPercent, 30, 100) / 100);
 
         /// <summary>Screen placement; setting re-anchors the window immediately.</summary>
         [System.ComponentModel.Browsable(false)]
@@ -388,8 +495,9 @@ public sealed class OverlayHud : IDisposable
                 g.FillPath(shadowBrush, shadowPath);
             }
 
+            Palette palette = ResolvePalette(); // S9-4: theme resolved per flash
             using GraphicsPath panelPath = RoundedRect(panelRect, SF(PanelRadiusLogical));
-            using var panelBrush = new SolidBrush(Color.FromArgb(235, 26, 26, 30));
+            using var panelBrush = new SolidBrush(palette.Panel);
             g.FillPath(panelBrush, panelPath);
 
             // Pixel-unit fonts: point units would rescale with the process's
@@ -397,7 +505,7 @@ public sealed class OverlayHud : IDisposable
             // a DPI-aware process), double-applying _scale. Explicit pixels
             // keep the canvas render deterministic at any DPI.
             using var primaryFont = new Font("Segoe UI", SF(PrimaryFontPxLogical), FontStyle.Regular, GraphicsUnit.Pixel);
-            using var primaryBrush = new SolidBrush(Color.White);
+            using var primaryBrush = new SolidBrush(palette.PrimaryText);
             using var primaryFormat = new StringFormat
             {
                 Trimming = StringTrimming.EllipsisCharacter,
@@ -413,7 +521,7 @@ public sealed class OverlayHud : IDisposable
             using var pillFont = new Font("Segoe UI", SF(PillFontPxLogical), FontStyle.Bold, GraphicsUnit.Pixel);
             if (content is { VolumePercent: int volumePercent, IsError: false })
             {
-                RenderVolumeBar(g, pillFont, Math.Clamp(volumePercent, 0, 100), content.Muted);
+                RenderVolumeBar(g, pillFont, Math.Clamp(volumePercent, 0, 100), content.Muted, palette);
             }
             else
             {
@@ -457,13 +565,13 @@ public sealed class OverlayHud : IDisposable
         /// with a "muted" label (the level stays visible so unmute expectations
         /// are clear).
         /// </summary>
-        private void RenderVolumeBar(Graphics g, Font labelFont, int percent, bool muted)
+        private void RenderVolumeBar(Graphics g, Font labelFont, int percent, bool muted, Palette palette)
         {
             RectangleF row = PillRowRect();
             RectangleF track = VolumeTrackRect();
 
             using GraphicsPath trackPath = RoundedRect(track, track.Height / 2f);
-            using var trackBrush = new SolidBrush(Color.FromArgb(45, 255, 255, 255));
+            using var trackBrush = new SolidBrush(palette.VolumeTrack);
             g.FillPath(trackBrush, trackPath);
 
             float fillWidth = track.Width * (percent / 100f);
@@ -479,7 +587,7 @@ public sealed class OverlayHud : IDisposable
             }
 
             string label = muted ? "muted" : $"{percent} %";
-            using var labelBrush = new SolidBrush(muted ? Color.FromArgb(255, 176, 176, 184) : Color.White);
+            using var labelBrush = new SolidBrush(muted ? palette.MutedLabel : palette.PrimaryText);
             using var labelFormat = new StringFormat
             {
                 Alignment = StringAlignment.Near,
@@ -506,7 +614,7 @@ public sealed class OverlayHud : IDisposable
             {
                 BlendOp = NativeMethods.AcSrcOver,
                 BlendFlags = 0,
-                SourceConstantAlpha = alpha,
+                SourceConstantAlpha = ScaleAlpha(alpha),
                 AlphaFormat = NativeMethods.AcSrcAlpha,
             };
 
