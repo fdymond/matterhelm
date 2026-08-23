@@ -19,6 +19,10 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Changed
 
+- Settings navigation restructured (S9-3): "Devices & Commands" is now
+  **Devices** - a "Google Home devices" section of clean, description-free
+  rows plus the power/tap-reset options - and custom commands moved to
+  their own **Custom devices** section with a full-height list.
 - Devices & Commands compacted (S9-2): each built-in command is now ONE row
   - an enabled checkbox at the start of the line (untick greys the row and
   its name box - the disabled state reads at a glance), the description,
@@ -31,6 +35,9 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- Mouse-wheel scrolling works again on settings pages (S9-3): the S9-2
+  wheel filter computed the scroll itself and silently did nothing - it now
+  forwards the wheel message to the hovered page and lets WinForms scroll.
 - Settings scrollbar no longer ranges far past the last row (the S9-2
   "excessive white space": a filler layout row inflated the scrollable
   height), and the mouse wheel now scrolls the page under the cursor even

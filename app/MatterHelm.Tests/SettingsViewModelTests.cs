@@ -591,7 +591,7 @@ public sealed class SettingsViewModelTests : IDisposable
     public void CategoriesMatchTheAdr004Section4Layout()
     {
         Assert.Equal(
-            ["General", "Devices & Commands", "Overlay", "Advanced"],
+            ["General", "Devices", "Custom devices", "Overlay", "Advanced"],
             SettingsViewModel.Categories.Select(c => c.Title));
     }
 
