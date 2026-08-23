@@ -151,6 +151,9 @@ implement the same names):
 | `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
 | `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 0–2000 (0 = next-tick reset, S8-2); invalid = fatal (S7-1) | `0` |
+| `HTPC_BRIDGE_UNIQUE_ID_SEED` | seed for every endpoint's stable identity (ADR-009). Tray app resolves it once: existing fabric → the legacy shared constant (pairing preserved), fresh install → a minted per-install value | unset = legacy constant |
+| `HTPC_BRIDGE_VENDOR_ID` | Matter vendor id, decimal or `0x` hex, 1–65535; invalid = fatal (ADR-009) | `0xFFF1` (ADR-002 test VID) |
+| `HTPC_BRIDGE_PRODUCT_ID` | Matter product id, decimal or `0x` hex, 1–65535; invalid = fatal (ADR-009) | `0x8000` (ADR-002 test PID) |
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
 | `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed = fatal | unset |
 

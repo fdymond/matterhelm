@@ -471,6 +471,9 @@ public sealed class SettingsViewModel
         into.PowerOffAction = from.PowerOffAction;
         into.OverlayEnabled = from.OverlayEnabled;
         into.OverlayPosition = from.OverlayPosition;
+        into.VendorId = from.VendorId;
+        into.ProductId = from.ProductId;
+        into.UniqueIdSeed = from.UniqueIdSeed;
         into.OverlayTheme = from.OverlayTheme;
         into.OverlayOpacityPercent = from.OverlayOpacityPercent;
         into.BridgeEnabled = from.BridgeEnabled;
@@ -702,6 +705,51 @@ public sealed class SettingsViewModel
                     Description = "Where the bridge keeps its pairing (fabric) state.",
                     Kind = SettingKind.ReadOnlyText,
                     Get = _ => StorageDirDisplay,
+                },
+
+                // S10-4 commissioning identity. Editable because a second PC
+                // in the same home needs its own PID, and anyone with a real
+                // allocated VID should be able to use it. Both are hex-or-
+                // decimal text: the Developer Console shows hex.
+                new SettingDescriptor
+                {
+                    Id = "vendor-id",
+                    Label = "Vendor ID (VID)",
+                    Description = "Must match your Google Home Developer Console project. Changing it re-pairs the bridge.",
+                    Kind = SettingKind.Text,
+                    NeedsBridgeRestart = true,
+                    Get = c => MatterIds.Format(c.VendorId),
+                    Set = (c, v) =>
+                    {
+                        if (MatterIds.TryParse((string?)v, out int id))
+                        {
+                            c.VendorId = id;
+                        }
+                    },
+                },
+                new SettingDescriptor
+                {
+                    Id = "product-id",
+                    Label = "Product ID (PID)",
+                    Description = "Test range 0x8000–0x801F; give a second PC in the same home its own. Changing it re-pairs the bridge.",
+                    Kind = SettingKind.Text,
+                    NeedsBridgeRestart = true,
+                    Get = c => MatterIds.Format(c.ProductId),
+                    Set = (c, v) =>
+                    {
+                        if (MatterIds.TryParse((string?)v, out int id))
+                        {
+                            c.ProductId = id;
+                        }
+                    },
+                },
+                new SettingDescriptor
+                {
+                    Id = "unique-id-seed",
+                    Label = "Device identity seed",
+                    Description = "This install's Matter identity. Unique per install, so two PCs never collide in one home.",
+                    Kind = SettingKind.ReadOnlyText,
+                    Get = c => c.UniqueIdSeed ?? "(resolved at next start)",
                 },
                 new SettingDescriptor
                 {

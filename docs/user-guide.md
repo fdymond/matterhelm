@@ -77,7 +77,11 @@ about five minutes and only needs to be done once per Google account.
      submit it for certification or pay anything.
 5. Save the integration. A draft integration is enough; there's no
    "publish"/"launch" step to complete.
-6. Confirm the phone's Google account is the **owner** (or a member) of this
+6. If you picked different values (or already use `0xFFF1`/`0x8000` for
+   another test device), set the matching pair in MatterHelm: Settings →
+   Advanced → **Vendor ID (VID)** / **Product ID (PID)**. They accept hex
+   (`0x8003`) or decimal. Changing them after pairing re-pairs the bridge.
+7. Confirm the phone's Google account is the **owner** (or a member) of this
    project — commissioning only works for accounts in the project that
    registered the VID/PID.
 
@@ -291,6 +295,27 @@ complete — open Pair with Google Home to re-pair" once it's done. If the
 reset fails (rare — usually something briefly holding the storage folder
 open, like antivirus scanning it right after the bridge stops), nothing is
 deleted and the failure is logged; just try again a few seconds later.
+
+## Running MatterHelm on more than one PC
+
+Each PC pairs as its own set of Google Home devices, and nothing needs to be
+shared between them:
+
+- **Identity is per install.** The first time a fresh install starts, it
+  mints its own device identity (Settings → Advanced → *Device identity
+  seed* shows it), so two PCs never collide in the same home. An install
+  that was already paired before this feature existed keeps its original
+  identity — upgrading never unpairs you.
+- **Give the second PC its own Product ID.** In Settings → Advanced set
+  **Product ID (PID)** to another value from the test range
+  `0x8000`–`0x801F` (e.g. `0x8001`), and register that pair in your
+  Developer Console project alongside the first.
+- **Give the devices distinct names** (Settings → Devices) — e.g. "Office
+  PC Speaker" vs "HTPC Speaker" — otherwise voice commands are ambiguous
+  even though the devices are distinct.
+
+The same Google account and the same Developer Console project cover as many
+PCs as you like; only the PID and the device names need to differ.
 
 ## Troubleshooting
 
