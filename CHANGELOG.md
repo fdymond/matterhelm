@@ -10,7 +10,19 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Bridge name** (S10-6): Settings → Devices → **Bridge name** sets what
+  Google Home calls the bridge itself, so several PCs running MatterHelm in
+  one home are tellable apart. It's a label, not identity — changing it
+  never re-pairs.
+
+### Changed
+
+- The multi-PC guide is corrected: a second PC needs **no** separate
+  Vendor/Product ID and no extra Developer Console registration (per-install
+  identity already keeps them distinct) — only distinct names. Adds an
+  ordered setup walkthrough and a note for cloned machines.
 
 ## [0.4.0] — 2026-08-23
 

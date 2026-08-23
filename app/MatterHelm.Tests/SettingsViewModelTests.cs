@@ -625,6 +625,7 @@ public sealed class SettingsViewModelTests : IDisposable
             ["overlay-theme"] = "light",
             ["overlay-opacity"] = 80,
             ["mdns-interface"] = "Ethernet",
+            ["bridge-name"] = "Office Bridge",
             ["vendor-id"] = "0xFFF2",
             ["product-id"] = "0x8003",
         };
@@ -699,6 +700,7 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal(
             [
                 "ipc-port", "log-level",
+                "bridge-name",
                 "speaker-name", "play-pause-name", "next-name", "previous-name", "power-name",
                 "momentary-reset-ms",
                 "custom-commands",

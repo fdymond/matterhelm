@@ -152,6 +152,12 @@ export interface Config {
   vendorId?: number;
   /** `HTPC_BRIDGE_PRODUCT_ID` (S10-4); unset = the ADR-002 test PID. */
   productId?: number;
+  /**
+   * `HTPC_BRIDGE_NAME` (S10-6) — the bridge's own display name in Google
+   * Home, so several bridges in one home are tellable apart. Unset = the
+   * bridge module's default.
+   */
+  bridgeName?: string;
   /** `HTPC_BRIDGE_MDNS_INTERFACE`; unset = matter.js auto-detects. */
   mdnsInterface?: string;
   /**
@@ -453,6 +459,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
   const logLevel = parseLogLevel(env.HTPC_BRIDGE_LOG_LEVEL);
   const matterLogFacilities = parseMatterLogFacilities(env.HTPC_BRIDGE_MATTER_LOG_FACILITIES);
   const uniqueIdSeed = parseUniqueIdSeed(env.HTPC_BRIDGE_UNIQUE_ID_SEED);
+  const bridgeName = parseUniqueIdSeed(env.HTPC_BRIDGE_NAME);
   const vendorId = parseVendorOrProductId(env.HTPC_BRIDGE_VENDOR_ID, "HTPC_BRIDGE_VENDOR_ID");
   const productId = parseVendorOrProductId(env.HTPC_BRIDGE_PRODUCT_ID, "HTPC_BRIDGE_PRODUCT_ID");
   return {
@@ -467,6 +474,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),
     ...(uniqueIdSeed === undefined ? {} : { uniqueIdSeed }),
+    ...(bridgeName === undefined ? {} : { bridgeName }),
     ...(vendorId === undefined ? {} : { vendorId }),
     ...(productId === undefined ? {} : { productId }),
   };

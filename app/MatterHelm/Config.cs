@@ -340,6 +340,15 @@ public sealed class BridgeConfig
     public int ProductId { get; set; } = 0x8000;
 
     /// <summary>
+    /// The bridge's own display name in Google Home (S10-6) — what the hub
+    /// shows for the bridge device itself, so several MatterHelm bridges in
+    /// one home are tellable apart. A label, not identity: changing it never
+    /// re-pairs (though Google may keep showing the old name until the
+    /// device is re-added).
+    /// </summary>
+    public string BridgeName { get; set; } = "HTPC Matter Bridge";
+
+    /// <summary>
     /// Seed for every endpoint's stable Matter identity (S10-4). Null until
     /// the first run resolves it via <see cref="MatterIdentity"/> — existing
     /// installs pin to the legacy shared constant, fresh installs mint a
@@ -536,6 +545,7 @@ public sealed class Config
             ApplyMatterId(root, result, "vendorId", 0xFFF1, id => result.VendorId = id);
             ApplyMatterId(root, result, "productId", 0x8000, id => result.ProductId = id);
             ApplyUniqueIdSeed(root, result);
+            ApplyBridgeName(root, result);
             ApplyLogLevel(root, result);
             ApplyAppLogLevel(root, result);
         }
@@ -1145,6 +1155,23 @@ public sealed class Config
         }
 
         _log("WARN", $"config.json \"{property}\" must be an integer 1-65535 (decimal, or a string like \"0x8000\"); using default 0x{fallback:X4}.");
+    }
+
+    /// <summary>Reads the bridge display name (S10-6); blank or non-string keeps the default.</summary>
+    private void ApplyBridgeName(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("bridgeName", out JsonElement element))
+        {
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.String && element.GetString() is { } name && !string.IsNullOrWhiteSpace(name))
+        {
+            result.BridgeName = name.Trim();
+            return;
+        }
+
+        _log("WARN", $"config.json \"bridgeName\" must be a non-empty string; using default \"{result.BridgeName}\".");
     }
 
     /// <summary>Reads the identity seed (S10-4); a non-string is a WARN and leaves it unresolved so the next start re-decides.</summary>

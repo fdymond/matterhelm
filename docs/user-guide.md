@@ -300,24 +300,57 @@ deleted and the failure is logged; just try again a few seconds later.
 
 ## Running MatterHelm on more than one PC
 
-Each PC pairs as its own set of Google Home devices, and nothing needs to be
-shared between them:
+Each PC pairs separately and appears as its own set of devices in Google
+Home. **You do not need a second Google account, a second Developer Console
+project, or a second hub** — and you do not need to change the Vendor/Product
+IDs. Every install mints its own Matter identity on first run, which is what
+keeps two PCs distinct.
 
-- **Identity is per install.** The first time a fresh install starts, it
-  mints its own device identity (Settings → Advanced → *Device identity
-  seed* shows it), so two PCs never collide in the same home. An install
-  that was already paired before this feature existed keeps its original
-  identity — upgrading never unpairs you.
-- **Give the second PC its own Product ID.** In Settings → Advanced set
-  **Product ID (PID)** to another value from the test range
-  `0x8000`–`0x801F` (e.g. `0x8001`), and register that pair in your
-  Developer Console project alongside the first.
-- **Give the devices distinct names** (Settings → Devices) — e.g. "Office
-  PC Speaker" vs "HTPC Speaker" — otherwise voice commands are ambiguous
-  even though the devices are distinct.
+The one thing that genuinely needs your attention is **names**: both PCs ship
+the same defaults ("HTPC Speaker", "HTPC Play Pause", …), and two devices
+with the same name make voice commands ambiguous. Rename *before* pairing —
+the names MatterHelm is publishing at that moment are the ones the Home app
+offers you during setup.
 
-The same Google account and the same Developer Console project cover as many
-PCs as you like; only the PID and the device names need to differ.
+### Setting up the second PC
+
+1. **Install** MatterHelm on the second PC (installer or portable zip) and
+   run it. Leave the bridge disabled for now.
+2. **Rename its devices**: Settings → **Devices** → give each one a name
+   that says which PC it is — e.g. "Office Speaker", "Office Play Pause",
+   "Office Power". Save.
+3. *(Optional sanity check)* Settings → **Advanced** → **Device identity
+   seed** should differ from the first PC's. If the two PCs somehow show the
+   same seed — which can only happen if you cloned a disk image or copied
+   `config.json` between them — see the note below.
+4. **Enable the bridge** (tray → Enable bridge) and allow the **Windows
+   Firewall** prompt for **Private** networks. This is a fresh prompt on
+   this PC even though you allowed it on the first one.
+5. **Pair**: tray → **Pair with Google Home…**, then in the Home app on your
+   phone → **+ Add** → **Matter-enabled device**, scan the QR. Use the same
+   Google account and the same home as the first PC.
+6. Tap through the "not Matter-certified" screen, pick a **room** (a
+   different room from the first PC makes voice targeting easier still),
+   and confirm the device names.
+
+That's it — both PCs now respond independently: *"Hey Google, pause the
+office PC"* vs *"…pause the HTPC"*.
+
+### Notes and edge cases
+
+- **Cloned machines**: if the second PC was made by cloning the first
+  (disk image, or copying `%APPDATA%\MatterHelm\config.json` across), it
+  inherits the first PC's identity and the two will conflict. Fix: on the
+  clone, close MatterHelm, delete the `"uniqueIdSeed"` line from
+  `config.json`, delete the `matter` folder beside it, and start the app —
+  it mints a fresh identity and can be paired as a new device.
+- **Vendor/Product IDs stay the same on both.** Keeping them identical means
+  no extra Developer Console work. Changing the PID on one PC (to another
+  value in the test range `0x8000`–`0x801F`) is only worth doing if you hit
+  a problem, and it requires registering that pair in your Console project
+  too.
+- **Requirements are per PC**: each needs IPv6 enabled on its adapter, the
+  firewall allowance, and a working LAN path to the same Nest hub.
 
 ## Troubleshooting
 

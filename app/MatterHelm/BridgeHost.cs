@@ -606,6 +606,11 @@ public sealed class BridgeHost : IDisposable
             extra["HTPC_BRIDGE_UNIQUE_ID_SEED"] = config.UniqueIdSeed;
         }
 
+        if (!string.IsNullOrWhiteSpace(config.BridgeName))
+        {
+            extra["HTPC_BRIDGE_NAME"] = config.BridgeName;
+        }
+
         if (!string.IsNullOrWhiteSpace(config.MdnsInterface))
         {
             extra["HTPC_BRIDGE_MDNS_INTERFACE"] = config.MdnsInterface;

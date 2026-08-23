@@ -467,6 +467,14 @@ describe("parseConfig", () => {
       expect(config.productId).toBeUndefined();
     });
 
+    it("passes the bridge display name through (trimmed); unset = bridge default", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_NAME: "  Office Bridge  " })).bridgeName).toBe(
+        "Office Bridge",
+      );
+      expect(parseConfig(baseEnv()).bridgeName).toBeUndefined();
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_NAME: "   " })).bridgeName).toBeUndefined();
+    });
+
     it("passes a per-install seed through verbatim (trimmed)", () => {
       expect(parseConfig(baseEnv({ HTPC_BRIDGE_UNIQUE_ID_SEED: "  abc123  " })).uniqueIdSeed).toBe(
         "abc123",
