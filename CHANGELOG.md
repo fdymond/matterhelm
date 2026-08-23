@@ -27,6 +27,16 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- **Re-pairing after a factory reset failed with "can't find device"**
+  (S10-8): the tray kept serving the pre-reset pairing code. It belongs to the
+  fabric the reset deletes, and matter.js mints a new passcode/discriminator
+  on the next start, so scanning it sent the phone looking for a device that
+  no longer existed. The cached code is now dropped the moment a reset is
+  confirmed, and the pairing window opens by itself and swaps to the fresh
+  code as soon as the sidecar reports it.
+- A factory reset now always leaves the bridge **running**, including when it
+  was switched off beforehand — an uncommissioned node that is not running
+  advertises nothing to discover.
 - **The pairing window named the wrong Home-app path** (S10-7): it said to
   choose "Works with Google", which is the cloud account-linking branch — a
   Matter device can never be added that way. It now names the real path:

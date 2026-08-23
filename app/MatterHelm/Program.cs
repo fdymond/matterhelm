@@ -217,7 +217,11 @@ internal static partial class Program
         // fires after the user said yes. Success/failure is already logged
         // and (when enabled) flashed on the overlay inside FactoryReset —
         // nothing else to marshal back to the UI here.
-        trayContext.FactoryResetRequested += (_, _) => Task.Run(() => host.FactoryReset());
+        // S10-8: the reset leaves the bridge running and uncommissioned, so the
+        // tray syncs its "Enable bridge" tick and opens the pairing window for
+        // the fresh code once FactoryReset returns (it marshals internally).
+        trayContext.FactoryResetRequested += (_, _) => Task.Run(() =>
+            trayContext.OnFactoryResetCompleted(host.FactoryReset().Ok));
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
         // S9-1/S9-4: preview with the STAGED position/theme/opacity (the
         // settings window passes its unsaved working values), then restore the

@@ -306,7 +306,10 @@ bridge…", right under "Pair with Google Home…") and Settings → Advanced �
 **Factory reset**. Both ask you to confirm first, since this is
 destructive:
 
-- The bridge stops immediately.
+- The bridge stops, then **restarts by itself** so it is immediately
+  discoverable again for pairing (even if it was switched off when you ran
+  the reset — a reset exists only to re-pair, and a bridge that is not
+  running advertises nothing for your phone to find).
 - The Matter pairing data (your PC's identity as far as Google Home is
   concerned) is **permanently deleted** from disk.
 - Every MatterHelm device will show as **offline** in the Google Home app —
@@ -319,11 +322,12 @@ destructive:
   overlay settings, and everything else in Settings survives a factory
   reset untouched; only the Google pairing itself is wiped.
 
-If the bridge was running before the reset, it automatically restarts
-afterward (ready for a fresh pairing); if it was already off, it's left
-off. Watch the tray tooltip/log or the on-screen overlay for "factory reset
-complete — open Pair with Google Home to re-pair" once it's done. If the
-reset fails (rare — usually something briefly holding the storage folder
+**The pairing window opens by itself** once the reset finishes. It shows
+"Starting the bridge…" for a few seconds and then swaps itself to the new
+code — wait for the code to appear before you scan. The old code stops
+working the moment you confirm the reset, so a code you photographed or left
+on screen beforehand will fail in the Home app with **"can't find device"**.
+If the reset fails (rare — usually something briefly holding the storage folder
 open, like antivirus scanning it right after the bridge stops), nothing is
 deleted and the failure is logged; just try again a few seconds later.
 
@@ -402,6 +406,12 @@ office PC"* vs *"…pause the HTPC"*.
   PC is already commissioned, and a second code can't be issued for it; to
   pair it again (or to a different home) run
   [Factory reset](#factory-reset--re-pairing) first.
+- **"Can't find device" when re-pairing right after a factory reset.** The
+  reset issues a NEW code and invalidates the old one immediately. Wait for
+  the pairing window (which opens by itself) to leave "Starting the bridge…"
+  and show the new code before you scan — scanning the previous code sends
+  your phone looking for a device that no longer exists. Also remove the
+  now-offline MatterHelm tiles from the Home app before adding them back.
 - **Firewall / "can't find device" during pairing.** Make sure you clicked
   **Allow** on the Windows Firewall prompt (see Installing, step 3) for
   **Private networks**. If you dismissed it or picked "Cancel", delete the

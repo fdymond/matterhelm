@@ -238,9 +238,19 @@ public sealed class TrayContext : ApplicationContext
     {
         void Apply()
         {
+            // Never log the code itself (it is a commissioning secret), but do
+            // record that it CHANGED: a stale code on screen and a fresh one in
+            // hand look identical in the log otherwise, and that is exactly the
+            // failure mode behind a "can't find device" re-pair (S10-8).
+            bool replaced = _lastPairingInfo is { } previous && previous.QrPayload != qrPayload;
             _lastPairingInfo = (qrPayload, manualCode);
             _pairingSettleTimer.Stop();
             _pairingSettled = false;
+            if (replaced)
+            {
+                Log.Info("Tray: pairing code replaced by a newer one from the sidecar; any open window now shows the new code.");
+            }
+
             UpdateMenuForState();
             if (_pairingWindow is { IsDisposed: false })
             {
@@ -356,12 +366,12 @@ public sealed class TrayContext : ApplicationContext
             owner,
             "Factory reset the bridge?" + Environment.NewLine + Environment.NewLine
                 + "This will:" + Environment.NewLine
-                + "  •  Stop the bridge (the sidecar disconnects immediately)" + Environment.NewLine
+                + "  •  Restart the bridge (the sidecar disconnects, then comes back unpaired)" + Environment.NewLine
                 + $"  •  Permanently delete the Matter pairing data under {Path.Combine(AppPaths.Root, "matter")}"
                 + Environment.NewLine
                 + "  •  Make every MatterHelm device show as offline in Google Home until you remove them there"
                 + Environment.NewLine
-                + "  •  Require re-pairing (a new QR code) afterward" + Environment.NewLine + Environment.NewLine
+                + "  •  Require re-pairing — a NEW code is issued, and the pairing window opens by itself once it is ready" + Environment.NewLine + Environment.NewLine
                 + "Your config and logs are kept.",
             "Factory reset bridge",
             MessageBoxButtons.YesNo,
@@ -372,8 +382,59 @@ public sealed class TrayContext : ApplicationContext
             return;
         }
 
+        // Drop the cached pairing code BEFORE the reset runs. It belongs to the
+        // fabric about to be deleted, and matter.js mints a new passcode and
+        // discriminator on the next start — so a phone that scans it looks for
+        // a device that no longer exists and fails with "can't find device".
+        // The window falls back to "starting…" until the fresh code lands.
+        _lastPairingInfo = null;
+        _pairingSettled = false;
+        _pairingSettleTimer.Stop();
+        UpdateMenuForState();
+        RefreshPairingWindowStage();
+
         Log.Info("Tray: factory reset confirmed; requesting BridgeHost.FactoryReset().");
         FactoryResetRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Called by <c>Program</c> once <see cref="BridgeHost.FactoryReset"/> has
+    /// returned (S10-8). On success the bridge is already restarting and
+    /// uncommissioned, so this syncs the "Enable bridge" tick (the reset turns
+    /// the bridge on — see BridgeHost.FactoryReset) and opens the pairing
+    /// window, which shows "starting…" and then swaps itself to the fresh code
+    /// the moment the sidecar reports it. Safe to call from any thread.
+    /// </summary>
+    public void OnFactoryResetCompleted(bool ok)
+    {
+        void Apply()
+        {
+            if (!ok)
+            {
+                return;
+            }
+
+            _applyingConfigChange = true;
+            try
+            {
+                _enableBridgeItem.Checked = Config.Current.BridgeEnabled;
+            }
+            finally
+            {
+                _applyingConfigChange = false;
+            }
+
+            ShowOrFocusPairingWindow();
+        }
+
+        if (_uiThreadMarshal.InvokeRequired)
+        {
+            _uiThreadMarshal.BeginInvoke(new Action(Apply));
+        }
+        else
+        {
+            Apply();
+        }
     }
 
     private void ShowOrFocusPairingWindow()
@@ -391,9 +452,11 @@ public sealed class TrayContext : ApplicationContext
             _pairingWindow.SetPairingInfo(info.QrPayload, info.ManualCode);
         }
 
-        _pairingWindow.SetStage(CurrentPairingStage);
+        PairingStage stage = CurrentPairingStage;
+        _pairingWindow.SetStage(stage);
         _pairingWindow.Show();
         _pairingWindow.Activate();
+        Log.Info($"Tray: pairing window shown at stage '{stage}'.");
     }
 
     /// <summary>
