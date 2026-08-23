@@ -103,6 +103,38 @@ public static class AppLaunchTests
         }
 
         [Fact]
+        public void ListStoreAppsReturnsAliasesSortedByName()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                foreach (string name in (string[])["Spotify.exe", "notepad.exe", "MediaPlayer.exe", "readme.txt"])
+                {
+                    File.WriteAllText(Path.Combine(dir, name), "");
+                }
+
+                IReadOnlyList<(string Name, string Path)> apps = AppLaunch.ListStoreApps(dir);
+
+                // .exe only, extension stripped, case-insensitively sorted.
+                Assert.Equal(["MediaPlayer", "notepad", "Spotify"], apps.Select(a => a.Name));
+                Assert.All(apps, a => Assert.True(File.Exists(a.Path)));
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void ListStoreAppsOnAMissingDirectoryIsEmptyNotAThrow()
+        {
+            string missing = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
+
+            Assert.Empty(AppLaunch.ListStoreApps(missing));
+        }
+
+        [Fact]
         public void ExecutionAliasKeepsTheExeNameUnderTheUserWindowsAppsDir()
         {
             string alias = AppLaunch.ExecutionAliasFor(

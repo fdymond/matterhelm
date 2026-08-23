@@ -12,6 +12,12 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Added
 
+- **"Store app…" picker for launch commands** (S10-5): pick Spotify, Media
+  Player, or any Microsoft Store app straight from the Add/Edit command
+  dialog. Store apps live in a folder Browse… cannot open and must be
+  launched through the shortcut Windows keeps for them — the picker fills
+  in the right path for you.
+
 - **Per-install Matter identity + configurable VID/PID** (ADR-009, S10-4).
   Every install used to derive identical endpoint identities from a
   compiled-in seed, so two PCs in one home advertised colliding Matter

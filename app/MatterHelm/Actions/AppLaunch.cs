@@ -81,6 +81,42 @@ public static class AppLaunch
     public static bool IsPackagedAppPath(string path) =>
         path.Contains(@"\Program Files\WindowsApps\", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Where Windows keeps per-user app execution aliases — the launchable
+    /// stand-ins for Microsoft Store (MSIX) apps (S10-5). Store apps cannot be
+    /// started from their package path (see <see cref="Start"/>), and the
+    /// package folder is not browsable, so this directory *is* the practical
+    /// list of Store apps a launch command can target.
+    /// </summary>
+    public static string StoreAppsDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Microsoft",
+        "WindowsApps");
+
+    /// <summary>
+    /// Store apps available to launch, as (display name, full path) sorted by
+    /// name (S10-5). The display name is just the file name without its
+    /// extension — an alias is a zero-byte reparse point with no version
+    /// resources to read a friendlier name from. Never throws; an unreadable
+    /// directory yields an empty list.
+    /// </summary>
+    /// <param name="directory">Override for tests; defaults to <see cref="StoreAppsDirectory"/>.</param>
+    public static IReadOnlyList<(string Name, string Path)> ListStoreApps(string? directory = null)
+    {
+        string dir = directory ?? StoreAppsDirectory;
+        try
+        {
+            return [.. Directory.EnumerateFiles(dir, "*.exe")
+                .Select(path => (Name: System.IO.Path.GetFileNameWithoutExtension(path), Path: path))
+                .OrderBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Log.Warn($"launch: could not list Store apps in '{dir}': {ex.Message}");
+            return [];
+        }
+    }
+
     /// <summary>The per-user app execution alias for a packaged exe: same file name under <c>%LOCALAPPDATA%\Microsoft\WindowsApps</c> (S9-5).</summary>
     public static string ExecutionAliasFor(string packagedPath) =>
         Path.Combine(
