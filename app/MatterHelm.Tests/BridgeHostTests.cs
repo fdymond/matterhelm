@@ -413,6 +413,32 @@ public static class BridgeHostTests
         }
 
         [Theory]
+        [InlineData(MediaKeyName.Play, "mediaPlay")]
+        [InlineData(MediaKeyName.Pause, "mediaPause")]
+        public async Task DedicatedPlayAndPauseDispatchTheirAbsoluteExecutorVerbs(MediaKeyName keyName, string verb)
+        {
+            // S9-1: absolute play/pause (appcommand channel), distinct from
+            // the PlayPause toggle key.
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "abs-key",
+                    Name = "Abs Key",
+                    Action = new MediaKeyActionConfig { KeyName = keyName },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":2,"type":"action","id":"{{ActionId}}","name":"custom","key":"abs-key"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains((verb, (object?)null)),
+                TimeSpan.FromSeconds(10),
+                $"executor to receive {verb}");
+        }
+
+        [Theory]
         [InlineData(MediaKeyName.VolumeUp, 5)]
         [InlineData(MediaKeyName.VolumeDown, -5)]
         public async Task CustomVolumeStepActionsMapToPlusMinusFivePercent(MediaKeyName keyName, int expectedDelta)

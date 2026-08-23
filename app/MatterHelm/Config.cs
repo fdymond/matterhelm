@@ -37,6 +37,12 @@ public enum MediaKeyName
 
     /// <summary>System volume down 5 %.</summary>
     VolumeDown,
+
+    /// <summary>Dedicated play (absolute — starts playback, never pauses; S9-1).</summary>
+    Play,
+
+    /// <summary>Dedicated pause (absolute — pauses playback, never resumes; S9-1).</summary>
+    Pause,
 }
 
 /// <summary>
@@ -701,7 +707,7 @@ public sealed class Config
                         : null;
                 if (keyName is null)
                 {
-                    _log("WARN", $"config.json \"{where}.keyName\" must be one of playPause/next/previous/stop/mute/volumeUp/volumeDown; entry dropped.");
+                    _log("WARN", $"config.json \"{where}.keyName\" must be one of playPause/next/previous/stop/mute/volumeUp/volumeDown/play/pause; entry dropped.");
                     return null;
                 }
 
@@ -861,6 +867,8 @@ public sealed class Config
         "mute" => MediaKeyName.Mute,
         "volumeUp" => MediaKeyName.VolumeUp,
         "volumeDown" => MediaKeyName.VolumeDown,
+        "play" => MediaKeyName.Play,
+        "pause" => MediaKeyName.Pause,
         _ => null,
     };
 

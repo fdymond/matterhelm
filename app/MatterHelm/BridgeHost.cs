@@ -1115,6 +1115,8 @@ public sealed class BridgeHost : IDisposable
         MediaKeyName.Mute => (_executor.Execute("muteToggle"), "mute toggled", null),
         MediaKeyName.VolumeUp => (_executor.Execute("volumeStep", VolumeStepPercent), $"volume up {VolumeStepPercent} %", null),
         MediaKeyName.VolumeDown => (_executor.Execute("volumeStep", -VolumeStepPercent), $"volume down {VolumeStepPercent} %", null),
+        MediaKeyName.Play => (_executor.Execute("mediaPlay"), "play pressed", null),
+        MediaKeyName.Pause => (_executor.Execute("mediaPause"), "pause pressed", null),
         _ => throw new ArgumentOutOfRangeException(nameof(keyName), keyName, null),
     };
 

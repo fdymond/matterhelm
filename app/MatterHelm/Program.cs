@@ -181,14 +181,27 @@ internal static partial class Program
         // nothing else to marshal back to the UI here.
         trayContext.FactoryResetRequested += (_, _) => Task.Run(() => host.FactoryReset());
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
-        trayContext.OverlayPreviewRequested += (_, _) =>
+        // S9-1: preview at the STAGED position (the settings window passes its
+        // unsaved working value), then restore the live-config position once
+        // the flash has faded (hold ~2.5 s + fade ~0.3 s) so real commands
+        // keep rendering where the saved config says until the user saves.
+        var previewRestore = new System.Windows.Forms.Timer { Interval = 3_200 };
+        previewRestore.Tick += (_, _) =>
+        {
+            previewRestore.Stop();
+            overlay.Position = trayContext.Config.Current.OverlayPosition;
+        };
+        trayContext.OverlayPreviewRequested += (_, stagedPosition) =>
         {
             // A preview must show even while the feature toggle is off — the
             // Visible flag only gates Show, so flip it around the one call.
             bool wasVisible = overlay.Visible;
+            overlay.Position = stagedPosition;
             overlay.Visible = true;
             overlay.Show("Overlay preview", "Settings", isError: false);
             overlay.Visible = wasVisible;
+            previewRestore.Stop();
+            previewRestore.Start();
         };
 
         // Exit is the one sanctioned synchronous stop: the sidecar must be

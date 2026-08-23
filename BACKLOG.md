@@ -95,6 +95,12 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S8-5 ✅ | `system` custom-action type + macro step (owner request): startScreenSaver (registry .scr /s), stopScreenSaver (nudge), displaysOff/On, sleep, hibernate, lock, closeForegroundProgram (WM_CLOSE), shutdown, restart — executor verbs + SystemCommands.cs natives; combo in both dialogs | Config parse/round-trip + dispatch + choices-complete tests (app 438 green); no protocol change | S | S8-3 | integrator |
 | S8-4 ✅ | Momentary endpoints dispatch on BOTH OnOff commands (owner hardware report: Google's toggle tile sends `Off` when its state model lags the instant reset → every other tap was dead). `clusterWriteToAction` total; power unchanged. ADR-008 amendment | Mapping/timing tests updated (bridge 328 green + smoke PASS); e2e rows added for tap-tap-tap and "turn off HTPC Next" | S | S8-1 | integrator |
 
+## Sprint 9 — settings UI polish (owner-directed)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S9-1 ✅ | Settings UI polish + dedicated play/pause (owner-directed): footer takes-effect note + per-row ⟳ markers, WinForms scroll-on-focus jump fixed (NonJumpingPanel), overlay Preview at the STAGED position (restores after flash), Action column fills, MediaKeyName.Play/Pause via WM_APPCOMMAND absolute verbs | Demo screenshots verified (footer, markers, scrolled tail renders); app 444 green | S | — | integrator |
+
 ## Proposed (from agent reports, integrator-triaged)
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the
