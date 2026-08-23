@@ -473,12 +473,6 @@ public sealed class BridgeHost : IDisposable
     /// </summary>
     public FactoryResetResult FactoryReset()
     {
-        bool wasRunning;
-        lock (_gate)
-        {
-            wasRunning = _running;
-        }
-
         SetEnabled(false);
 
         if (!TryDeleteStorageDirectory(_storageDir, out string? error))
@@ -496,19 +490,23 @@ public sealed class BridgeHost : IDisposable
             return new FactoryResetResult(false, error);
         }
 
+        // S10-8: always come back up, even if the bridge was off when the reset
+        // ran. A factory reset exists only to re-pair, and an uncommissioned
+        // node that isn't running advertises nothing — the Home app then fails
+        // with "can't find device". Persisted so the tray tick and a later app
+        // restart agree with what the bridge is actually doing.
+        _config.Current.BridgeEnabled = true;
+        _config.Save();
+        SetEnabled(true);
+
         _log(
             "INFO",
             $"bridge: factory reset complete — Matter storage at '{_storageDir}' deleted; "
-                + "open 'Pair with Google Home…' in the tray menu to re-pair.");
+                + "bridge restarted and uncommissioned, a fresh pairing code follows in a few seconds.");
         if (_config.Current.OverlayEnabled)
         {
             _overlaySink?.Invoke(new OverlayContent(
-                "Factory reset complete", "open Pair with Google Home to re-pair", IsError: false));
-        }
-
-        if (wasRunning)
-        {
-            SetEnabled(true);
+                "Factory reset complete", "restarting — a new pairing code is coming", IsError: false));
         }
 
         return new FactoryResetResult(true, null);

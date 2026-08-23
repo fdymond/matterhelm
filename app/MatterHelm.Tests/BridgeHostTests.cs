@@ -874,11 +874,12 @@ public static class BridgeHostTests
         }
 
         [Fact]
-        public void FactoryResetOnADisabledBridgeDeletesExistingStorageAndStaysDisabled()
+        public async Task FactoryResetOnADisabledBridgeDeletesStorageAndBringsTheBridgeUp()
         {
-            // S3-2: "disabled-bridge path just deletes" — no sidecar was ever
-            // started in this test, so SetEnabled(false) inside FactoryReset
-            // is a no-op; only the directory delete does anything.
+            // S10-8: a reset exists only to re-pair, so it now STARTS a bridge
+            // that was off (and persists that) - an uncommissioned node that
+            // is not running advertises nothing, and the Home app answers
+            // "can't find device". Was S3-2's "just deletes, stays disabled".
             string storageDir = Path.Combine(_dir, "matter");
             Directory.CreateDirectory(storageDir);
             File.WriteAllText(Path.Combine(storageDir, "fabric.json"), "{}");
@@ -890,8 +891,13 @@ public static class BridgeHostTests
             Assert.True(result.Ok);
             Assert.Null(result.Error);
             Assert.False(Directory.Exists(storageDir), "storage dir must be gone");
-            Assert.Equal(BridgeState.Disabled, host.State);
             Assert.True(_log.Contains("INFO", "factory reset complete"));
+            Assert.True(_config.Current.BridgeEnabled, "the reset must persist the bridge as enabled");
+
+            await TestSupport.WaitUntilAsync(
+                () => host.State == BridgeState.Connected,
+                TimeSpan.FromSeconds(10),
+                "bridge to come up after a reset that started from disabled");
         }
 
         [Fact]
@@ -930,7 +936,7 @@ public static class BridgeHostTests
             lock (_gate)
             {
                 Assert.Contains(
-                    new OverlayContent("Factory reset complete", "open Pair with Google Home to re-pair", false),
+                    new OverlayContent("Factory reset complete", "restarting — a new pairing code is coming", false),
                     _overlay);
             }
 
