@@ -96,8 +96,8 @@ tray, scan the pairing QR with the Google Home app, name your devices.
 ## Building from source
 
 ```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + 328 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 463 tests
+cd bridge && npm ci && npm run verify        # sidecar: lint + types + 342 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 499 tests
 ./build.ps1                                  # dist/: portable folder, SEA sidecar
 ```
 
@@ -107,9 +107,11 @@ on every push (bridge verify + coverage on ubuntu/windows, app build + tests
 
 ## Status
 
-**v0.3.0 released** (Sprints 9-10: helm icon, overlay theming/opacity,
-settings restructure, resource monitoring, Windows installer). Commissioned and exercised against real Nest hub hardware.
-791 automated tests across both processes, measured resource budgets
+**v0.4.0 released** (per-install Matter identity, configurable VID/PID,
+Store-app launch picker; Sprints 9-10 before it: helm icon, overlay
+theming/opacity, settings restructure, resource monitoring, Windows
+installer). Commissioned and exercised against real Nest hub hardware.
+841 automated tests across both processes, measured resource budgets
 (`docs/adr/007`), and a scripted hardware E2E checklist
 (`docs/e2e-log.md`). See [`CHANGELOG.md`](CHANGELOG.md) for history and
 [`BACKLOG.md`](BACKLOG.md) for what's next.
