@@ -1,0 +1,56 @@
+# Dependency updates (S10-3). Grouped weekly PRs so a quiet week costs one
+# review, not six. Works while the repo is private; the security-alert feed
+# is a separate repo setting (Settings → Advanced Security).
+version: 2
+updates:
+  # Matter sidecar. matter.js is pinned exactly and is the one dependency
+  # whose upgrades carry real behavioural risk (ADR-006 bumped 0.17.6→0.17.7
+  # deliberately), so it gets its own PR rather than riding in a group.
+  - package-ecosystem: npm
+    directory: /bridge
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-tooling:
+        patterns:
+          - "@types/*"
+          - "eslint*"
+          - "typescript*"
+          - "vitest"
+          - "@vitest/*"
+          - "prettier"
+          - "esbuild"
+          - "tsx"
+          - "postject"
+      runtime:
+        patterns:
+          - "zod"
+          - "pino*"
+          - "ws"
+        exclude-patterns:
+          - "@matter/*"
+
+  # Tray app (NuGet: QRCoder + test/analyzer packages).
+  - package-ecosystem: nuget
+    directory: /app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      test-tooling:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.*"
+          - "coverlet.*"
+
+  # CI/release workflow actions (the Node-20 deprecation that forced the
+  # v4→v7 bumps would have surfaced here automatically).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"

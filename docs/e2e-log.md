@@ -19,18 +19,43 @@ new **Run** section per pass (don't overwrite prior evidence); carry
 forward a short note in each new run's header on what changed since the
 last one.
 
-## Run 1 header (build prepared 2026-08-09 by the integrator; checklist execution pending the human)
+## Run 1 header (build prepared 2026-08-23 by the integrator; checklist execution pending the human)
+
+The v0.1.0 build originally prepared for this run was superseded before the
+human pass ran, so the header now names the **v0.3.0 release build** — the
+one currently installed and running on the HTPC (verified 2026-08-23: the
+running process is `dist\MatterHelm.exe`, ProductVersion `0.3.0+4090e14`,
+with `dist\sidecar\bridge.exe` alongside). All rows below still apply as
+written; rows added since v0.1.0 are marked with their story in-section
+(S8-4 repeat/tap behaviour, S9 overlay theme/opacity, S9 system commands).
 
 | Field | Value |
 |---|---|
 | Run date | *(fill in when executed)* |
-| Build under test | packaged `dist\` from `build.ps1` at tag `v0.1.0` (commit 95eb9b3), Node SEA sidecar layout (`sidecar\bridge.exe`) |
-| App version | 0.1.0 (`MatterHelm.exe` ProductVersion `0.1.0+95eb9b3`) |
-| Bridge version | 0.1.0 (matter.js 0.17.7, bundled) |
+| Build under test | packaged `dist\` from `build.ps1` at tag `v0.3.0` (commit 4090e14), Node SEA sidecar layout (`sidecar\bridge.exe`) — identical bits to the released `matterhelm-v0.3.0-win-x64.zip` |
+| App version | 0.3.0 (`MatterHelm.exe` ProductVersion `0.3.0+4090e14`) |
+| Bridge version | 0.3.0 (matter.js 0.17.7, bundled) |
 | Windows build | Windows 11 Enterprise 25H2, build 26200 |
 | Hub model | Google Nest Hub (2nd gen) |
 | Home app version | *(fill in from the phone when executed)* |
 | Tester | fdymond |
+
+## Distribution (S10-1 — first release shipping an installer)
+
+Integrator note 2026-08-23: the installer's mechanics were verified locally
+against the v0.2.0 dist (silent install → app boots and re-establishes the
+hub session → silent uninstall removes files/Start-menu/Run key while
+`%APPDATA%\MatterHelm` survives). These rows re-verify the **released**
+v0.3.0 assets through the normal (non-silent) user path.
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Download both assets from the v0.3.0 release; check them against `SHA256SUMS.txt` (`certutil -hashfile <file> SHA256`) | Both hashes match the manifest | | | |
+| Run `MatterHelm-Setup-0.3.0.exe` normally | SmartScreen may warn (unsigned — "More info" → "Run anyway"); no admin prompt; wizard completes; Start-menu entry exists | | | |
+| Tick "Start MatterHelm when you sign in", finish, let it launch | App starts; helm tray icon appears | | | |
+| Sign out / sign back in (or reboot) | MatterHelm starts automatically | | | |
+| Uninstall via Settings → Apps | App and Start-menu entry removed; **pairing and settings survive** (`%APPDATA%\MatterHelm` intact) | | | |
+| Unzip `matterhelm-v0.3.0-win-x64.zip` elsewhere and run `MatterHelm.exe` | Runs portably against the same `%APPDATA%` state — still paired, no re-pair needed | | | |
 
 ## Pairing
 
@@ -97,7 +122,16 @@ The rows below re-verify tap-tap-tap behavior on the S8-4 build.
 
 | Step | Expected | Observed | Verdict | Timestamp (UTC) |
 |---|---|---|---|---|
-| Settings → Devices & Commands → add a **key sequence** custom command (e.g. `Ctrl+Shift+V` into a text field/editor open on screen), save | New tile appears; voice + tile send the exact chord to the focused window (visible effect, e.g. paste-as-plain-text) | | | |
+| Settings → Devices (Custom devices) → add a **key sequence** custom command (e.g. `Ctrl+Shift+V` into a text field/editor open on screen), save | New tile appears; voice + tile send the exact chord to the focused window (visible effect, e.g. paste-as-plain-text) | | | |
+
+## Macros and system commands (S8-3 / S8-5 / S9-5 / S9-8)
+
+| Step | Expected | Observed | Verdict | Timestamp (UTC) |
+|---|---|---|---|---|
+| Add a **macro** (Command sequence) with a wait, e.g. launch a program → Wait 2000 ms → `F11`, and fire it | All steps run in order; the overlay reads "running N steps" at the start and the outcome when it finishes; other commands stay responsive *during* the wait (S8-6 — try a volume command mid-macro) | | | |
+| Add a **system command**: Lock the PC; fire it by voice | Workstation locks | | | |
+| Add a **system command**: Start screensaver, fire it; then fire a **Stop screensaver** command (S9-8 — the previous nudge implementation did nothing) | Screensaver starts; the stop command ends it within ~1 s | | | |
+| Add a **launch** command targeting a **Microsoft Store app** (e.g. Spotify), fire it (S9-5 — package paths used to fail "Access is denied") | The app starts; the log shows the execution-alias redirect line | | | |
 
 ## Overlay behavior
 
@@ -105,7 +139,10 @@ The rows below re-verify tap-tap-tap behavior on the S8-4 build.
 |---|---|---|---|---|
 | Fire several commands in quick succession (e.g. volume up/down a few times fast) | Overlay updates in place without flicker, stacking, or stale text; never steals focus or blocks a click underneath it | | | |
 | Move mouse / click through where the overlay is displayed | Click passes through to whatever is underneath (click-through, non-activating) | | | |
-| Settings → Overlay → change position, Preview | Overlay reappears at the new screen position immediately | | | |
+| Settings → Overlay → change position, Preview | Overlay previews at the **staged** position immediately (S9-1), and returns to the saved position after the flash unless you save | | | |
+| Settings → Overlay → set theme **Light**, Preview; then **Dark**, Preview (S9-4/S9-5) | Each preview renders in the staged theme — light panel with dark text, then the dark panel | | | |
+| Settings → Overlay → drag **opacity** to ~50 %, Preview (S9-7) | The preview panel is visibly translucent; text stays legible | | | |
+| With theme on **Follow system**, flip Windows light/dark (Settings → Personalization → Colors), then fire a command | The next overlay flash matches the new Windows theme without restarting the app | | | |
 
 ## State reflection (local change → Home app)
 
