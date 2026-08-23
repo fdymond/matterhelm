@@ -19,6 +19,10 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Changed
 
+- Devices & Commands compacted (S9-2): each built-in command is now ONE row
+  - an enabled checkbox at the start of the line (untick greys the row and
+  its name box - the disabled state reads at a glance), the description,
+  and the device-name editor inline. Ten rows became five.
 - Settings polish (S9-1): the per-row "takes effect" notes are factored into
   one footer message (rows carry a small marker instead); the overlay
   **Preview** now shows at the position you have staged in the window, not
@@ -27,6 +31,11 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- Settings scrollbar no longer ranges far past the last row (the S9-2
+  "excessive white space": a filler layout row inflated the scrollable
+  height), and the mouse wheel now scrolls the page under the cursor even
+  while an editor has focus - hover-scrolling can no longer spin a number
+  field mid-scroll.
 - Settings pages no longer snap their scroll position when a control is
   clicked or tabbed to (the WinForms scroll-on-focus jump; S9-1).
 

@@ -27,6 +27,15 @@ public enum SettingKind
     /// <summary>The custom-command list editor (ListView + add/edit/remove).</summary>
     CustomCommands,
 
+    /// <summary>
+    /// One built-in command as a single compact row (S9-2): a leading enabled
+    /// checkbox (unticked greys the row), the label/description stack, and
+    /// the device-name text editor. <see cref="SettingDescriptor.Get"/>/<c>Set</c>
+    /// carry the name; <see cref="SettingDescriptor.GetEnabled"/>/<c>SetEnabled</c>
+    /// carry the published flag.
+    /// </summary>
+    CommandRow,
+
     /// <summary>Read-only informational text.</summary>
     ReadOnlyText,
 
@@ -75,6 +84,12 @@ public sealed class SettingDescriptor
 
     /// <summary>Writes an edited value into a working copy; null for kinds without a value.</summary>
     public Action<BridgeConfig, object?>? Set { get; init; }
+
+    /// <summary>Reads the enabled flag for <see cref="SettingKind.CommandRow"/>; null for other kinds.</summary>
+    public Func<BridgeConfig, bool>? GetEnabled { get; init; }
+
+    /// <summary>Writes the enabled flag for <see cref="SettingKind.CommandRow"/>; null for other kinds.</summary>
+    public Action<BridgeConfig, bool>? SetEnabled { get; init; }
 }
 
 /// <summary>One left-nav category of the settings window with its ordered setting rows.</summary>
@@ -509,16 +524,14 @@ public sealed class SettingsViewModel
             Title = "Devices & Commands",
             Settings =
             [
-                BuiltinName("speaker-name", "Speaker name", "Google Home device name for volume and mute.", c => c.Commands.Speaker),
-                BuiltinEnabled("speaker-enabled", "Speaker enabled", "Publish the speaker device to Google Home.", c => c.Commands.Speaker),
-                BuiltinName("play-pause-name", "Play/pause name", "Google Home device name for the play/pause command.", c => c.Commands.PlayPause),
-                BuiltinEnabled("play-pause-enabled", "Play/pause enabled", "Publish the play/pause device to Google Home.", c => c.Commands.PlayPause),
-                BuiltinName("next-name", "Next name", "Google Home device name for the next-track command.", c => c.Commands.Next),
-                BuiltinEnabled("next-enabled", "Next enabled", "Publish the next-track device to Google Home.", c => c.Commands.Next),
-                BuiltinName("previous-name", "Previous name", "Google Home device name for the previous-track command.", c => c.Commands.Previous),
-                BuiltinEnabled("previous-enabled", "Previous enabled", "Publish the previous-track device to Google Home.", c => c.Commands.Previous),
-                BuiltinName("power-name", "Power name", "Google Home device name for the power switch.", c => c.Commands.Power),
-                BuiltinEnabled("power-enabled", "Power enabled", "Publish the power device to Google Home.", c => c.Commands.Power),
+                // S9-2 compact rows: one row per built-in — leading enabled
+                // checkbox + device-name editor. Ids keep the historical
+                // "-name" suffix (validation errors target them).
+                BuiltinCommand("speaker-name", "Speaker", "Google Home device name for volume and mute; untick to hide it from Google Home.", c => c.Commands.Speaker),
+                BuiltinCommand("play-pause-name", "Play/pause", "Google Home device name for the play/pause command; untick to hide it.", c => c.Commands.PlayPause),
+                BuiltinCommand("next-name", "Next", "Google Home device name for the next-track command; untick to hide it.", c => c.Commands.Next),
+                BuiltinCommand("previous-name", "Previous", "Google Home device name for the previous-track command; untick to hide it.", c => c.Commands.Previous),
+                BuiltinCommand("power-name", "Power", "Google Home device name for the power switch; untick to hide it.", c => c.Commands.Power),
                 new SettingDescriptor
                 {
                     Id = "power-off-action",
@@ -664,28 +677,18 @@ public sealed class SettingsViewModel
         },
     ];
 
-    private static SettingDescriptor BuiltinName(
+    private static SettingDescriptor BuiltinCommand(
         string id, string label, string description, Func<BridgeConfig, BuiltinCommandConfig> builtin) => new()
     {
         Id = id,
         Label = label,
         Description = description,
-        Kind = SettingKind.Text,
+        Kind = SettingKind.CommandRow,
         NeedsBridgeRestart = true,
         Get = c => builtin(c).Name,
         Set = (c, v) => builtin(c).Name = (string)v!,
-    };
-
-    private static SettingDescriptor BuiltinEnabled(
-        string id, string label, string description, Func<BridgeConfig, BuiltinCommandConfig> builtin) => new()
-    {
-        Id = id,
-        Label = label,
-        Description = description,
-        Kind = SettingKind.Toggle,
-        NeedsBridgeRestart = true,
-        Get = c => builtin(c).Enabled,
-        Set = (c, v) => builtin(c).Enabled = (bool)v!,
+        GetEnabled = c => builtin(c).Enabled,
+        SetEnabled = (c, v) => builtin(c).Enabled = v,
     };
 
     private static string ToWireName(PowerOffAction action) => action switch

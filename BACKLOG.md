@@ -100,6 +100,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
 | S9-1 ✅ | Settings UI polish + dedicated play/pause (owner-directed): footer takes-effect note + per-row ⟳ markers, WinForms scroll-on-focus jump fixed (NonJumpingPanel), overlay Preview at the STAGED position (restores after flash), Action column fills, MediaKeyName.Play/Pause via WM_APPCOMMAND absolute verbs | Demo screenshots verified (footer, markers, scrolled tail renders); app 444 green | S | — | integrator |
+| S9-2 ✅ | Devices & Commands compaction + scroll polish (owner-directed): CommandRow kind merges name+enabled into one row (leading checkbox, untick greys row + disables name box), filler row removed (scrollbar matched to content), WM_MOUSEWHEEL message filter scrolls the hovered page regardless of focus | Demo screenshots verified (5 compact rows, page nearly fits unscrolled); app 445 green | S | S9-1 | integrator |
 
 ## Proposed (from agent reports, integrator-triaged)
 

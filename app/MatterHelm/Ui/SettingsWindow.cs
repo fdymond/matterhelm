@@ -202,6 +202,70 @@ public sealed partial class SettingsWindow : Form
 
         _navList.SelectedIndex = 0;
         RefreshFromViewModel();
+
+        // S9-2: route the mouse wheel to the settings page under the cursor.
+        // Stock WinForms sends wheel input to the FOCUSED control, so with
+        // focus in an editor the page would not scroll (and hovering a
+        // NumericUpDown mid-scroll would spin its value instead) — the last
+        // piece of the reported "sticky" scrolling.
+        _wheelFilter = new WheelToHoveredPageFilter(this);
+        Application.AddMessageFilter(_wheelFilter);
+    }
+
+    private WheelToHoveredPageFilter? _wheelFilter;
+
+    /// <summary>
+    /// Message filter scrolling the hovered category page on WM_MOUSEWHEEL
+    /// while the settings window is active (see constructor note). Wheel
+    /// input over anything else (nav list, custom-command ListView, open
+    /// dropdowns) passes through untouched.
+    /// </summary>
+    private sealed partial class WheelToHoveredPageFilter(SettingsWindow owner) : IMessageFilter
+    {
+        private const int WmMouseWheel = 0x020A;
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg != WmMouseWheel || Form.ActiveForm != owner)
+            {
+                return false;
+            }
+
+            // Find the control under the cursor and walk up to a category page.
+            Point cursor = Cursor.Position;
+            Control? under = Control.FromChildHandle(WindowFromPoint(new NativePoint(cursor.X, cursor.Y)));
+            NonJumpingPanel? page = null;
+            for (Control? walk = under; walk is not null; walk = walk.Parent)
+            {
+                if (walk is NonJumpingPanel candidate)
+                {
+                    page = candidate;
+                    break;
+                }
+            }
+
+            if (page is null || !page.VerticalScroll.Visible)
+            {
+                return false;
+            }
+
+            // Three text lines per notch, scaled like the rest of the layout.
+            int notches = (short)((long)m.WParam >> 16) / 120;
+            int step = owner.S(20) * Math.Max(1, Math.Min(SystemInformation.MouseWheelScrollLines, 10));
+            int target = Math.Clamp(
+                page.VerticalScroll.Value - (notches * step),
+                page.VerticalScroll.Minimum,
+                page.VerticalScroll.Maximum);
+            page.AutoScrollPosition = new Point(0, target);
+            return true; // swallowed — never spins a hovered editor's value
+        }
+
+        /// <summary>Blittable Win32 POINT (System.Drawing.Point needs runtime marshalling, which LibraryImport rejects).</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        private readonly record struct NativePoint(int X, int Y);
+
+        [LibraryImport("user32.dll")]
+        private static partial nint WindowFromPoint(NativePoint point);
     }
 
     /// <summary>Re-reads every editor control from <see cref="SettingsViewModel.Working"/>. Public for demo/E2E walks that edit the view-model directly.</summary>
@@ -299,6 +363,12 @@ public sealed partial class SettingsWindow : Form
     {
         if (disposing)
         {
+            if (_wheelFilter is not null)
+            {
+                Application.RemoveMessageFilter(_wheelFilter);
+                _wheelFilter = null;
+            }
+
             _savedFlashTimer.Dispose();
             _toolTip.Dispose();
             _secondaryFont.Dispose();
@@ -506,16 +576,82 @@ public sealed partial class SettingsWindow : Form
         int rowIndex = 0;
         foreach (SettingDescriptor setting in category.Settings)
         {
-            Control row = setting.Kind == SettingKind.CustomCommands
-                ? BuildCustomCommandsBlock(setting)
-                : BuildSettingRow(setting);
+            Control row = setting.Kind switch
+            {
+                SettingKind.CustomCommands => BuildCustomCommandsBlock(setting),
+                SettingKind.CommandRow => BuildCommandRow(setting),
+                _ => BuildSettingRow(setting),
+            };
             _settingRows[setting.Id] = row;
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.Controls.Add(row, 0, rowIndex++);
         }
 
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // filler pins rows to the top
+        // No filler row: AutoSize rows already stack from the top, and a
+        // Percent-100 filler inflates the AutoScroll virtual height — the
+        // S9-2 "excessive white space below the settings" (the scrollbar
+        // ranged far past the last row).
         return panel;
+    }
+
+    /// <summary>
+    /// S9-2 compact built-in command row: leading enabled checkbox, then the
+    /// label/description stack, then the device-name editor. Unticking greys
+    /// the row text and disables the name box — the disabled state is legible
+    /// at a glance without a separate "… enabled" row.
+    /// </summary>
+    private TableLayoutPanel BuildCommandRow(SettingDescriptor setting)
+    {
+        var row = new TableLayoutPanel
+        {
+            ColumnCount = 3,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Margin = SP(0, 6, 0, 6),
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var check = new CheckBox { AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Margin = SP(0, 2, 8, 0) };
+        row.Controls.Add(check, 0, 0);
+
+        TableLayoutPanel stack = BuildTextStack(setting);
+        var title = (Label)stack.Controls[0];
+        var description = (Label)stack.Controls[1];
+        row.Controls.Add(stack, 1, 0);
+
+        var nameBox = new TextBox { Width = S(200), Anchor = AnchorStyles.Right | AnchorStyles.Top, Margin = SP(8, 2, 0, 0) };
+        row.Controls.Add(nameBox, 2, 0);
+
+        void ApplyEnabledVisuals(bool enabled)
+        {
+            title.ForeColor = enabled ? SystemColors.ControlText : SystemColors.GrayText;
+            description.Enabled = enabled; // GrayText label: Enabled=false dims it a step further
+            nameBox.Enabled = enabled;
+        }
+
+        check.CheckedChanged += (_, _) =>
+        {
+            ApplyEnabledVisuals(check.Checked);
+            if (_refreshing)
+            {
+                return;
+            }
+
+            setting.SetEnabled!(_vm.Working, check.Checked);
+            UpdateValidationAndSaveState();
+        };
+        nameBox.TextChanged += (_, _) => OnEdited(setting, nameBox.Text);
+
+        _editorRefreshers.Add(() =>
+        {
+            check.Checked = setting.GetEnabled!(_vm.Working);
+            nameBox.Text = (string?)setting.Get!(_vm.Working) ?? "";
+            ApplyEnabledVisuals(check.Checked);
+        });
+        return row;
     }
 
     private TableLayoutPanel BuildSettingRow(SettingDescriptor setting)
