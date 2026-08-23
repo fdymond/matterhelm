@@ -665,6 +665,19 @@ public sealed class ConfigTests : IDisposable
         }
 
         [Fact]
+        public void BridgeNameLoadsRoundTripsAndDefaultsOnBlank()
+        {
+            // S10-6: the bridge's own Google Home name.
+            WriteConfig("""{"bridgeName": "  Office Bridge  "}""");
+            Assert.Equal("Office Bridge", NewConfig().Current.BridgeName);  // trimmed
+
+            WriteConfig("""{"bridgeName": "   "}""");
+            Config blank = NewConfig();
+            Assert.Equal("HTPC Matter Bridge", blank.Current.BridgeName);
+            Assert.True(Log.Contains("WARN", "bridgeName"));
+        }
+
+        [Fact]
         public void MatterIdentityFieldsRoundTripThroughSave()
         {
             Config config = NewConfig();

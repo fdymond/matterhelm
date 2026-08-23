@@ -88,6 +88,7 @@ async function main(): Promise<void> {
     // S10-4: identity + vendor/product, each defaulting inside bridge.ts when
     // the tray app sends nothing (keeps a standalone sidecar run unchanged).
     ...(config.uniqueIdSeed === undefined ? {} : { uniqueIdSeed: config.uniqueIdSeed }),
+    ...(config.bridgeName === undefined ? {} : { bridgeName: config.bridgeName }),
     ...(config.vendorId === undefined ? {} : { vendorId: config.vendorId }),
     ...(config.productId === undefined ? {} : { productId: config.productId }),
     onClusterWrite: makeActionDispatcher({

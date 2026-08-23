@@ -229,6 +229,11 @@ public sealed class SettingsViewModel
             errors.Add(new SettingsValidationError("overlay-opacity", "Overlay opacity must be between 30 and 100 %."));
         }
 
+        if (string.IsNullOrWhiteSpace(Working.BridgeName))
+        {
+            errors.Add(new SettingsValidationError("bridge-name", "Bridge name must not be empty."));
+        }
+
         ValidateBuiltinName(errors, "speaker-name", Working.Commands.Speaker.Name);
         ValidateBuiltinName(errors, "play-pause-name", Working.Commands.PlayPause.Name);
         ValidateBuiltinName(errors, "next-name", Working.Commands.Next.Name);
@@ -471,6 +476,7 @@ public sealed class SettingsViewModel
         into.PowerOffAction = from.PowerOffAction;
         into.OverlayEnabled = from.OverlayEnabled;
         into.OverlayPosition = from.OverlayPosition;
+        into.BridgeName = from.BridgeName;
         into.VendorId = from.VendorId;
         into.ProductId = from.ProductId;
         into.UniqueIdSeed = from.UniqueIdSeed;
@@ -544,6 +550,19 @@ public sealed class SettingsViewModel
                 // leading checkbox already reads as "published to Google
                 // Home"). Ids keep the historical "-name" suffix (validation
                 // errors target them).
+                new SettingDescriptor
+                {
+                    // S10-6: the bridge's own name in Google Home. Distinguishes
+                    // several MatterHelm bridges in one home; a label, not
+                    // identity, so changing it never re-pairs.
+                    Id = "bridge-name",
+                    Label = "Bridge name",
+                    Description = "What Google Home calls this PC's bridge — handy when more than one PC runs MatterHelm.",
+                    Kind = SettingKind.Text,
+                    NeedsBridgeRestart = true,
+                    Get = c => c.BridgeName,
+                    Set = (c, v) => c.BridgeName = (string)v!,
+                },
                 new SettingDescriptor
                 {
                     Id = "google-home-devices",

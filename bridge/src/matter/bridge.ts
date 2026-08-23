@@ -79,13 +79,30 @@ export const DEFAULT_PRODUCT_ID = 0x8000;
 const DEFAULT_UNIQUE_ID_SEED = "htpc-matter-bridge";
 
 // S7-2 rename note: NODE_ID and the uniqueId seed are commissioning-critical
-// identity (changing either re-adds every device in Google Home), and the
-// vendor/product names are the paired bridge's user-facing Basic Information
-// strings — all three deliberately keep their pre-MatterHelm values. Only
-// packaging/docs carry the new product name.
+// identity (changing either re-adds every device in Google Home), so both
+// deliberately keep their pre-MatterHelm values.
 const NODE_ID = "htpc-bridge";
 const VENDOR_NAME = "HTPC Bridge";
-const PRODUCT_NAME = "HTPC Matter Bridge";
+
+/**
+ * Default bridge display name — the root node's nodeLabel/productName, i.e.
+ * what Google Home shows for the BRIDGE itself (S10-6). Unlike NODE_ID and
+ * the seed this is a plain label, not identity: changing it is safe for an
+ * already-paired bridge (Google may keep showing the old name until the
+ * device is re-added). Configurable so several bridges in one home are
+ * tellable apart.
+ */
+export const DEFAULT_BRIDGE_NAME = "HTPC Matter Bridge";
+
+/**
+ * The bridge display name to publish: a trimmed non-empty override, else
+ * { DEFAULT_BRIDGE_NAME}. Explicit rather than `||` so an all-whitespace
+ * name can never reach Google Home as a blank device label.
+ */
+function resolveBridgeName(configured: string | undefined): string {
+  const trimmed = configured?.trim();
+  return trimmed === undefined || trimmed === "" ? DEFAULT_BRIDGE_NAME : trimmed;
+}
 
 /** Suppression keys — one FIFO queue per locally-written attribute. */
 const SPEAKER_ONOFF = "speaker.onOff";
@@ -122,6 +139,8 @@ export interface BridgeOptions {
   productId?: number;
   /** Endpoint-identity seed; keep stable across restarts (see devices.ts). */
   uniqueIdSeed?: string;
+  /** Bridge display name (S10-6); unset = {@link DEFAULT_BRIDGE_NAME}. */
+  bridgeName?: string;
   /**
    * Called for every externally-caused cluster write (never for the local
    * writes this module itself applies — see module doc on echo suppression).
@@ -353,7 +372,7 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     vendorId: options.vendorId ?? DEFAULT_VENDOR_ID,
     productId: options.productId ?? DEFAULT_PRODUCT_ID,
     vendorName: VENDOR_NAME,
-    productName: PRODUCT_NAME,
+    productName: resolveBridgeName(options.bridgeName),
     serialNumber: identity.serialNumber,
     uniqueId: identity.uniqueId,
   });
