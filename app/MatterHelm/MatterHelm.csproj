@@ -7,7 +7,7 @@
     <AssemblyName>MatterHelm</AssemblyName>
     <!-- Product SemVer (CHANGELOG.md); surfaced via Assembly.GetName().Version
          in the tray About text and the diagnostics-bundle manifest. -->
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

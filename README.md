@@ -65,8 +65,9 @@ app/     C# .NET 10 WinForms tray app     (supervisor + executor + UI)
 
 Download from [Releases](https://github.com/fdymond/matterhelm/releases/latest):
 
-- **Installer** — `MatterHelm-Setup-<version>.exe`: installs to Program
-  Files, Start-menu entry, optional start-with-Windows, clean uninstall.
+- **Installer** — `MatterHelm-Setup-<version>.exe`: per-user install (no
+  admin prompt), Start-menu entry, optional start-with-Windows, clean
+  uninstall that keeps your pairing and settings.
 - **Portable** — `matterhelm-<version>-win-x64.zip`: unzip anywhere and run
   `MatterHelm.exe`. Nothing else to install — the Matter sidecar ships as a
   bundled single exe; no Node.js or .NET runtime needed.
@@ -106,8 +107,8 @@ on every push (bridge verify + coverage on ubuntu/windows, app build + tests
 
 ## Status
 
-**v0.2.0 released; Sprint 9 (settings/overlay polish, launch prep) on
-`main`.** Commissioned and exercised against real Nest Hub 2 hardware.
+**v0.3.0 released** (Sprints 9-10: helm icon, overlay theming/opacity,
+settings restructure, resource monitoring, Windows installer). Commissioned and exercised against real Nest Hub 2 hardware.
 791 automated tests across both processes, measured resource budgets
 (`docs/adr/007`), and a scripted hardware E2E checklist
 (`docs/e2e-log.md`). See [`CHANGELOG.md`](CHANGELOG.md) for history and

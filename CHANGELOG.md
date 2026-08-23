@@ -10,6 +10,17 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] — 2026-08-23
+
+Sprints 9-10: settings/overlay refinement and public-launch readiness. New
+helm app icon (trademark-safe), overlay theming and opacity, dedicated
+play/pause, restructured settings, live resource monitoring, a Windows
+installer alongside the portable zip, and docs rebuilt for a public
+audience. No protocol, identity, or pairing change - updating needs no
+re-pair.
+
 ### Added
 
 - **Windows installer** (S10-1): `MatterHelm-Setup-<version>.exe` (Inno
