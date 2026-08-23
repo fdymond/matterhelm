@@ -49,6 +49,11 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- **"Stop screensaver" now works** (S9-8): it used a net-zero 1 px mouse
+  nudge that sits below Windows' anti-jitter dismissal threshold, so it did
+  nothing. It now closes the running `.scr` process gracefully - which also
+  covers savers our own "Start screensaver" launched (invisible to
+  `SPI_GETSCREENSAVERRUNNING`).
 - **Store-app launches** (S9-5): launching a Microsoft Store (MSIX) app by
   its package path (e.g. Spotify under `Program FilesWindowsApps`) failed
   with "Access is denied" - Windows refuses CreateProcess there by design.
