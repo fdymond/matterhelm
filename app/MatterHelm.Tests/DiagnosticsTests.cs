@@ -245,6 +245,27 @@ public static class DiagnosticsTests
             [.. File.ReadLines(path).Where(l => l.Length > 0)];
 
         [Fact]
+        public void ResourceGaugesLandInEveryWrittenSnapshot()
+        {
+            // S9-6: memory/handle truth rides on each written line.
+            using (var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1)))
+            {
+                listener.Flush();
+            }
+
+            string path = Assert.Single(Directory.EnumerateFiles(_dir, "metrics-*.jsonl"));
+            string line = File.ReadLines(path).Last(l => l.Length > 0);
+            using JsonDocument document = JsonDocument.Parse(line);
+            JsonElement gauges = document.RootElement.GetProperty("gauges");
+
+            // Real process values: all strictly positive.
+            Assert.True(gauges.GetProperty("process_private_bytes").GetInt64() > 0);
+            Assert.True(gauges.GetProperty("gc_heap_bytes").GetInt64() > 0);
+            Assert.True(gauges.GetProperty("process_handle_count").GetInt64() > 0);
+            Assert.True(gauges.GetProperty("process_thread_count").GetInt64() > 0);
+        }
+
+        [Fact]
         public void IdenticalIdleFlushesAreSkippedButAChangeStillAppends()
         {
             using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1));
