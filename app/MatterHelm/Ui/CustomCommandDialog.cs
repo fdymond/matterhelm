@@ -128,6 +128,11 @@ public sealed class CustomCommandDialog : Form
         _pathBox.TextChanged += (_, _) => Revalidate();
         var browseButton = new Button { Text = "Browse…", AutoSize = true };
         browseButton.Click += (_, _) => BrowseForProgram();
+        // S10-5: Store (MSIX) apps live in a non-browsable package folder and
+        // must be launched through their execution alias - Browse… cannot
+        // reach them, so they get their own picker.
+        var storeButton = new Button { Text = "Store app…", AutoSize = true };
+        storeButton.Click += (_, _) => PickStoreApp();
         var pathRow = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.LeftToRight,
@@ -138,6 +143,7 @@ public sealed class CustomCommandDialog : Form
         };
         pathRow.Controls.Add(_pathBox);
         pathRow.Controls.Add(browseButton);
+        pathRow.Controls.Add(storeButton);
         _argsBox = new TextBox { Width = S(240) };
         _launchRows = SubGrid(grid);
         AddRow(_launchRows, "Program", pathRow);
@@ -462,6 +468,16 @@ public sealed class CustomCommandDialog : Form
 
         // Unmappable non-modifier keys are swallowed and capture stays armed.
         return true;
+    }
+
+    /// <summary>S10-5: fills the path with a Store app's execution alias (the only way a packaged app can be started).</summary>
+    private void PickStoreApp()
+    {
+        using var picker = new StoreAppPickerDialog();
+        if (picker.ShowDialog(this) == DialogResult.OK && picker.SelectedPath is { } path)
+        {
+            _pathBox.Text = path;
+        }
     }
 
     private void BrowseForProgram()

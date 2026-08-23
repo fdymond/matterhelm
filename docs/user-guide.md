@@ -214,8 +214,10 @@ click **Save** (closing the window with unsaved changes asks first).
       use, if you want a second speaker/transport device under a different
       name).
     - **Launch** — starts a program (e.g. your media center's exe) with
-      optional arguments. The program's path must exist on disk when you
-      save.
+      optional arguments. **Browse…** picks a normal program; **Store app…**
+      lists apps installed from the Microsoft Store (Spotify, Media Player,
+      …), which cannot be launched from their own install folder and need
+      the shortcut Windows keeps for them. The path must exist when you save.
     - **Key sequence** — sends an arbitrary keyboard chord (e.g.
       `Ctrl+Shift+V`, or a single key like `F11`) to whatever window has
       focus. Click into the sequence field and press the keys you want —
