@@ -49,19 +49,41 @@ app/     C# .NET 10 WinForms tray app     (supervisor + executor + UI)
 - **Lean** — measured budgets, enforced: tray ≈ 15 MB private, one sidecar
   process ≈ 95 MB, idle CPU < 0.5 % (see `docs/adr/007`).
 
-## Requirements
+## Setup from scratch
 
-1. **Windows 11** (x64).
-2. A **Google Nest hub device** on the same LAN — Nest Hub/Mini/Audio, Nest
-   Wifi Pro, or Google TV Streamer. A phone alone cannot commission Matter
-   devices (`docs/adr/002`).
-3. **IPv6 enabled** on the active network adapter (Matter requirement, even
-   though everything stays local).
-4. A one-time, **free** [Google Home Developer Console](https://console.home.google.com/)
-   registration of the test VID/PID — step-by-step in the
-   [user guide](docs/user-guide.md#one-time-google-home-developer-console-setup).
+Start to finish this takes about 15 minutes, most of it the one-time Google
+registration. The [user guide](docs/user-guide.md) covers every step in more
+detail plus troubleshooting.
 
-## Install
+### 1. Check the requirements
+
+| Need | Why |
+|---|---|
+| **Windows 11** (x64) | The tray app is Windows-native |
+| A **Google Nest hub** on the same LAN — Nest Hub/Mini/Audio, Nest Wifi Pro, or Google TV Streamer | Google requires a hub to commission Matter devices; a phone alone cannot (`docs/adr/002`) |
+| **IPv6 enabled** on the active network adapter | A hard Matter requirement, even though all traffic stays local. It's on by default — only check this if pairing later fails |
+| The **Google Home app**, signed into the account that owns your home | Does the pairing scan |
+
+### 2. Register the test IDs (one-time, free)
+
+MatterHelm isn't a commercially certified Matter product, so Google will only
+pair it if *your own* account has registered its identifiers first. Free, no
+review, ~5 minutes, once per Google account.
+
+1. Go to [console.home.google.com](https://console.home.google.com/) and sign
+   in with **the same account your Home app uses**.
+2. **Create a project** (any name).
+3. **Add integration → Matter**.
+4. Enter the sanctioned test IDs: **VID `0xFFF1`**, **PID `0x8000`**. Pick the
+   bridge/aggregator device type if offered — Google gates pairing on the
+   VID/PID, not that field. Leave it as a development/test integration; don't
+   submit for certification and don't pay anything.
+5. Save. A draft integration is enough.
+
+> Google's console UI moves around. If wording doesn't match, look for "test
+> device", "unlisted", or "development".
+
+### 3. Install
 
 Download from [Releases](https://github.com/fdymond/matterhelm/releases/latest):
 
@@ -69,24 +91,96 @@ Download from [Releases](https://github.com/fdymond/matterhelm/releases/latest):
   admin prompt), Start-menu entry, optional start-with-Windows, clean
   uninstall that keeps your pairing and settings.
 - **Portable** — `matterhelm-<version>-win-x64.zip`: unzip anywhere and run
-  `MatterHelm.exe`. Nothing else to install — the Matter sidecar ships as a
-  bundled single exe; no Node.js or .NET runtime needed.
+  `MatterHelm.exe`.
 
-Verify downloads against `SHA256SUMS.txt` attached to each release:
-`certutil -hashfile MatterHelm-Setup-<version>.exe SHA256`.
+Either way it's self-contained — the Matter sidecar ships as a bundled single
+exe, so **no Node.js or .NET runtime is required**. Optionally verify the
+download against the release's `SHA256SUMS.txt`:
 
-> **Note**: binaries are currently unsigned — SmartScreen may prompt on
-> first run ("More info" → "Run anyway"). Windows Firewall will ask to allow
-> the bridge on **Private** networks; that's required for pairing.
+```
+certutil -hashfile MatterHelm-Setup-<version>.exe SHA256
+```
 
-Then follow the [user guide](docs/user-guide.md): enable the bridge from the
-tray, scan the pairing QR with the Google Home app, name your devices.
+> **Unsigned binaries**: SmartScreen may warn on first run — "More info" →
+> "Run anyway". Code-signing is on the roadmap.
+
+Run it: a **helm icon** appears in the system tray (check the hidden-icons
+area). That's the entire UI.
+
+### 4. Name your devices before pairing
+
+Right-click the tray icon → **Settings** → **Devices**. The names here become
+your voice targets and are what the Home app offers during pairing, so set
+them now — especially if more than one PC will run MatterHelm (see below).
+Untick anything you don't want published.
+
+### 5. Enable the bridge and pair
+
+1. Right-click the tray icon → tick **Enable bridge**. The icon turns
+   **amber** (running, not yet paired).
+2. **Allow the Windows Firewall prompt** for **Private** networks. Without it
+   the hub can't discover the bridge.
+3. Tray → **Pair with Google Home…** — a window shows a QR code and an
+   11-digit manual code.
+4. In the Home app: **+ Add** → **Matter-enabled device**, scan the QR (or
+   "Set up without QR code" and type the manual code).
+5. Tap through the **"not Matter-certified"** notice — expected for a
+   self-hosted device. A hard *"Not a Matter-certified device"* failure
+   instead means step 2 didn't take.
+6. Pick a home/room and confirm the device names. The tray icon turns
+   **green**.
+
+You'll get tiles for **HTPC Speaker**, **HTPC Play Pause**, **HTPC Next**,
+**HTPC Previous**, **HTPC Power**, plus one per custom command.
+
+### 6. Try it
+
+> "Hey Google, set HTPC Speaker volume to 40 %"
+> "Hey Google, turn on HTPC Play Pause"
+
+For natural phrasing like *"pause the HTPC"*, set up Google Home routines —
+see [docs/routines.md](docs/routines.md).
+
+## Multiple PCs in one home
+
+Each PC pairs separately and appears as its own set of devices. You need
+**no** second Google account, second Console project, second hub, or
+different Vendor/Product IDs — every install mints its own Matter identity on
+first run, which is what keeps them distinct.
+
+The one thing that needs your attention is **names**, since every install
+ships the same defaults and duplicate names make voice commands ambiguous.
+
+On the second (third, …) PC:
+
+1. Install and run it, but leave the bridge **disabled** for now.
+2. Settings → **Devices** → set **Bridge name** (e.g. "Office Bridge" — what
+   Google calls the bridge itself) and rename each device: "Office Speaker",
+   "Office Play Pause", "Office Power", … Save.
+3. *(Optional check)* Settings → **Advanced** → **Device identity seed**
+   should differ from the other PC's.
+4. Enable the bridge and allow the **firewall** prompt — it's a fresh prompt
+   on this PC.
+5. Pair as in step 5 above, using the **same Google account and home**. Put
+   it in a different **room** if you can; it makes voice targeting easier.
+
+Then both respond independently: *"pause the office PC"* vs *"pause the
+HTPC"*.
+
+**Cloned machines**: if the second PC was made by imaging the first (or you
+copied `%APPDATA%\MatterHelm\config.json` across), it inherits the first
+PC's identity and the two will conflict. Fix: close MatterHelm on the clone,
+delete the `"uniqueIdSeed"` line from `config.json` and the `matter` folder
+beside it, then start it — a fresh identity is minted.
+
+> **Bridge name** requires a build newer than v0.4.0; on v0.4.0 the device
+> names alone still distinguish the two PCs.
 
 ## Documentation
 
 | Doc | What's in it |
 |---|---|
-| [User guide](docs/user-guide.md) | Install → console setup → pairing → settings tour → troubleshooting → privacy |
+| [User guide](docs/user-guide.md) | The setup above in more depth, plus the full settings tour, custom commands and macros, troubleshooting, and privacy |
 | [Natural voice phrases](docs/routines.md) | Routine starters ("pause the HTPC") and stateless button tiles |
 | [Architecture blueprint](docs/BLUEPRINT.md) | Binding design & IPC protocol spec |
 | [ADRs](docs/adr/) | Every architectural decision, with context and consequences |
