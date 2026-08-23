@@ -663,7 +663,7 @@ public sealed class SettingsViewModel
                     // S9-4: layered-window constant alpha, 30-100 %.
                     Id = "overlay-opacity",
                     Label = "Overlay opacity",
-                    Description = "How opaque the overlay panel is. 100 % = solid, lower = more see-through.",
+                    Description = "How see-through the overlay panel is.",
                     Kind = SettingKind.Slider,
                     Minimum = 30,
                     Maximum = 100,
