@@ -36,6 +36,10 @@ public sealed class ActionExecutor : IDisposable
                     return MediaKeys.PreviousTrack();
                 case "mediaStop":
                     return MediaKeys.Stop();
+                case "mediaPlay":
+                    return MediaKeys.Play();
+                case "mediaPause":
+                    return MediaKeys.Pause();
                 case "setVolume" when value is int percent:
                     _systemVolume.SetVolumePercent(percent);
                     return true;

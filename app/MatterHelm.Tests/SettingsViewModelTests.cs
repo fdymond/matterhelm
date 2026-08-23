@@ -297,6 +297,16 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void MediaKeyChoicesCoverEveryEnumMemberInOrder()
+    {
+        // The dialogs index this list by combo position, so it must stay in
+        // declaration order and complete (S9-1 added Play/Pause).
+        Assert.Equal(
+            Enum.GetValues<MediaKeyName>(),
+            SettingsViewModel.MediaKeyChoices.Select(c => c.Key));
+    }
+
+    [Fact]
     public void SystemCommandChoicesCoverEveryEnumMemberInOrder()
     {
         // The dialogs index this list by combo position, so it must stay in

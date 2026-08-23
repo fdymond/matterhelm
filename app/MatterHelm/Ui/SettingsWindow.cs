@@ -26,7 +26,7 @@ public sealed partial class SettingsWindow : Form
     private const int EmSetCueBanner = 0x1501;
 
     private readonly SettingsViewModel _vm;
-    private readonly Action? _overlayPreview;
+    private readonly Action<OverlayPosition>? _overlayPreview;
     private readonly Action? _factoryReset;
 
     private readonly TextBox _searchBox;
@@ -58,7 +58,7 @@ public sealed partial class SettingsWindow : Form
 
     /// <summary>Builds the window over <paramref name="viewModel"/>.</summary>
     /// <param name="viewModel">The staged settings state and rules.</param>
-    /// <param name="overlayPreview">Invoked by the Overlay page's Preview button; null hides nothing but makes the button a no-op (demo).</param>
+    /// <param name="overlayPreview">Invoked by the Overlay page's Preview button with the STAGED overlay position (S9-1: the preview must show where the overlay would land after Save, not where the live config still has it); null makes the button a no-op (demo).</param>
     /// <param name="factoryReset">
     /// Invoked by the Advanced page's "Factory reset" button (confirmation +
     /// the actual <see cref="MatterHelm.BridgeHost.FactoryReset"/> call live
@@ -68,7 +68,7 @@ public sealed partial class SettingsWindow : Form
     /// unlike Preview, a factory reset must never silently do nothing when
     /// unwired.
     /// </param>
-    public SettingsWindow(SettingsViewModel viewModel, Action? overlayPreview = null, Action? factoryReset = null)
+    public SettingsWindow(SettingsViewModel viewModel, Action<OverlayPosition>? overlayPreview = null, Action? factoryReset = null)
     {
         _vm = viewModel;
         _overlayPreview = overlayPreview;
@@ -139,13 +139,29 @@ public sealed partial class SettingsWindow : Form
 
         outer.Controls.Add(_contentHost, 1, 1);
 
-        var bottomBar = new FlowLayoutPanel
+        // S9-1: the per-row "takes effect …" notes are factored into this one
+        // footer message (owner request); rows needing a bridge restart carry
+        // a "⟳" glyph next to their label instead.
+        var bottomBar = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
+            ColumnCount = 4,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = new Padding(S(8)),
+        };
+        bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var restartNote = new Label
+        {
+            Text = "Settings marked ⟳ take effect the next time the bridge starts.",
+            AutoSize = true,
+            Font = _noteFont,
+            ForeColor = SystemColors.GrayText,
+            Anchor = AnchorStyles.Left,
+            Margin = SP(4, 6, 8, 0),
         };
         _closeButton = new Button { Text = "Close", AutoSize = true, Padding = SP(8, 2, 8, 2) };
         _closeButton.Click += (_, _) => Close();
@@ -157,12 +173,13 @@ public sealed partial class SettingsWindow : Form
             AutoSize = true,
             Visible = false,
             ForeColor = SystemColors.Highlight,
-            Anchor = AnchorStyles.None,
-            Margin = SP(0, 8, 12, 0),
+            Anchor = AnchorStyles.Right,
+            Margin = SP(0, 6, 12, 0),
         };
-        bottomBar.Controls.Add(_closeButton);
-        bottomBar.Controls.Add(_saveButton);
-        bottomBar.Controls.Add(_savedFlash);
+        bottomBar.Controls.Add(restartNote, 0, 0);
+        bottomBar.Controls.Add(_savedFlash, 1, 0);
+        bottomBar.Controls.Add(_saveButton, 2, 0);
+        bottomBar.Controls.Add(_closeButton, 3, 0);
         outer.Controls.Add(bottomBar, 0, 2);
         outer.SetColumnSpan(bottomBar, 2);
 
@@ -220,12 +237,23 @@ public sealed partial class SettingsWindow : Form
     /// <summary>Scrolls the selected category page so its last row is in view; true iff it actually scrolled (page taller than the viewport). Public for demo/E2E screenshot coverage of long pages.</summary>
     public bool ScrollCurrentCategoryToEnd()
     {
-        if (_categoryPanels[CurrentCategoryId] is not ScrollableControl panel || panel.Controls.Count == 0)
+        if (_categoryPanels[CurrentCategoryId] is not NonJumpingPanel panel || panel.Controls.Count == 0)
         {
             return false;
         }
 
-        panel.ScrollControlIntoView(panel.Controls[^1]);
+        // Deliberate scroll: opt back into the base behavior for this one call
+        // (the override suppresses only focus-driven jumps, S9-1).
+        panel.AllowProgrammaticScroll = true;
+        try
+        {
+            panel.ScrollControlIntoView(panel.Controls[^1]);
+        }
+        finally
+        {
+            panel.AllowProgrammaticScroll = false;
+        }
+
         return panel.VerticalScroll.Value > 0;
     }
 
@@ -440,9 +468,32 @@ public sealed partial class SettingsWindow : Form
 
     // ---- content construction ---------------------------------------------
 
-    private TableLayoutPanel BuildCategoryPanel(SettingsCategory category)
+    /// <summary>
+    /// Category page panel with the WinForms auto-scroll-on-focus behavior
+    /// disabled (S9-1 "sticky scrolling" fix): stock ScrollableControl yanks
+    /// the viewport whenever a child gains focus — click a checkbox halfway
+    /// down a scrolled page and the page snaps so that control hugs the top.
+    /// Keeping the current scroll position is always right here; every editor
+    /// the user interacts with is already on screen when they reach it.
+    /// </summary>
+    private sealed class NonJumpingPanel : TableLayoutPanel
     {
-        var panel = new TableLayoutPanel
+        /// <summary>Scoped opt-back-in for deliberate scrolls (<see cref="ScrollCurrentCategoryToEnd"/>); focus-driven scrolls stay suppressed.</summary>
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool AllowProgrammaticScroll { get; set; }
+
+        /// <inheritdoc />
+        protected override Point ScrollToControl(Control activeControl) =>
+            // The base returns the offset that scrolls activeControl into
+            // view; returning the current display origin is the documented
+            // "don't move" answer.
+            AllowProgrammaticScroll ? base.ScrollToControl(activeControl) : DisplayRectangle.Location;
+    }
+
+    private NonJumpingPanel BuildCategoryPanel(SettingsCategory category)
+    {
+        var panel = new NonJumpingPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
@@ -501,7 +552,14 @@ public sealed partial class SettingsWindow : Form
         };
         stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        stack.Controls.Add(new Label { Text = setting.Label, AutoSize = true, Margin = SP(0, 0, 0, 1) });
+        // Restart-needing settings carry the "⟳" marker; the explanation lives
+        // once, in the window footer (S9-1).
+        stack.Controls.Add(new Label
+        {
+            Text = setting.NeedsBridgeRestart ? setting.Label + "  ⟳" : setting.Label,
+            AutoSize = true,
+            Margin = SP(0, 0, 0, 1),
+        });
         stack.Controls.Add(new Label
         {
             Text = setting.Description,
@@ -510,17 +568,6 @@ public sealed partial class SettingsWindow : Form
             ForeColor = SystemColors.GrayText,
             Margin = SP(0, 0, 0, 1),
         });
-        if (setting.NeedsBridgeRestart)
-        {
-            stack.Controls.Add(new Label
-            {
-                Text = "Takes effect next time the bridge is enabled.",
-                AutoSize = true,
-                Font = _noteFont,
-                ForeColor = SystemColors.GrayText,
-                Margin = SP(0, 0, 0, 1),
-            });
-        }
 
         var error = new Label
         {
@@ -624,7 +671,9 @@ public sealed partial class SettingsWindow : Form
     {
         (string text, Action? onClick) = setting.Id switch
         {
-            "overlay-preview" => ("Preview", _overlayPreview ?? (() => { })),
+            "overlay-preview" => ("Preview", _overlayPreview is { } preview
+                ? () => preview(_vm.Working.OverlayPosition)
+                : () => { }),
             "open-config-file" => ("Open file", () => OpenWithShell(Config.DefaultPath, "config.json")),
             "open-config-folder" => ("Open folder", () => OpenWithShell(CurrentConfigDir(), "config folder")),
             "export-diagnostics" => ("Export…", OnExportDiagnosticsClicked),
@@ -740,7 +789,8 @@ public sealed partial class SettingsWindow : Form
         };
         _customList.Columns.Add("Name", S(150));
         _customList.Columns.Add("Key", S(130));
-        _customList.Columns.Add("Action", S(200));
+        // -2 = fill remaining width (macro/system descriptions are the longest cell).
+        _customList.Columns.Add("Action", -2);
         _customList.ItemChecked += OnCustomItemChecked;
         _customList.SelectedIndexChanged += (_, _) => UpdateCustomButtons();
         _customList.DoubleClick += (_, _) => EditSelectedCustomCommand();

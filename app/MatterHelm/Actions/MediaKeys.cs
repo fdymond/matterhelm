@@ -1,16 +1,30 @@
+using System.Runtime.InteropServices;
+
 namespace MatterHelm.Actions;
 
 /// <summary>
 /// Injects hardware media keys via <c>SendInput</c> — system-wide, the same path
 /// as a physical keyboard. ADR-003: deliberately not SMTC (session-scoped, would
 /// force a versioned WinRT TFM).
+///
+/// <para>Dedicated <see cref="Play"/>/<see cref="Pause"/> (S9-1): keyboards have
+/// no dedicated play or pause virtual keys — only the toggle — but Windows'
+/// <c>WM_APPCOMMAND</c> channel does (<c>APPCOMMAND_MEDIA_PLAY</c>/<c>_PAUSE</c>).
+/// Sent to the foreground window, an unhandled appcommand bubbles through
+/// <c>DefWindowProc</c> into the shell hook chain — the same global routing the
+/// hardware media keys use — so SMTC-aware players honor the absolute verb
+/// regardless of focus.</para>
 /// </summary>
-public static class MediaKeys
+public static partial class MediaKeys
 {
     private const ushort VkMediaNextTrack = 0xB0;
     private const ushort VkMediaPrevTrack = 0xB1;
     private const ushort VkMediaStop = 0xB2;
     private const ushort VkMediaPlayPause = 0xB3;
+
+    private const uint WmAppCommand = 0x0319;
+    private const int AppCommandMediaPlay = 46;
+    private const int AppCommandMediaPause = 47;
 
     /// <summary>Sends the play/pause media key. Returns false if injection failed.</summary>
     public static bool PlayPause() => SendKey(VkMediaPlayPause, "play/pause");
@@ -23,6 +37,26 @@ public static class MediaKeys
 
     /// <summary>Sends the media-stop key (S4-2 custom <c>mediaKey</c> actions). Returns false if injection failed.</summary>
     public static bool Stop() => SendKey(VkMediaStop, "stop");
+
+    /// <summary>Sends the dedicated (absolute) play appcommand — starts playback, no toggle. Returns false if there is no window to route through.</summary>
+    public static bool Play() => SendAppCommand(AppCommandMediaPlay, "play");
+
+    /// <summary>Sends the dedicated (absolute) pause appcommand — pauses playback, no toggle. Returns false if there is no window to route through.</summary>
+    public static bool Pause() => SendAppCommand(AppCommandMediaPause, "pause");
+
+    private static bool SendAppCommand(int command, string name)
+    {
+        nint window = GetForegroundWindow();
+        if (window == 0)
+        {
+            Log.Error($"media appcommand '{name}': no foreground window to route through.");
+            return false;
+        }
+
+        // lParam upper word carries the command (APPCOMMAND wire format).
+        _ = SendMessageW(window, WmAppCommand, window, (nint)command << 16);
+        return true;
+    }
 
     private static bool SendKey(ushort virtualKey, string name)
     {
@@ -38,4 +72,10 @@ public static class MediaKeys
         inputs[1].Union.Keyboard.Flags |= NativeInput.KeyEventFKeyUp;
         return NativeInput.Send(inputs, $"media key '{name}'");
     }
+
+    [LibraryImport("user32.dll")]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32.dll")]
+    private static partial nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 }

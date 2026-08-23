@@ -495,6 +495,8 @@ public sealed class ConfigTests : IDisposable
         [InlineData("mute", MediaKeyName.Mute)]
         [InlineData("volumeUp", MediaKeyName.VolumeUp)]
         [InlineData("volumeDown", MediaKeyName.VolumeDown)]
+        [InlineData("play", MediaKeyName.Play)]
+        [InlineData("pause", MediaKeyName.Pause)]
         public void EveryMediaKeyNameInTheUnionParses(string wireName, MediaKeyName expected)
         {
             WriteConfig($$$"""

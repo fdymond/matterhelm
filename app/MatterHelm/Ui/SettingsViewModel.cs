@@ -154,6 +154,8 @@ public sealed class SettingsViewModel
         (MediaKeyName.Mute, "Mute"),
         (MediaKeyName.VolumeUp, "Volume up"),
         (MediaKeyName.VolumeDown, "Volume down"),
+        (MediaKeyName.Play, "Play (dedicated)"),
+        (MediaKeyName.Pause, "Pause (dedicated)"),
     ];
 
     /// <summary>Friendly labels for the S8-5 system commands, in <see cref="SystemCommandName"/> declaration order.</summary>

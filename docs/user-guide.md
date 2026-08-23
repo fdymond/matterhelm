@@ -196,9 +196,11 @@ click **Save** (closing the window with unsaved changes asks first).
     the bridge, which happens automatically the next time it starts).
   - Each custom command needs a unique key (used internally, not shown to
     Google) and one action:
-    - **Media key** — one of play/pause, next, previous, stop, mute, volume
-      up, or volume down (the same ones the built-ins use, if you want a
-      second speaker/transport device under a different name).
+    - **Media key** — one of play/pause (toggle), dedicated play, dedicated
+      pause (absolute — "play" never pauses and vice versa), next, previous,
+      stop, mute, volume up, or volume down (the same ones the built-ins
+      use, if you want a second speaker/transport device under a different
+      name).
     - **Launch** — starts a program (e.g. your media center's exe) with
       optional arguments. The program's path must exist on disk when you
       save.

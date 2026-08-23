@@ -10,7 +10,25 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Dedicated **Play** and **Pause** media-key options (S9-1) alongside the
+  toggle: absolute verbs via Windows' appcommand channel, so "play" never
+  pauses and "pause" never resumes - usable as custom commands and macro
+  steps.
+
+### Changed
+
+- Settings polish (S9-1): the per-row "takes effect" notes are factored into
+  one footer message (rows carry a small marker instead); the overlay
+  **Preview** now shows at the position you have staged in the window, not
+  the last-saved one (and restores after the flash); the custom-command
+  Action column fills the available width.
+
+### Fixed
+
+- Settings pages no longer snap their scroll position when a control is
+  clicked or tabbed to (the WinForms scroll-on-focus jump; S9-1).
 
 ## [0.2.0] — 2026-08-19
 
