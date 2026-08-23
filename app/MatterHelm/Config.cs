@@ -339,6 +339,9 @@ public sealed class BridgeConfig
     /// </summary>
     public int ProductId { get; set; } = 0x8000;
 
+    /// <summary>Whether the first-run setup guide has been shown (S10-7); a tray menu item reopens it any time.</summary>
+    public bool OnboardingShown { get; set; }
+
     /// <summary>
     /// The bridge's own display name in Google Home (S10-6) — what the hub
     /// shows for the bridge device itself, so several MatterHelm bridges in
@@ -546,6 +549,7 @@ public sealed class Config
             ApplyMatterId(root, result, "productId", 0x8000, id => result.ProductId = id);
             ApplyUniqueIdSeed(root, result);
             ApplyBridgeName(root, result);
+            ApplyOnboardingShown(root, result);
             ApplyLogLevel(root, result);
             ApplyAppLogLevel(root, result);
         }
@@ -1072,6 +1076,23 @@ public sealed class Config
         }
 
         _log("WARN", $"config.json \"overlayOpacityPercent\" must be an integer 30-100; using default {result.OverlayOpacityPercent}.");
+    }
+
+    /// <summary>Reads the S10-7 first-run flag; a non-boolean is a WARN and leaves it false so the guide still appears once.</summary>
+    private void ApplyOnboardingShown(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("onboardingShown", out JsonElement element))
+        {
+            return;
+        }
+
+        if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            result.OnboardingShown = element.GetBoolean();
+            return;
+        }
+
+        _log("WARN", "config.json \"onboardingShown\" must be a boolean; treating it as not yet shown.");
     }
 
     private void ApplyOverlayEnabled(JsonElement root, BridgeConfig result)

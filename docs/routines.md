@@ -44,5 +44,5 @@ Notes:
 - Starters must be unique across all routines; Google rejects duplicates.
 - The direct forms keep working regardless ("set HTPC Speaker volume to
   40 %", "turn off HTPC Power").
-- Custom commands you add in Settings → Devices & Commands appear as devices
+- Custom commands you add in Settings → Devices appear as devices
   and can be routine actions the same way.

@@ -93,6 +93,14 @@ internal static partial class Program
             return;
         }
 
+        // S10-7 acceptance demo: the first-run onboarding window — screenshot
+        // plus objective fits-on-screen and primary-button checks.
+        if (args.Contains("--demo-welcome-window"))
+        {
+            Environment.ExitCode = Demos.WelcomeWindowDemo.Run();
+            return;
+        }
+
         // S4-3 acceptance demo: scripted settings-window walk (staged edits →
         // save → config.json round-trip asserted) plus light/dark/search
         // screenshots, all against a temp config dir. Not part of the
@@ -242,6 +250,16 @@ internal static partial class Program
         // Exit is the one sanctioned synchronous stop: the sidecar must be
         // down (stdin tether, then kill) before the process goes away.
         trayContext.ExitRequested += (_, _) => host.SetEnabled(false);
+
+        // S10-7: first-run onboarding - only for an install that has never
+        // paired (no Matter fabric) and has not seen the guide, so upgrades
+        // and already-working setups are never interrupted.
+        if (!trayContext.Config.Current.OnboardingShown && !Directory.Exists(Path.Combine(AppPaths.Root, "matter")))
+        {
+            trayContext.Config.Current.OnboardingShown = true;
+            trayContext.Config.Save();
+            trayContext.ShowWelcomeWindow();
+        }
 
         if (trayContext.Config.Current.BridgeEnabled)
         {

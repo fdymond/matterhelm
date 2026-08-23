@@ -678,6 +678,24 @@ public sealed class ConfigTests : IDisposable
         }
 
         [Fact]
+        public void OnboardingShownDefaultsToFalseRoundTripsAndWarnsOnGarbage()
+        {
+            // S10-7: false by default so a fresh install gets the setup guide
+            // exactly once; a garbage value must not silently suppress it.
+            Assert.False(NewConfig().Current.OnboardingShown);
+
+            Config config = NewConfig();
+            config.Current.OnboardingShown = true;
+            config.Save();
+            Assert.True(NewConfig().Current.OnboardingShown);
+
+            WriteConfig("""{"onboardingShown": "yes"}""");
+            Config garbage = NewConfig();
+            Assert.False(garbage.Current.OnboardingShown);
+            Assert.True(Log.Contains("WARN", "onboardingShown"));
+        }
+
+        [Fact]
         public void MatterIdentityFieldsRoundTripThroughSave()
         {
             Config config = NewConfig();
