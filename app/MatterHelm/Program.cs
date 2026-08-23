@@ -47,6 +47,13 @@ internal static partial class Program
             return;
         }
 
+        // Design aid (S10-2): render the trademark-safe logo candidates.
+        if (args.Contains("--export-logo-candidates"))
+        {
+            _ = Ui.TrayIcons.ExportLogoCandidates();
+            return;
+        }
+
         // S6-1 resource-hygiene probe: overlay/settings/tray churn with
         // before/after handle + GDI + private-bytes bounds, objective
         // PASS/FAIL output. Hidden; not part of the production tray flow.
