@@ -26,11 +26,32 @@ public static class AppLaunch
             return false;
         }
 
+        // S9-5: Microsoft Store (MSIX) apps cannot be started by their package
+        // path — Windows denies CreateProcess inside \Program Files\WindowsApps\
+        // by design (owner report: Spotify "Access is denied"). Redirect to the
+        // per-user app execution alias, which CreateProcess does support.
+        string launchPath = request.Path;
+        if (IsPackagedAppPath(launchPath))
+        {
+            string alias = ExecutionAliasFor(launchPath);
+            if (!File.Exists(alias))
+            {
+                Log.Error(
+                    $"launch: {launchPath} is a Microsoft Store app, which Windows refuses to start by its package "
+                    + $"path, and no app execution alias was found at {alias}. Use the alias path (enable it under "
+                    + "Windows Settings > Apps > Advanced app settings > App execution aliases if needed).");
+                return false;
+            }
+
+            Log.Info($"launch: Store-app package path redirected to its execution alias: {alias}");
+            launchPath = alias;
+        }
+
         var startInfo = new ProcessStartInfo
         {
-            FileName = request.Path,
+            FileName = launchPath,
             UseShellExecute = false,
-            WorkingDirectory = Path.GetDirectoryName(request.Path) ?? "",
+            WorkingDirectory = Path.GetDirectoryName(launchPath) ?? "",
         };
         foreach (string argument in SplitArgs(request.Args))
         {
@@ -42,19 +63,31 @@ public static class AppLaunch
             using Process? process = Process.Start(startInfo);
             if (process is null)
             {
-                Log.Error($"launch: {request.Path} did not start.");
+                Log.Error($"launch: {launchPath} did not start.");
                 return false;
             }
 
-            Log.Info($"launch: started {Path.GetFileName(request.Path)} (pid {process.Id}), detached.");
+            Log.Info($"launch: started {Path.GetFileName(launchPath)} (pid {process.Id}), detached.");
             return true;
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
         {
-            Log.Error($"launch: failed to start {request.Path}: {ex.Message}");
+            Log.Error($"launch: failed to start {launchPath}: {ex.Message}");
             return false;
         }
     }
+
+    /// <summary>True when <paramref name="path"/> points inside the protected MSIX package store (<c>\Program Files\WindowsApps\</c>), which CreateProcess refuses (S9-5).</summary>
+    public static bool IsPackagedAppPath(string path) =>
+        path.Contains(@"\Program Files\WindowsApps\", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The per-user app execution alias for a packaged exe: same file name under <c>%LOCALAPPDATA%\Microsoft\WindowsApps</c> (S9-5).</summary>
+    public static string ExecutionAliasFor(string packagedPath) =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft",
+            "WindowsApps",
+            Path.GetFileName(packagedPath));
 
     /// <summary>
     /// Splits a config <c>args</c> string into discrete arguments for

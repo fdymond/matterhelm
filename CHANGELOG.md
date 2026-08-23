@@ -41,6 +41,17 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- **Store-app launches** (S9-5): launching a Microsoft Store (MSIX) app by
+  its package path (e.g. Spotify under `Program FilesWindowsApps`) failed
+  with "Access is denied" - Windows refuses CreateProcess there by design.
+  Launch actions now redirect to the app's per-user execution alias
+  automatically (with an actionable error if the alias is disabled), and a
+  failed launch's nack no longer reads "failed: launched X.exe".
+- **Overlay theme preview** (S9-5): previewing a staged theme change kept
+  showing the old panel - the HUD only re-rendered when the flash CONTENT
+  changed, and every preview has identical content. The render is now
+  palette-aware, which also makes a mid-session Windows theme flip repaint
+  repeat flashes correctly.
 - Mouse-wheel scrolling works again on settings pages (S9-3): the S9-2
   wheel filter computed the scroll itself and silently did nothing - it now
   forwards the wheel message to the hovered page and lets WinForms scroll.

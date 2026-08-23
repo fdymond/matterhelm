@@ -205,6 +205,7 @@ public sealed class OverlayHud : IDisposable
         private IntPtr _oldDibSelection;
 
         private OverlayContent? _last;
+        private Palette _lastPalette = Palette.Dark;
         private long _fadeStartTicks;
         private OverlayPosition _position = OverlayPosition.BottomCenter;
 
@@ -402,11 +403,18 @@ public sealed class OverlayHud : IDisposable
 
         internal void ShowContent(OverlayContent content)
         {
-            if (content != _last)
+            // Re-render when the content OR the effective palette changed - the
+            // palette check is what lets a staged theme change (Settings
+            // Preview) or a mid-session Windows theme flip repaint even though
+            // the flash content is identical (owner report: previewing Light
+            // kept showing the old panel).
+            Palette palette = ResolvePalette();
+            if (content != _last || palette != _lastPalette)
             {
                 _last = content;
+                _lastPalette = palette;
                 EnsureCanvasWidth(MeasureDesiredCanvasWidth(content));
-                Render(content);
+                Render(content, palette);
             }
 
             // Rapid-fire calls must never flicker: cancel any in-flight fade and
@@ -475,7 +483,7 @@ public sealed class OverlayHud : IDisposable
                 SF(VolumeTrackHeightLogical));
         }
 
-        private void Render(OverlayContent content)
+        private void Render(OverlayContent content, Palette palette)
         {
             using Graphics g = Graphics.FromImage(_canvas);
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -495,7 +503,6 @@ public sealed class OverlayHud : IDisposable
                 g.FillPath(shadowBrush, shadowPath);
             }
 
-            Palette palette = ResolvePalette(); // S9-4: theme resolved per flash
             using GraphicsPath panelPath = RoundedRect(panelRect, SF(PanelRadiusLogical));
             using var panelBrush = new SolidBrush(palette.Panel);
             g.FillPath(panelBrush, panelPath);
