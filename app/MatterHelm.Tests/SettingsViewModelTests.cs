@@ -614,15 +614,10 @@ public sealed class SettingsViewModelTests : IDisposable
             ["log-level"] = "debug",
             ["app-log-level"] = "warn",
             ["speaker-name"] = "S",
-            ["speaker-enabled"] = false,
             ["play-pause-name"] = "PP",
-            ["play-pause-enabled"] = false,
             ["next-name"] = "N",
-            ["next-enabled"] = false,
             ["previous-name"] = "P",
-            ["previous-enabled"] = false,
             ["power-name"] = "PW",
-            ["power-enabled"] = false,
             ["power-off-action"] = "sleep",
             ["momentary-reset-ms"] = 500,
             ["overlay-enabled"] = false,
@@ -640,9 +635,29 @@ public sealed class SettingsViewModelTests : IDisposable
             object? sample = samples[setting.Id]; // throws if a new editable setting lacks a sample
             setting.Set(vm.Working, sample);
             Assert.Equal(sample, setting.Get!(vm.Working));
+
+            // S9-2 compact command rows carry a second value pair.
+            if (setting.SetEnabled is not null)
+            {
+                setting.SetEnabled(vm.Working, false);
+                Assert.False(setting.GetEnabled!(vm.Working));
+                setting.SetEnabled(vm.Working, true);
+                Assert.True(setting.GetEnabled(vm.Working));
+            }
         }
 
         Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public void EveryCommandRowCarriesTheEnabledPairAndNothingElseDoes()
+    {
+        foreach (SettingDescriptor setting in SettingsViewModel.Categories.SelectMany(c => c.Settings))
+        {
+            bool isCommandRow = setting.Kind == SettingKind.CommandRow;
+            Assert.Equal(isCommandRow, setting.GetEnabled is not null);
+            Assert.Equal(isCommandRow, setting.SetEnabled is not null);
+        }
     }
 
     [Fact]
@@ -680,11 +695,7 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal(
             [
                 "ipc-port", "log-level",
-                "speaker-name", "speaker-enabled",
-                "play-pause-name", "play-pause-enabled",
-                "next-name", "next-enabled",
-                "previous-name", "previous-enabled",
-                "power-name", "power-enabled",
+                "speaker-name", "play-pause-name", "next-name", "previous-name", "power-name",
                 "momentary-reset-ms",
                 "custom-commands",
                 "mdns-interface",
