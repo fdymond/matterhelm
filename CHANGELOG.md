@@ -10,6 +10,16 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-install Matter identity + configurable VID/PID** (ADR-009, S10-4).
+  Every install used to derive identical endpoint identities from a
+  compiled-in seed, so two PCs in one home advertised colliding Matter
+  `UniqueID`s. Fresh installs now mint their own identity; installs that are
+  already paired keep theirs, so upgrading never unpairs you. Vendor and
+  Product IDs are real settings (Settings → Advanced, hex or decimal) - give
+  a second PC its own PID from the test range and pair both.
+
 ### Changed
 
 - Repo hygiene for the eventual public launch (S10-3): Dependabot config

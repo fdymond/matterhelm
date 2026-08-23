@@ -639,6 +639,56 @@ public sealed class ConfigTests : IDisposable
             Assert.True(Log.Contains("WARN", "commands.custom[0]"));
         }
 
+        [Theory]
+        [InlineData("\"0x8003\"", 0x8003)]  // hex string (Developer Console form)
+        [InlineData("32771", 32771)]        // decimal number
+        public void MatterIdsLoadFromHexStringOrNumber(string rawJsonValue, int expected)
+        {
+            WriteConfig($$"""{"productId": {{rawJsonValue}} }""");
+
+            Assert.Equal(expected, NewConfig().Current.ProductId);
+        }
+
+        [Theory]
+        [InlineData("\"nope\"")]
+        [InlineData("0")]
+        [InlineData("65536")]
+        [InlineData("true")]
+        public void InvalidMatterIdFallsBackToTheTestDefaultWithAWarn(string rawJsonValue)
+        {
+            WriteConfig($$"""{"vendorId": {{rawJsonValue}} }""");
+
+            Config config = NewConfig();
+
+            Assert.Equal(0xFFF1, config.Current.VendorId);
+            Assert.True(Log.Contains("WARN", "vendorId"));
+        }
+
+        [Fact]
+        public void MatterIdentityFieldsRoundTripThroughSave()
+        {
+            Config config = NewConfig();
+            config.Current.VendorId = 0xFFF2;
+            config.Current.ProductId = 0x8005;
+            config.Current.UniqueIdSeed = "seed-abc";
+            config.Save();
+
+            Config reloaded = NewConfig();
+            Assert.Equal(0xFFF2, reloaded.Current.VendorId);
+            Assert.Equal(0x8005, reloaded.Current.ProductId);
+            Assert.Equal("seed-abc", reloaded.Current.UniqueIdSeed);
+        }
+
+        [Fact]
+        public void MissingMatterIdentityUsesTestDefaultsAndAnUnresolvedSeed()
+        {
+            Config config = NewConfig();
+
+            Assert.Equal(0xFFF1, config.Current.VendorId);
+            Assert.Equal(0x8000, config.Current.ProductId);
+            Assert.Null(config.Current.UniqueIdSeed);
+        }
+
         [Fact]
         public void SystemActionRoundTripsThroughSaveInCamelCase()
         {

@@ -459,6 +459,61 @@ describe("parseConfig", () => {
     });
   });
 
+  describe("HTPC_BRIDGE_UNIQUE_ID_SEED / VENDOR_ID / PRODUCT_ID (S10-4)", () => {
+    it("leaves all three undefined when unset, so bridge.ts applies its defaults", () => {
+      const config = parseConfig(baseEnv());
+      expect(config.uniqueIdSeed).toBeUndefined();
+      expect(config.vendorId).toBeUndefined();
+      expect(config.productId).toBeUndefined();
+    });
+
+    it("passes a per-install seed through verbatim (trimmed)", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_UNIQUE_ID_SEED: "  abc123  " })).uniqueIdSeed).toBe(
+        "abc123",
+      );
+    });
+
+    it("treats an empty seed like unset", () => {
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_UNIQUE_ID_SEED: "   " })).uniqueIdSeed,
+      ).toBeUndefined();
+    });
+
+    it.each([
+      ["decimal", "65521", 65521],
+      ["lowercase hex", "0xfff1", 65521],
+      ["uppercase hex", "0XFFF4", 65524],
+      ["test PID", "0x8003", 32771],
+    ])("accepts a %s vendor/product id (%s)", (_desc, raw, expected) => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_VENDOR_ID: raw })).vendorId).toBe(expected);
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_PRODUCT_ID: raw })).productId).toBe(expected);
+    });
+
+    it.each([
+      ["zero", "0"],
+      ["above uint16", "65536"],
+      ["hex above uint16", "0x10000"],
+      ["prefix only", "0x"],
+      ["non-numeric", "vendor"],
+      ["non-integer", "1.5"],
+    ])("rejects %s (%s) as fatal", (_desc, raw) => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_VENDOR_ID: raw }));
+      }).toThrow(/HTPC_BRIDGE_VENDOR_ID/);
+    });
+
+    it("never leaks the token into an id error", () => {
+      let message = "";
+      try {
+        parseConfig(baseEnv({ HTPC_BRIDGE_PRODUCT_ID: "nope" }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toContain("HTPC_BRIDGE_PRODUCT_ID");
+      expect(message).not.toContain(TOKEN);
+    });
+  });
+
   describe("HTPC_BRIDGE_MDNS_INTERFACE", () => {
     it("is undefined when unset", () => {
       expect(parseConfig(baseEnv()).mdnsInterface).toBeUndefined();

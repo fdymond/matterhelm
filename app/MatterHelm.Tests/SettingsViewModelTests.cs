@@ -625,6 +625,8 @@ public sealed class SettingsViewModelTests : IDisposable
             ["overlay-theme"] = "light",
             ["overlay-opacity"] = 80,
             ["mdns-interface"] = "Ethernet",
+            ["vendor-id"] = "0xFFF2",
+            ["product-id"] = "0x8003",
         };
 
         foreach (SettingDescriptor setting in SettingsViewModel.Categories.SelectMany(c => c.Settings))
@@ -701,6 +703,7 @@ public sealed class SettingsViewModelTests : IDisposable
                 "momentary-reset-ms",
                 "custom-commands",
                 "mdns-interface",
+                "vendor-id", "product-id",
             ],
             flagged);
     }

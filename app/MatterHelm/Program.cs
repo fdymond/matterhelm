@@ -153,6 +153,22 @@ internal static partial class Program
         // ADR-006 §2: the app's own log level follows config `appLogLevel`
         // live — settings saves reload the config, which re-applies it here.
         Log.MinimumLevel = Log.ParseLevel(trayContext.Config.Current.AppLogLevel);
+
+        // S10-4: resolve the Matter identity seed exactly once, before the
+        // bridge can start. An install that already has fabric storage keeps
+        // the legacy shared seed (changing it would unpair it from Google);
+        // a fresh install mints its own, so two PCs in one home never
+        // advertise colliding endpoint UniqueIDs. Persisted either way.
+        if (string.IsNullOrWhiteSpace(trayContext.Config.Current.UniqueIdSeed))
+        {
+            bool hasExistingFabric = Directory.Exists(Path.Combine(AppPaths.Root, "matter"));
+            string seed = MatterIdentity.Resolve(null, hasExistingFabric);
+            trayContext.Config.Current.UniqueIdSeed = seed;
+            trayContext.Config.Save();
+            Log.Info(hasExistingFabric
+                ? "Matter identity: existing fabric found — pinned to the legacy shared seed (pairing preserved)."
+                : "Matter identity: fresh install — minted a unique per-install seed.");
+        }
         trayContext.Config.Changed += (_, e) => Log.MinimumLevel = Log.ParseLevel(e.NewConfig.AppLogLevel);
 
         using var executor = new ActionExecutorAdapter();

@@ -85,6 +85,11 @@ async function main(): Promise<void> {
     matterLogFacilities: config.matterLogFacilities,
     ...(config.matterPort === undefined ? {} : { port: config.matterPort }),
     ...(config.mdnsInterface === undefined ? {} : { mdnsInterface: config.mdnsInterface }),
+    // S10-4: identity + vendor/product, each defaulting inside bridge.ts when
+    // the tray app sends nothing (keeps a standalone sidecar run unchanged).
+    ...(config.uniqueIdSeed === undefined ? {} : { uniqueIdSeed: config.uniqueIdSeed }),
+    ...(config.vendorId === undefined ? {} : { vendorId: config.vendorId }),
+    ...(config.productId === undefined ? {} : { productId: config.productId }),
     onClusterWrite: makeActionDispatcher({
       send: (frame) => client.send(frame),
       logger,

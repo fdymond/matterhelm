@@ -594,7 +594,18 @@ public sealed class BridgeHost : IDisposable
             // S7-1: momentary auto-reset window; Config guarantees 0–2000
             // (the bridge parser is strict and would exit on anything else).
             ["HTPC_BRIDGE_MOMENTARY_RESET_MS"] = config.MomentaryResetMs.ToString(CultureInfo.InvariantCulture),
+
+            // S10-4 commissioning identity. The seed is resolved once at
+            // startup (MatterIdentity) and persisted, so it is always set by
+            // the time the bridge starts; VID/PID are plain config values.
+            ["HTPC_BRIDGE_VENDOR_ID"] = config.VendorId.ToString(CultureInfo.InvariantCulture),
+            ["HTPC_BRIDGE_PRODUCT_ID"] = config.ProductId.ToString(CultureInfo.InvariantCulture),
         };
+        if (!string.IsNullOrWhiteSpace(config.UniqueIdSeed))
+        {
+            extra["HTPC_BRIDGE_UNIQUE_ID_SEED"] = config.UniqueIdSeed;
+        }
+
         if (!string.IsNullOrWhiteSpace(config.MdnsInterface))
         {
             extra["HTPC_BRIDGE_MDNS_INTERFACE"] = config.MdnsInterface;

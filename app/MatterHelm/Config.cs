@@ -323,6 +323,30 @@ public sealed class BridgeConfig
     /// <summary>mDNS interface pin for multi-NIC hosts (maps to matter.js <c>mdns.networkInterface</c>); <c>null</c> = auto-detect.</summary>
     public string? MdnsInterface { get; set; }
 
+    /// <summary>
+    /// Matter vendor id (S10-4). Default is the ADR-002 sanctioned test VID
+    /// <c>0xFFF1</c>; must match what the user registered in their Google Home
+    /// Developer Console project. Changing it after pairing re-identifies the
+    /// bridge and forces a re-pair.
+    /// </summary>
+    public int VendorId { get; set; } = 0xFFF1;
+
+    /// <summary>
+    /// Matter product id (S10-4). Default is the ADR-002 test PID
+    /// <c>0x8000</c>; the sanctioned test range is <c>0x8000</c>–<c>0x801F</c>,
+    /// so a second PC in the same home can take a different PID. Changing it
+    /// after pairing forces a re-pair.
+    /// </summary>
+    public int ProductId { get; set; } = 0x8000;
+
+    /// <summary>
+    /// Seed for every endpoint's stable Matter identity (S10-4). Null until
+    /// the first run resolves it via <see cref="MatterIdentity"/> — existing
+    /// installs pin to the legacy shared constant, fresh installs mint a
+    /// random one. Changing it after pairing forces a re-pair.
+    /// </summary>
+    public string? UniqueIdSeed { get; set; }
+
     /// <summary>pino log level handed to the sidecar.</summary>
     public string LogLevel { get; set; } = "info";
 
@@ -509,6 +533,9 @@ public sealed class Config
             ApplyOverlayOpacityPercent(root, result);
             ApplyBridgeEnabled(root, result);
             ApplyMdnsInterface(root, result);
+            ApplyMatterId(root, result, "vendorId", 0xFFF1, id => result.VendorId = id);
+            ApplyMatterId(root, result, "productId", 0x8000, id => result.ProductId = id);
+            ApplyUniqueIdSeed(root, result);
             ApplyLogLevel(root, result);
             ApplyAppLogLevel(root, result);
         }
@@ -1086,6 +1113,57 @@ public sealed class Config
                 return;
             default:
                 _log("WARN", "config.json \"mdnsInterface\" must be a string or null; using default (auto-detect).");
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Reads a Matter vendor/product id (S10-4). Accepts a JSON number or a
+    /// string in decimal or <c>0x</c> hex — the Developer Console shows hex,
+    /// and JSON has no hex literal, so the string form is what users will
+    /// hand-write. Out-of-range/unparsable falls back with a WARN, like every
+    /// other field here (the bridge's env parser is the strict boundary).
+    /// </summary>
+    private void ApplyMatterId(JsonElement root, BridgeConfig result, string property, int fallback, Action<int> assign)
+    {
+        if (!root.TryGetProperty(property, out JsonElement element))
+        {
+            return;
+        }
+
+        int? parsed = element.ValueKind switch
+        {
+            JsonValueKind.Number when element.TryGetInt32(out int number) => number,
+            JsonValueKind.String => MatterIds.TryParse(element.GetString(), out int fromText) ? fromText : null,
+            _ => null,
+        };
+
+        if (parsed is int id and >= 1 and <= 65535)
+        {
+            assign(id);
+            return;
+        }
+
+        _log("WARN", $"config.json \"{property}\" must be an integer 1-65535 (decimal, or a string like \"0x8000\"); using default 0x{fallback:X4}.");
+    }
+
+    /// <summary>Reads the identity seed (S10-4); a non-string is a WARN and leaves it unresolved so the next start re-decides.</summary>
+    private void ApplyUniqueIdSeed(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("uniqueIdSeed", out JsonElement element))
+        {
+            return;
+        }
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Null:
+                return;
+            case JsonValueKind.String when element.GetString() is { Length: > 0 } seed:
+                result.UniqueIdSeed = seed;
+                return;
+            default:
+                _log("WARN", "config.json \"uniqueIdSeed\" must be a non-empty string or null; leaving it unset (a seed will be resolved on the next start).");
                 return;
         }
     }

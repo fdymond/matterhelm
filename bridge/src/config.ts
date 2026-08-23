@@ -140,6 +140,18 @@ export interface Config {
    * stay in lockstep.
    */
   momentaryResetMs: number;
+  /**
+   * `HTPC_BRIDGE_UNIQUE_ID_SEED` (S10-4) — seed for every endpoint's stable
+   * Matter identity (serialNumber/uniqueId). Unset = the legacy shared
+   * constant, which keeps pre-S10-4 installs on the identity Google already
+   * knows; the tray app mints a random per-install seed for FRESH installs so
+   * two PCs in one home never advertise colliding UniqueIDs.
+   */
+  uniqueIdSeed?: string;
+  /** `HTPC_BRIDGE_VENDOR_ID` (S10-4); unset = the ADR-002 test VID. */
+  vendorId?: number;
+  /** `HTPC_BRIDGE_PRODUCT_ID` (S10-4); unset = the ADR-002 test PID. */
+  productId?: number;
   /** `HTPC_BRIDGE_MDNS_INTERFACE`; unset = matter.js auto-detects. */
   mdnsInterface?: string;
   /**
@@ -392,6 +404,39 @@ function parseMomentaryResetMs(raw: string | undefined): number {
   return result.data;
 }
 
+/**
+ * A Matter vendor/product id: an integer 1-65535, accepted as decimal or
+ * `0x`-prefixed hex (the Google Home Developer Console shows hex). Unset =
+ * undefined, so `matter/bridge.ts` applies its ADR-002 test default.
+ * Anything else is fatal, never silent — a wrong id fails commissioning in a
+ * way that is hard to diagnose from the Home app.
+ */
+function parseVendorOrProductId(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+
+  const trimmed = raw.trim();
+  const parsed = /^0[xX][0-9a-fA-F]+$/.test(trimmed)
+    ? Number.parseInt(trimmed.slice(2), 16)
+    : /^[0-9]+$/.test(trimmed)
+      ? Number.parseInt(trimmed, 10)
+      : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(
+      `${name} must be an integer 1-65535 (decimal or 0x hex), got ${JSON.stringify(raw)}`,
+    );
+  }
+
+  return parsed;
+}
+
+/** : any non-empty string; unset/empty = the bridge's legacy default. */
+function parseUniqueIdSeed(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+}
+
 function parseMdnsInterface(raw: string | undefined): string | undefined {
   return raw === undefined || raw === "" ? undefined : raw;
 }
@@ -407,6 +452,9 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
   const matterPort = parsePortEnv(env.HTPC_BRIDGE_MATTER_PORT, "HTPC_BRIDGE_MATTER_PORT");
   const logLevel = parseLogLevel(env.HTPC_BRIDGE_LOG_LEVEL);
   const matterLogFacilities = parseMatterLogFacilities(env.HTPC_BRIDGE_MATTER_LOG_FACILITIES);
+  const uniqueIdSeed = parseUniqueIdSeed(env.HTPC_BRIDGE_UNIQUE_ID_SEED);
+  const vendorId = parseVendorOrProductId(env.HTPC_BRIDGE_VENDOR_ID, "HTPC_BRIDGE_VENDOR_ID");
+  const productId = parseVendorOrProductId(env.HTPC_BRIDGE_PRODUCT_ID, "HTPC_BRIDGE_PRODUCT_ID");
   return {
     ipcPort: parsePortEnv(env.HTPC_BRIDGE_IPC_PORT, "HTPC_BRIDGE_IPC_PORT") ?? DEFAULT_IPC_PORT,
     ipcToken: parseToken(env.HTPC_BRIDGE_IPC_TOKEN),
@@ -418,6 +466,9 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     matterLogFacilities: { ...DEFAULT_MATTER_LOG_FACILITIES, ...matterLogFacilities },
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),
+    ...(uniqueIdSeed === undefined ? {} : { uniqueIdSeed }),
+    ...(vendorId === undefined ? {} : { vendorId }),
+    ...(productId === undefined ? {} : { productId }),
   };
 }
 
