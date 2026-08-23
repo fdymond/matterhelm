@@ -759,6 +759,7 @@ public sealed partial class SettingsWindow : Form
         SettingKind.Toggle => BuildToggle(setting),
         SettingKind.Port => BuildPort(setting),
         SettingKind.Number => BuildNumber(setting),
+        SettingKind.Slider => BuildSlider(setting),
         SettingKind.Text or SettingKind.OptionalText => BuildTextBox(setting),
         SettingKind.Choice => BuildChoice(setting),
         SettingKind.ReadOnlyText => BuildReadOnly(setting),
@@ -789,6 +790,52 @@ public sealed partial class SettingsWindow : Form
         _editorRefreshers.Add(() =>
             number.Value = Math.Clamp((int)setting.Get!(_vm.Working)!, setting.Minimum, setting.Maximum));
         return number;
+    }
+
+    /// <summary>S9-7: slider editor (TrackBar + live "NN %" label) for percent-style ranges - direct manipulation instead of a spinner.</summary>
+    private FlowLayoutPanel BuildSlider(SettingDescriptor setting)
+    {
+        var slider = new TrackBar
+        {
+            Minimum = setting.Minimum,
+            Maximum = setting.Maximum,
+            TickFrequency = Math.Max(1, (setting.Maximum - setting.Minimum) / 7),
+            SmallChange = 5,
+            LargeChange = 10,
+            Width = S(180),
+            AutoSize = false,
+            Height = S(30),
+        };
+        var valueLabel = new Label
+        {
+            AutoSize = true,
+            Font = _secondaryFont,
+            ForeColor = SystemColors.GrayText,
+            Anchor = AnchorStyles.Left,
+            Margin = SP(4, 6, 0, 0),
+        };
+        slider.ValueChanged += (_, _) =>
+        {
+            valueLabel.Text = $"{slider.Value} %";
+            OnEdited(setting, slider.Value);
+        };
+        _editorRefreshers.Add(() =>
+        {
+            slider.Value = Math.Clamp((int)setting.Get!(_vm.Working)!, setting.Minimum, setting.Maximum);
+            valueLabel.Text = $"{slider.Value} %";
+        });
+
+        var rowPanel = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = Padding.Empty,
+        };
+        rowPanel.Controls.Add(slider);
+        rowPanel.Controls.Add(valueLabel);
+        return rowPanel;
     }
 
     private TextBox BuildTextBox(SettingDescriptor setting)
