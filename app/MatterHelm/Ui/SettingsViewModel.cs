@@ -36,6 +36,9 @@ public enum SettingKind
     /// </summary>
     CommandRow,
 
+    /// <summary>Bold section title with a gray description line; no editor (S9-3).</summary>
+    SectionHeader,
+
     /// <summary>Read-only informational text.</summary>
     ReadOnlyText,
 
@@ -521,17 +524,25 @@ public sealed class SettingsViewModel
         new SettingsCategory
         {
             Id = "commands",
-            Title = "Devices & Commands",
+            Title = "Devices",
             Settings =
             [
-                // S9-2 compact rows: one row per built-in — leading enabled
-                // checkbox + device-name editor. Ids keep the historical
-                // "-name" suffix (validation errors target them).
-                BuiltinCommand("speaker-name", "Speaker", "Google Home device name for volume and mute; untick to hide it from Google Home.", c => c.Commands.Speaker),
-                BuiltinCommand("play-pause-name", "Play/pause", "Google Home device name for the play/pause command; untick to hide it.", c => c.Commands.PlayPause),
-                BuiltinCommand("next-name", "Next", "Google Home device name for the next-track command; untick to hide it.", c => c.Commands.Next),
-                BuiltinCommand("previous-name", "Previous", "Google Home device name for the previous-track command; untick to hide it.", c => c.Commands.Previous),
-                BuiltinCommand("power-name", "Power", "Google Home device name for the power switch; untick to hide it.", c => c.Commands.Power),
+                // S9-3: a section header + description-free compact rows (the
+                // leading checkbox already reads as "published to Google
+                // Home"). Ids keep the historical "-name" suffix (validation
+                // errors target them).
+                new SettingDescriptor
+                {
+                    Id = "google-home-devices",
+                    Label = "Google Home devices",
+                    Description = "Each ticked device is published to Google Home under the name you give it.",
+                    Kind = SettingKind.SectionHeader,
+                },
+                BuiltinCommand("speaker-name", "Speaker (volume + mute)", "", c => c.Commands.Speaker),
+                BuiltinCommand("play-pause-name", "Play/pause", "", c => c.Commands.PlayPause),
+                BuiltinCommand("next-name", "Next track", "", c => c.Commands.Next),
+                BuiltinCommand("previous-name", "Previous track", "", c => c.Commands.Previous),
+                BuiltinCommand("power-name", "Power", "", c => c.Commands.Power),
                 new SettingDescriptor
                 {
                     Id = "power-off-action",
@@ -559,10 +570,19 @@ public sealed class SettingsViewModel
                     Get = c => c.MomentaryResetMs,
                     Set = (c, v) => c.MomentaryResetMs = (int)v!,
                 },
+            ],
+        },
+        new SettingsCategory
+        {
+            // S9-3: custom commands get their own nav section.
+            Id = "custom-devices",
+            Title = "Custom devices",
+            Settings =
+            [
                 new SettingDescriptor
                 {
                     Id = "custom-commands",
-                    Label = "Custom commands",
+                    Label = "Custom devices",
                     Description = "Your own commands, each an extra Google Home device. The key is the device's stable identity.",
                     Kind = SettingKind.CustomCommands,
                     NeedsBridgeRestart = true,

@@ -244,20 +244,23 @@ public sealed partial class SettingsWindow : Form
                 }
             }
 
-            if (page is null || !page.VerticalScroll.Visible)
+            if (page is null || page.DisplayRectangle.Height <= page.ClientRectangle.Height)
             {
-                return false;
+                return false; // not over a page, or nothing to scroll - default routing
             }
 
-            // Three text lines per notch, scaled like the rest of the layout.
-            int notches = (short)((long)m.WParam >> 16) / 120;
-            int step = owner.S(20) * Math.Max(1, Math.Min(SystemInformation.MouseWheelScrollLines, 10));
-            int target = Math.Clamp(
-                page.VerticalScroll.Value - (notches * step),
-                page.VerticalScroll.Minimum,
-                page.VerticalScroll.Maximum);
-            page.AutoScrollPosition = new Point(0, target);
-            return true; // swallowed — never spins a hovered editor's value
+            if (m.HWnd == page.Handle)
+            {
+                return false; // already addressed to the page - let it through
+            }
+
+            // Forward the ORIGINAL message to the page and swallow the copy the
+            // focused control would have received. ScrollableControl.OnMouseWheel
+            // then scrolls with the stock line count/delta handling - the S9-2
+            // hand-computed AutoScrollPosition math silently did nothing here
+            // (owner report: wheel dead), so scrolling is delegated, not computed.
+            _ = ForwardMessage(page.Handle, WmMouseWheel, m.WParam, m.LParam);
+            return true; // swallowing also keeps a hovered editor.s value from spinning
         }
 
         /// <summary>Blittable Win32 POINT (System.Drawing.Point needs runtime marshalling, which LibraryImport rejects).</summary>
@@ -266,6 +269,9 @@ public sealed partial class SettingsWindow : Form
 
         [LibraryImport("user32.dll")]
         private static partial nint WindowFromPoint(NativePoint point);
+
+        [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
+        private static partial nint ForwardMessage(nint hWnd, uint msg, nint wParam, nint lParam);
     }
 
     /// <summary>Re-reads every editor control from <see cref="SettingsViewModel.Working"/>. Public for demo/E2E walks that edit the view-model directly.</summary>
@@ -580,6 +586,7 @@ public sealed partial class SettingsWindow : Form
             {
                 SettingKind.CustomCommands => BuildCustomCommandsBlock(setting),
                 SettingKind.CommandRow => BuildCommandRow(setting),
+                SettingKind.SectionHeader => BuildSectionHeader(setting),
                 _ => BuildSettingRow(setting),
             };
             _settingRows[setting.Id] = row;
@@ -592,6 +599,34 @@ public sealed partial class SettingsWindow : Form
         // S9-2 "excessive white space below the settings" (the scrollbar
         // ranged far past the last row).
         return panel;
+    }
+
+    /// <summary>S9-3: a bold section title with an optional gray description line; no editor.</summary>
+    private TableLayoutPanel BuildSectionHeader(SettingDescriptor setting)
+    {
+        var stack = new TableLayoutPanel
+        {
+            ColumnCount = 1,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Margin = SP(0, 8, 0, 2),
+        };
+        stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        stack.Controls.Add(new Label { Text = setting.Label, AutoSize = true, Font = _navSelectedFont, Margin = SP(0, 0, 0, 1) });
+        if (setting.Description.Length > 0)
+        {
+            stack.Controls.Add(new Label
+            {
+                Text = setting.Description,
+                AutoSize = true,
+                Font = _secondaryFont,
+                ForeColor = SystemColors.GrayText,
+                Margin = SP(0, 0, 0, 1),
+            });
+        }
+
+        return stack;
     }
 
     /// <summary>
@@ -619,7 +654,6 @@ public sealed partial class SettingsWindow : Form
 
         TableLayoutPanel stack = BuildTextStack(setting);
         var title = (Label)stack.Controls[0];
-        var description = (Label)stack.Controls[1];
         row.Controls.Add(stack, 1, 0);
 
         var nameBox = new TextBox { Width = S(200), Anchor = AnchorStyles.Right | AnchorStyles.Top, Margin = SP(8, 2, 0, 0) };
@@ -628,7 +662,6 @@ public sealed partial class SettingsWindow : Form
         void ApplyEnabledVisuals(bool enabled)
         {
             title.ForeColor = enabled ? SystemColors.ControlText : SystemColors.GrayText;
-            description.Enabled = enabled; // GrayText label: Enabled=false dims it a step further
             nameBox.Enabled = enabled;
         }
 
@@ -696,14 +729,17 @@ public sealed partial class SettingsWindow : Form
             AutoSize = true,
             Margin = SP(0, 0, 0, 1),
         });
-        stack.Controls.Add(new Label
+        if (setting.Description.Length > 0)
         {
-            Text = setting.Description,
-            AutoSize = true,
-            Font = _secondaryFont,
-            ForeColor = SystemColors.GrayText,
-            Margin = SP(0, 0, 0, 1),
-        });
+            stack.Controls.Add(new Label
+            {
+                Text = setting.Description,
+                AutoSize = true,
+                Font = _secondaryFont,
+                ForeColor = SystemColors.GrayText,
+                Margin = SP(0, 0, 0, 1),
+            });
+        }
 
         var error = new Label
         {
@@ -919,7 +955,7 @@ public sealed partial class SettingsWindow : Form
             FullRowSelect = true,
             MultiSelect = false,
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
-            Height = S(150),
+            Height = S(280), // owns its page since S9-3 — use the room
             Dock = DockStyle.Fill,
             Margin = SP(0, 4, 0, 4),
         };
