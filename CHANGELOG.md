@@ -10,7 +10,13 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Repo hygiene for the eventual public launch (S10-3): Dependabot config
+  (grouped weekly npm/NuGet/Actions updates), repo description + topics,
+  and the E2E checklist re-pointed at the v0.3.0 release build with new
+  sections for the installer, macros/system commands, and overlay theming.
+  Full-history secret scan: clean (89 commits, no leaks).
 
 ## [0.3.0] — 2026-08-23
 

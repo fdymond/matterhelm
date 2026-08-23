@@ -19,29 +19,39 @@ checksums, winget as the developer-facing channel).
   README/NOTICE. Give it a final look against the CSA brand guidelines —
   a human/legal call, though the descriptive-use position is the ecosystem
   norm.
-- [ ] **Repo history scan.** Run a secret scanner (e.g. `gitleaks`) over the
-  full history before flipping public — the history ships with the repo.
-  Nothing sensitive is *known* to be committed (tokens are env-only by
-  design), but verify, don't assume.
-- [ ] **Hardware E2E pass** (`docs/e2e-log.md`) — the checklist should be
-  green on the exact release build the announcement points to.
+- [x] **Repo history scan — clean 2026-08-23.** `gitleaks detect` over the
+  full history: **89 commits, ~3.03 MB scanned, no leaks found.** (Re-run
+  immediately before flipping public if more history has landed by then.)
+- [ ] **Hardware E2E pass** (`docs/e2e-log.md`) — needs the human (phone +
+  Google Home app + Nest hub). The checklist is prepared and pointed at the
+  **v0.3.0 release build** (the one running on the HTPC), with sections
+  added for everything shipped since it was written: distribution
+  (installer + portable + checksums), macros/system commands, overlay
+  theme/opacity, repeat-command behaviour.
 
 ## Strongly recommended before announcing
 
-- [ ] Enable **GitHub features**: Issues (forms already in place),
+- [x] **Dependabot** — `.github/dependabot.yml` keeps npm, NuGet, and GitHub
+  Actions current with grouped weekly PRs (works while private; the alert
+  *feed* needs the repo setting enabled in Settings → Advanced Security).
+- [ ] Enable the rest in **repo settings** (these are UI toggles, not files;
+  several require the repo to be public or GitHub Advanced Security):
   Discussions (Q&A + Show-and-tell), Dependabot alerts + security updates,
   secret scanning + push protection, branch protection on `main`
   (require CI green; CODEOWNERS review).
-- [ ] **Release hygiene** (pipeline already produces): installer + portable
-  zip + `SHA256SUMS.txt` on every tag; release notes generated from
-  CHANGELOG. Consider code-signing (an OV cert or Azure Trusted Signing)
-  to stop the SmartScreen prompt — the single biggest first-run friction.
+- [x] **Release hygiene — proven by v0.3.0 (2026-08-23)**: the tag published
+  `MatterHelm-Setup-0.3.0.exe` + `matterhelm-v0.3.0-win-x64.zip` +
+  `SHA256SUMS.txt` with generated notes. Remaining, and the single biggest
+  first-run friction: **code-signing** (an OV cert or Azure Trusted
+  Signing) to stop the SmartScreen prompt - a purchase decision, not a
+  code change.
 - [ ] **README screenshots/GIF** — settings window, overlay flash, Home-app
   tiles. The single highest-leverage README improvement not yet done
   (needs curated captures of the real UI).
-- [ ] Add repo **topics** (`matter`, `google-home`, `smart-home`, `windows`,
-  `tray-application`, `htpc`) and a concise repo description + website
-  field (user guide link).
+- [x] **Repo topics + description — set 2026-08-23** (9 topics: matter,
+  matter-protocol, google-home, home-automation, smart-home, windows,
+  tray-application, htpc, dotnet). Still to set when public: the website
+  field (user-guide link).
 
 ## Post-launch
 
