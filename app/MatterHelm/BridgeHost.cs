@@ -970,10 +970,17 @@ public sealed class BridgeHost : IDisposable
             case MediaKeyActionConfig mediaKey:
                 return ExecuteMediaKey(mediaKey.KeyName);
             case LaunchActionConfig launch:
-                return (
-                    _executor.Execute("launch", new LaunchRequest(launch.Path, launch.Args)),
-                    $"launched {Path.GetFileName(launch.Path)}",
-                    null);
+            {
+                // Distinct failure text (S9-5): a failed launch previously
+                // surfaced its SUCCESS pill in the nack/macro error ("failed:
+                // launched Spotify.exe") because the pill doubled as the
+                // fallback error.
+                string exeName = Path.GetFileName(launch.Path);
+                bool launched = _executor.Execute("launch", new LaunchRequest(launch.Path, launch.Args));
+                return launched
+                    ? (true, $"launched {exeName}", null)
+                    : (false, "failed", $"could not start {exeName} (see the app log)");
+            }
             case KeySequenceActionConfig keySequence:
                 return ExecuteKeySequence(commandKey, keySequence.Sequence);
             case SystemActionConfig system:
