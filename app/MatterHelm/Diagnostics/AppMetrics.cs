@@ -54,4 +54,51 @@ public static class AppMetrics
     /// <summary>Per-action execution latency (frame received → executed), in milliseconds.</summary>
     public static Histogram<double> ActionExecuteMs { get; } =
         _meter.CreateHistogram<double>("action_execute_ms", "ms", "Action execution latency.");
+
+    // S9-6 resource gauges: observed on demand (each snapshot flush /
+    // dotnet-counters poll), so memory truth lands in metrics-*.jsonl and a
+    // leak shows up as a trend line instead of needing Task Manager. The
+    // ADR-007 budgets these watch: tray private bytes ≤ 32 MB.
+
+    /// <summary>Process private bytes (the ADR-007 budget metric).</summary>
+    public static ObservableGauge<long> ProcessPrivateBytes { get; } =
+        _meter.CreateObservableGauge(
+            "process_private_bytes",
+            static () =>
+            {
+                using var process = System.Diagnostics.Process.GetCurrentProcess();
+                return process.PrivateMemorySize64;
+            },
+            "bytes",
+            "Process private bytes (ADR-007 tray budget: 32 MB).");
+
+    /// <summary>Managed (GC) heap bytes — the .NET share of private bytes.</summary>
+    public static ObservableGauge<long> GcHeapBytes { get; } =
+        _meter.CreateObservableGauge(
+            "gc_heap_bytes",
+            static () => GC.GetTotalMemory(forceFullCollection: false),
+            "bytes",
+            "Managed heap size (no forced collection).");
+
+    /// <summary>OS handle count — the churn-probe leak signal, continuously.</summary>
+    public static ObservableGauge<long> ProcessHandleCount { get; } =
+        _meter.CreateObservableGauge(
+            "process_handle_count",
+            static () =>
+            {
+                using var process = System.Diagnostics.Process.GetCurrentProcess();
+                return (long)process.HandleCount;
+            },
+            description: "OS handle count.");
+
+    /// <summary>Thread count — a runaway background-work signal.</summary>
+    public static ObservableGauge<long> ProcessThreadCount { get; } =
+        _meter.CreateObservableGauge(
+            "process_thread_count",
+            static () =>
+            {
+                using var process = System.Diagnostics.Process.GetCurrentProcess();
+                return (long)process.Threads.Count;
+            },
+            description: "OS thread count.");
 }

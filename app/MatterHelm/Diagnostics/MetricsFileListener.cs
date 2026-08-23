@@ -28,8 +28,10 @@ public sealed class MetricsFileListener : IDisposable
     private readonly System.Threading.Timer _timer;
     private readonly Dictionary<string, long> _counters = [];
     private readonly Dictionary<string, HistogramState> _histograms = [];
+    private readonly Dictionary<string, long> _gauges = [];
     private string? _lastWrittenPayload;
     private string? _lastWrittenPath;
+    private long _lastWrittenPrivateBytes;
     private bool _disposed;
 
     /// <summary>Starts listening and the snapshot timer.</summary>
@@ -67,27 +69,54 @@ public sealed class MetricsFileListener : IDisposable
     {
         try
         {
+            // S9-6: pull the resource gauges (memory/handles/threads) fresh —
+            // outside _gate, since the observation callbacks re-enter
+            // OnLongMeasurement which takes the lock. Guarded on its own so
+            // the final flush after Dispose (listener already disposed) still
+            // writes the snapshot with the last-known gauge values.
+            try
+            {
+                _listener.RecordObservableInstruments();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Final flush: last-known gauges are good enough.
+            }
+
             lock (_gate)
             {
                 string payload = BuildPayloadLocked();
                 string path = CurrentFilePath;
-                if (payload == _lastWrittenPayload
+                long privateBytes = _gauges.GetValueOrDefault("process_private_bytes");
+
+                // The S6-1 idle-churn rule now compares only the activity
+                // part (counters/histograms) — gauges jitter by nature. A
+                // quiet app still writes when private bytes drift ≥10% from
+                // the last written line, so a slow leak leaves a visible
+                // trend instead of hiding behind an idle day's single line.
+                bool coreUnchanged = payload == _lastWrittenPayload
                     && string.Equals(path, _lastWrittenPath, StringComparison.OrdinalIgnoreCase)
-                    && File.Exists(path))
+                    && File.Exists(path);
+                bool memoryDrifted = _lastWrittenPrivateBytes > 0
+                    && Math.Abs(privateBytes - _lastWrittenPrivateBytes) * 10 >= _lastWrittenPrivateBytes;
+                if (coreUnchanged && !memoryDrifted)
                 {
                     return;
                 }
 
                 Directory.CreateDirectory(_directory);
 
-                // The line is the payload object with "ts" prepended ("O" is
-                // the same ISO-8601 shape Utf8JsonWriter emits for DateTime).
+                // The line is the activity payload with "ts" prepended ("O" is
+                // the same ISO-8601 shape Utf8JsonWriter emits for DateTime)
+                // and the gauges appended — the gauges ride along on every
+                // written line but never participate in the dedupe compare.
                 string line = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{{\"ts\":\"{DateTime.UtcNow:O}\",{payload[1..]}");
+                    $"{{\"ts\":\"{DateTime.UtcNow:O}\",{payload[1..^1]},{BuildGaugesLocked()}}}");
                 File.AppendAllLines(path, [line]);
                 _lastWrittenPayload = payload;
                 _lastWrittenPath = path;
+                _lastWrittenPrivateBytes = privateBytes;
             }
         }
         catch
@@ -133,6 +162,10 @@ public sealed class MetricsFileListener : IDisposable
             {
                 _ = _histograms.TryAdd(instrument.Name, new HistogramState());
             }
+            else if (instrument is ObservableGauge<long>)
+            {
+                _ = _gauges.TryAdd(instrument.Name, 0);
+            }
         }
 
         listener.EnableMeasurementEvents(instrument);
@@ -143,7 +176,15 @@ public sealed class MetricsFileListener : IDisposable
     {
         lock (_gate)
         {
-            _counters[instrument.Name] = _counters.GetValueOrDefault(instrument.Name) + measurement;
+            // Gauges are point-in-time reads (assign); counters accumulate.
+            if (instrument is ObservableGauge<long>)
+            {
+                _gauges[instrument.Name] = measurement;
+            }
+            else
+            {
+                _counters[instrument.Name] = _counters.GetValueOrDefault(instrument.Name) + measurement;
+            }
         }
     }
 
@@ -201,6 +242,28 @@ public sealed class MetricsFileListener : IDisposable
         }
 
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    /// <summary>The <c>"gauges":{…}</c> fragment (S9-6 resource gauges); excluded from the dedupe compare. Caller must hold <c>_gate</c>.</summary>
+    private string BuildGaugesLocked()
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartObject("gauges");
+            foreach ((string name, long value) in _gauges)
+            {
+                writer.WriteNumber(name, value);
+            }
+
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        // Strip the wrapping braces: {"gauges":{…}} → "gauges":{…}.
+        string json = Encoding.UTF8.GetString(buffer.ToArray());
+        return json[1..^1];
     }
 
     private void Prune()

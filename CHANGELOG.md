@@ -12,6 +12,12 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Added
 
+- **Live resource monitoring** (S9-6): the 60 s metrics snapshots now carry
+  process gauges - private bytes (the ADR-007 budget metric), managed-heap
+  bytes, handle count, thread count - so a leak shows as a trend in
+  `metrics-*.jsonl` instead of needing Task Manager. Idle days still cost
+  one line; a quiet app additionally writes when private bytes drift ≥10 %.
+
 - **Overlay theme and transparency** (S9-4): the overlay follows the
   Windows light/dark apps setting by default (resolved per flash, so a
   mid-session theme flip is honored), with Settings → Overlay options to

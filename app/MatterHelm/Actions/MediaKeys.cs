@@ -25,6 +25,8 @@ public static partial class MediaKeys
     private const uint WmAppCommand = 0x0319;
     private const int AppCommandMediaPlay = 46;
     private const int AppCommandMediaPause = 47;
+    private const uint SmtoAbortIfHung = 0x0002;
+    private const uint TimeoutMilliseconds = 1000;
 
     /// <summary>Sends the play/pause media key. Returns false if injection failed.</summary>
     public static bool PlayPause() => SendKey(VkMediaPlayPause, "play/pause");
@@ -53,8 +55,21 @@ public static partial class MediaKeys
             return false;
         }
 
-        // lParam upper word carries the command (APPCOMMAND wire format).
-        _ = SendMessageW(window, WmAppCommand, window, (nint)command << 16);
+        // S9-6 review fix: a synchronous SendMessage to a HUNG foreground
+        // window would block this thread — which is the IPC receive loop —
+        // indefinitely (same head-of-line class as the S8-6 macro bug).
+        // SMTO_ABORTIFHUNG bails immediately on a hung target; the 1 s
+        // timeout bounds a merely-slow one. lParam upper word carries the
+        // command (APPCOMMAND wire format).
+        nint sendResult = SendMessageTimeoutW(
+            window, WmAppCommand, window, (nint)command << 16,
+            SmtoAbortIfHung, TimeoutMilliseconds, out _);
+        if (sendResult == 0)
+        {
+            Log.Error($"media appcommand '{name}': the foreground window did not accept the message (hung or timed out).");
+            return false;
+        }
+
         return true;
     }
 
@@ -77,5 +92,6 @@ public static partial class MediaKeys
     private static partial nint GetForegroundWindow();
 
     [LibraryImport("user32.dll")]
-    private static partial nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
+    private static partial nint SendMessageTimeoutW(
+        nint hWnd, uint msg, nint wParam, nint lParam, uint flags, uint timeoutMs, out nint result);
 }
