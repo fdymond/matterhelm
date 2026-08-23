@@ -12,6 +12,12 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Added
 
+- **Overlay theme and transparency** (S9-4): the overlay follows the
+  Windows light/dark apps setting by default (resolved per flash, so a
+  mid-session theme flip is honored), with Settings → Overlay options to
+  force Light or Dark and an opacity slider (30-100 %). Preview shows the
+  staged theme/opacity/position before saving. The app windows already
+  follow the system theme.
 - Dedicated **Play** and **Pause** media-key options (S9-1) alongside the
   toggle: absolute verbs via Windows' appcommand channel, so "play" never
   pauses and "pause" never resumes - usable as custom commands and macro

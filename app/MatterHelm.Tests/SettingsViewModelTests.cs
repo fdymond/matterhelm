@@ -622,6 +622,8 @@ public sealed class SettingsViewModelTests : IDisposable
             ["momentary-reset-ms"] = 500,
             ["overlay-enabled"] = false,
             ["overlay-position"] = "topRight",
+            ["overlay-theme"] = "light",
+            ["overlay-opacity"] = 80,
             ["mdns-interface"] = "Ethernet",
         };
 

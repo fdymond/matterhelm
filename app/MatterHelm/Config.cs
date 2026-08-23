@@ -218,6 +218,19 @@ public sealed class CommandsConfig
     public List<CustomCommandConfig> Custom { get; set; } = [];
 }
 
+/// <summary>The overlay HUD color theme (S9-4).</summary>
+public enum OverlayTheme
+{
+    /// <summary>Follow the Windows apps light/dark setting (the default).</summary>
+    System,
+
+    /// <summary>Always the dark panel (the classic look).</summary>
+    Dark,
+
+    /// <summary>Always the light panel.</summary>
+    Light,
+}
+
 /// <summary>
 /// The eight standard screen placements for the overlay HUD, relative to the
 /// primary screen's working area (so the taskbar is never covered).
@@ -293,6 +306,12 @@ public sealed class BridgeConfig
 
     /// <summary>Where the overlay HUD sits on the primary screen's working area.</summary>
     public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
+
+    /// <summary>Overlay color theme (S9-4): follow the Windows apps theme (default), or force dark/light.</summary>
+    public OverlayTheme OverlayTheme { get; set; } = OverlayTheme.System;
+
+    /// <summary>Overlay panel opacity percent, 30-100 (S9-4; 100 = the classic look).</summary>
+    public int OverlayOpacityPercent { get; set; } = 100;
 
     /// <summary>
     /// Whether the bridge (sidecar + IPC server) runs — the tray "Enable
@@ -486,6 +505,8 @@ public sealed class Config
             ApplyPowerOffAction(root, result);
             ApplyOverlayEnabled(root, result);
             ApplyOverlayPosition(root, result);
+            ApplyOverlayTheme(root, result);
+            ApplyOverlayOpacityPercent(root, result);
             ApplyBridgeEnabled(root, result);
             ApplyMdnsInterface(root, result);
             ApplyLogLevel(root, result);
@@ -977,6 +998,43 @@ public sealed class Config
         }
 
         _log("WARN", "config.json \"overlayPosition\" must be one of topLeft/topCenter/topRight/middleLeft/middleRight/bottomLeft/bottomCenter/bottomRight; using default bottomCenter.");
+    }
+
+    private void ApplyOverlayTheme(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("overlayTheme", out JsonElement element))
+        {
+            return;
+        }
+
+        // Same digit guard as overlayPosition: member names only.
+        if (element.ValueKind == JsonValueKind.String
+            && element.GetString() is { Length: > 0 } raw
+            && !char.IsAsciiDigit(raw[0])
+            && Enum.TryParse(raw, ignoreCase: true, out OverlayTheme theme)
+            && Enum.IsDefined(theme))
+        {
+            result.OverlayTheme = theme;
+            return;
+        }
+
+        _log("WARN", "config.json \"overlayTheme\" must be one of system/dark/light; using default system.");
+    }
+
+    private void ApplyOverlayOpacityPercent(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("overlayOpacityPercent", out JsonElement element))
+        {
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int percent) && percent is >= 30 and <= 100)
+        {
+            result.OverlayOpacityPercent = percent;
+            return;
+        }
+
+        _log("WARN", $"config.json \"overlayOpacityPercent\" must be an integer 30-100; using default {result.OverlayOpacityPercent}.");
     }
 
     private void ApplyOverlayEnabled(JsonElement root, BridgeConfig result)

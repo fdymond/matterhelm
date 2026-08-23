@@ -231,7 +231,9 @@ click **Save** (closing the window with unsaved changes asks first).
 - **Overlay** — the small on-screen pop-up that flashes briefly whenever a
   command arrives ("Google Home → Volume" with a fill bar, or a pill like
   "play/pause pressed"). Toggle it, choose which screen corner/edge it
-  appears at, and use **Preview** to see a sample without waiting for a
+  appears at, pick its theme (follows the Windows light/dark setting by
+  default, or force light/dark), set its opacity (100 = solid, lower =
+  see-through), and use **Preview** to see a sample without waiting for a
   real command.
 - **Advanced**:
   - **mDNS network interface** — leave blank unless your PC has more than
