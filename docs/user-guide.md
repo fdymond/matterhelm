@@ -99,7 +99,7 @@ options.
    Both are self-contained — no Node.js or .NET runtime needed. You can
    verify a download against the release's `SHA256SUMS.txt`:
    `certutil -hashfile <file> SHA256`.
-2. Run `MatterHelm.exe` (the installer offers to). The Matter-mark icon
+2. Run `MatterHelm.exe` (the installer offers to). The helm icon
    appears in the system tray (the hidden-icons area near the clock) —
    that's the whole UI surface.
 3. **Windows Firewall will likely prompt** the first time the bridge starts

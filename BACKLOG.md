@@ -113,6 +113,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
 | S10-1 ✅ | Launch prep: VoiceRemote references purged (ADR-001 genericized, CLAUDE/README/BLUEPRINT/RESEARCH), doc-accuracy pass (README rewritten to launch structure: features/install/verify/docs map; BLUEPRINT .NET-10 + 0.17.7 drift fixed), OSS scaffolding (SUPPORT.md, CODEOWNERS, docs/launch-checklist.md with the CSA-trademark blocker), Inno installer (per-user, AppMutex, fabric-preserving uninstall) + release pipeline attaches Setup exe + portable zip + SHA256SUMS | git grep zero VoiceRemote hits; installer full cycle verified locally (install→boot+pair→uninstall, %APPDATA% intact); ISCC on runner | M | — | integrator |
+| S10-2 ✅ | Trademark-safe logo: 3 original candidates rendered via --export-logo-candidates (helm / helm+house / bridge+house; no tri-radial motif) + SVG specimen artifact; owner picked A (helm) → Render() switched, CSA mark ARCHIVED in TrayIcons (kept per owner request, reference row in the candidates sheet); NOTICE/launch-checklist icon blocker resolved (name half stays open) | Contact sheet verified all states/sizes/themes; app 463 green | S | S10-1 | integrator |
 
 ## Proposed (from agent reports, integrator-triaged)
 

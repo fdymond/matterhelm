@@ -9,14 +9,16 @@ checksums, winget as the developer-facing channel).
 
 ## Blockers — do not flip the repo public before these
 
-- [ ] **CSA trademark review (NOTICE).** The tray icon *is* the Matter
-  certification mark, and the product name contains "Matter". The
-  certification mark is generally restricted to certified products.
-  Resolution options, in order of safety: (a) replace the icon with an
-  original glyph and rename, (b) keep the name but replace the icon and
-  add prominent non-affiliation language (already in README/NOTICE), or
-  (c) request permission from the CSA. **A human/legal decision — not
-  resolvable in code.**
+- [x] **Icon half of the CSA trademark review — resolved 2026-08-23**: the
+  tray icon is now an original ship's-helm glyph (owner picked candidate A;
+  the certification-mark drawing is archived, unshipped, in
+  `Ui/TrayIcons.cs`). Remaining:
+- [ ] **Name half of the CSA review (NOTICE).** "MatterHelm" contains
+  "Matter", used descriptively for protocol compatibility (as matter.js,
+  python-matter-server, HA Matter Hub do). Non-affiliation language is in
+  README/NOTICE. Give it a final look against the CSA brand guidelines —
+  a human/legal call, though the descriptive-use position is the ecosystem
+  norm.
 - [ ] **Repo history scan.** Run a secret scanner (e.g. `gitleaks`) over the
   full history before flipping public — the history ships with the repo.
   Nothing sensitive is *known* to be committed (tokens are env-only by

@@ -5,18 +5,21 @@ MatterHelm's code is MIT-licensed; see LICENSE.
 ## Trademarks
 
 "Matter" and the Matter certification mark are trademarks of the Connectivity
-Standards Alliance (CSA). MatterHelm's product name includes the word
-"Matter" and its tray icon currently renders the Matter certification mark.
-The MIT license above covers this project's source code only — it grants no
-rights to the Matter name or mark.
+Standards Alliance (CSA). The MIT license above covers this project's source
+code only — it grants no rights to the Matter name or mark.
 
-This repository is currently private and unreleased. Before any public
-release, distribution, or store listing, the icon and naming need a review
-against the CSA's brand/trademark guidelines (certification-mark usage is
-generally restricted to certified products, and "Matter"-containing product
-names may need adjustment or a permission request). Track that review as a
-pre-release checklist item — do not ship the current icon/name publicly
-without it.
+**Icon (resolved 2026-08-23):** MatterHelm's icon is an original ship's-helm
+glyph and does not use or imitate the Matter certification mark. (An earlier
+private build rendered the certification mark; that drawing is retained in
+the source history and as an archived, unshipped reference in
+`Ui/TrayIcons.cs`, and must not be re-enabled for any distributed build.)
+
+**Name (open):** the product name contains the word "Matter", used
+descriptively to indicate protocol compatibility — as is common across the
+ecosystem (matter.js, python-matter-server, Home Assistant Matter Hub).
+MatterHelm is an independent project, not affiliated with, endorsed, or
+certified by the CSA. Before any public release, give the name a final look
+against the CSA's brand guidelines (see docs/launch-checklist.md).
 
 ## Third-party components
 
