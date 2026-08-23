@@ -116,7 +116,7 @@ The rows below re-verify tap-tap-tap behavior on the S8-4 build.
 
 | Step | Expected | Observed | Verdict | Timestamp (UTC) |
 |---|---|---|---|---|
-| Settings → Devices & Commands → add a **media key** custom command (e.g. "Stop": mediaKey stop), save, restart bridge if prompted | New tile appears in Home app after re-pair/reload; voice + tile both dispatch the configured media key | | | |
+| Settings → Devices → add a **media key** custom command (e.g. "Stop": mediaKey stop), save, restart bridge if prompted | New tile appears in Home app after re-pair/reload; voice + tile both dispatch the configured media key | | | |
 
 ## Key-sequence command
 

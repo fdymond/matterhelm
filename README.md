@@ -77,8 +77,8 @@ review, ~5 minutes, once per Google account.
 4. Enter the sanctioned test IDs: **VID `0xFFF1`**, **PID `0x8000`**. Pick the
    bridge/aggregator device type if offered — Google gates pairing on the
    VID/PID, not that field. Leave it as a development/test integration; don't
-   submit for certification and don't pay anything.
-5. Save. A draft integration is enough.
+   submit for certification.
+5. Save as a draft integration.
 
 > Google's console UI moves around. If wording doesn't match, look for "test
 > device", "unlisted", or "development".
@@ -105,7 +105,9 @@ certutil -hashfile MatterHelm-Setup-<version>.exe SHA256
 > "Run anyway". Code-signing is on the roadmap.
 
 Run it: a **helm icon** appears in the system tray (check the hidden-icons
-area). That's the entire UI.
+area). That's the entire UI. On a fresh install a **setup guide** opens with
+the remaining steps and a button that does them for you — steps 4 and 5 below
+are the same thing done by hand. (Tray menu → **Setup guide…** reopens it.)
 
 ### 4. Name your devices before pairing
 
@@ -120,8 +122,9 @@ Untick anything you don't want published.
    **amber** (running, not yet paired).
 2. **Allow the Windows Firewall prompt** for **Private** networks. Without it
    the hub can't discover the bridge.
-3. Tray → **Pair with Google Home…** — a window shows a QR code and an
-   11-digit manual code.
+3. Tray → **Pair with Google Home…** — a window shows the phone-side steps, a
+   QR code, an 11-digit manual code, and a live status line that follows the
+   bridge from "starting" through to paired.
 4. In the Home app: **+ Add** → **Matter-enabled device**, scan the QR (or
    "Set up without QR code" and type the manual code).
 5. Tap through the **"not Matter-certified"** notice — expected for a

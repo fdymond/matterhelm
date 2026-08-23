@@ -117,13 +117,22 @@ options.
 
 ## Enabling the bridge and pairing
 
+> **The setup guide does this for you.** On a fresh install a **Welcome**
+> window opens by itself with these steps and an **Enable bridge & pair**
+> button that performs steps 1–2 below in one click. It appears once; reopen
+> it any time from the tray menu → **Setup guide…**. If you'd rather drive it
+> manually, the steps are:
+
 1. Right-click the tray icon and check **Enable bridge**. The icon turns
    amber ("running, not yet paired") within a few seconds. If it turns red,
-   see [Troubleshooting](#troubleshooting).
+   see [Troubleshooting](#troubleshooting). Hovering the tray icon always
+   spells out what its colour means.
 2. Click **Pair with Google Home…** in the tray menu. A window opens with a
    QR code and, below it, an 11-digit manual pairing code (use the manual
    code if the QR code won't scan, e.g. photographed off a low-quality
-   screen).
+   screen). It also carries the phone-side steps and a live status line, so
+   you can watch it move from "starting" to "waiting for the Google Home
+   app" to paired without touching anything.
 3. On your phone, open the **Google Home** app → **+ Add** → **Matter-
    enabled device** (wording varies: "New device" → pick your home →
    "Matter device"/scan option).
@@ -139,7 +148,7 @@ options.
    **HTPC Play Pause**, **HTPC Next**, **HTPC Previous**, and **HTPC
    Power**, plus one tile per custom command you've configured. (The name
    prefix "HTPC" and every individual name are yours to change any time in
-   Settings → Devices & Commands, before or after pairing — the Google Home
+   Settings → Devices, before or after pairing — the Google Home
    device name is whatever the app is configured to send at the time of
    pairing.)
 7. Once paired, the tray icon turns **green**. Pairing itself never needs
@@ -160,7 +169,7 @@ The transport controls (Play Pause/Next/Previous) and Power show up as
 switches that flip briefly to "on" and snap back — that's expected (Google
 doesn't currently expose a plain "button" concept for locally-paired
 devices with a direct voice target), it isn't a bug. How long the tile
-stays "on" is the **Tap reset delay** setting (Devices & Commands); the
+stays "on" is the **Tap reset delay** setting (Devices); the
 default is 0 — snap back immediately — and it's purely cosmetic either
 way, the command always fires. Raise it if you prefer seeing the tile
 light up briefly.
@@ -190,6 +199,26 @@ up takes about five minutes and is entirely optional — see
 bare words like "pause"/"stop" can't be used directly (they collide with
 Google's own global commands).
 
+## The tray menu
+
+Right-clicking the tray icon is the whole control surface:
+
+| Item | What it does |
+|---|---|
+| **Enable bridge** | Starts/stops the Matter sidecar; persists across restarts |
+| **Pair with Google Home…** | The pairing window (QR + manual code + live status) |
+| **Factory reset bridge…** | Deletes the pairing data 2014 see [Factory reset](#factory-reset--re-pairing) |
+| **Overlay pop-ups** | Toggles the on-screen command HUD |
+| **Settings…** | The settings window, below |
+| **Reload config** | Re-reads `config.json` from disk |
+| **Setup guide…** | Reopens the first-run walkthrough |
+| **About** | Version and links |
+| **Exit** | Stops the sidecar and quits |
+
+Hovering the icon shows the current state in words; its colour means gray =
+off, amber = running but not paired, green = running, red = a problem worth
+checking the log for.
+
 ## Settings tour
 
 Right-click the tray icon → **Settings…** opens a single window with a
@@ -199,7 +228,7 @@ click **Save** (closing the window with unsaved changes asks first).
 - **General** — the bridge's IPC port (only matters if 39531 collides with
   something else on your PC), the sidecar's log detail level, and this
   app's own log detail level (applies immediately, no restart).
-- **Devices & Commands** — rename or disable any of the five built-in
+- **Devices** — rename or disable any of the five built-in
   devices, choose what the Power device does, tune how quickly a tapped
   command's switch snaps back to "off" in Google Home (default 0 =
   immediately; purely cosmetic), and manage **custom commands**:
@@ -366,6 +395,13 @@ office PC"* vs *"…pause the HTPC"*.
   `docs/adr/006-telemetry-and-diagnostics.md` §4; no bridge-side setting
   changes it, since the stall is controller-side re-association policy, not
   a subscription the bridge can nudge.
+- **The pairing window shows no QR code.** It tells you which of the two
+  reasons applies. *"Starting the bridge…"* means there is no code yet —
+  tick **Enable bridge** if you haven't, and give it a few seconds; the
+  code appears on its own. *"Paired — nothing more to do here"* means this
+  PC is already commissioned, and a second code can't be issued for it; to
+  pair it again (or to a different home) run
+  [Factory reset](#factory-reset--re-pairing) first.
 - **Firewall / "can't find device" during pairing.** Make sure you clicked
   **Allow** on the Windows Firewall prompt (see Installing, step 3) for
   **Private networks**. If you dismissed it or picked "Cancel", delete the

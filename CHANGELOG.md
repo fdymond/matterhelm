@@ -12,10 +12,32 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Added
 
+- **First-run setup guide** (S10-7): a fresh install now opens a Welcome
+  window with the three things that have to happen in order (register once
+  with Google, name your devices, enable & pair), a link straight to the
+  Developer Console, and one button that enables the bridge and opens the
+  pairing window. Shown once on an install that has never paired; reopen it
+  any time from the tray menu → **Setup guide…**.
+- The pairing window now has **numbered phone-side instructions and a live
+  status line**, and the tray tooltip spells out what the icon colour means.
 - **Bridge name** (S10-6): Settings → Devices → **Bridge name** sets what
   Google Home calls the bridge itself, so several PCs running MatterHelm in
   one home are tellable apart. It's a label, not identity — changing it
   never re-pairs.
+
+### Fixed
+
+- **The pairing window named the wrong Home-app path** (S10-7): it said to
+  choose "Works with Google", which is the cloud account-linking branch — a
+  Matter device can never be added that way. It now names the real path:
+  **+ → Add device → Matter-enabled device**.
+- The pairing window no longer shows a code that cannot work: with no code
+  yet it says the bridge is still starting (previously it rendered a real but
+  meaningless `MT:PENDING` QR), and once commissioned it says so and points at
+  Factory reset instead of leaving a dead QR on screen for a scan that can
+  only fail.
+- A pairing code arriving at an already-open window now reveals it, instead of
+  rendering the QR inside a still-hidden panel.
 
 ### Changed
 

@@ -19,13 +19,20 @@ account link, no OAuth.
 ## Run
 
 1. Put this folder anywhere (e.g. `C:\Program Files\MatterHelm`) and start
-   `MatterHelm.exe`. A tray icon appears.
-2. In the tray menu, enable the bridge. The icon turns amber while starting,
-   green once the sidecar link is up.
-3. Choose **Pair…** in the tray menu, then in the Google Home app: add
-   device → "Works with Google / Matter-enabled device" → scan the QR code
-   (or type the manual code).
-4. Say "Hey Google, set HTPC volume to 40 %" — the overlay HUD on the PC
+   `MatterHelm.exe`. A tray icon appears, and on a fresh install the **setup
+   guide** opens with the three steps below. (Reopen it any time: tray menu →
+   **Setup guide…**.)
+2. **Register once with Google** — free, ~5 minutes, once per account, at
+   [console.home.google.com](https://console.home.google.com/): create a
+   project → Add integration → Matter → VID `0xFFF1`, PID `0x8000`. Skipping
+   this is the usual cause of a hard "not certified" pairing failure.
+3. In the tray menu, enable the bridge (allow the **Private networks**
+   firewall prompt). The icon turns amber while starting, green once the
+   sidecar link is up.
+4. Choose **Pair with Google Home…** in the tray menu, then in the Home app:
+   **+ Add** → **Add device** → **Matter-enabled device** → scan the QR code
+   (or type the manual code). The pairing window tells you where it's up to.
+5. Say "Hey Google, set HTPC volume to 40 %" — the overlay HUD on the PC
    shows each incoming command.
 
 Voice phrases and routine ideas: `docs/routines.md` in the source repository

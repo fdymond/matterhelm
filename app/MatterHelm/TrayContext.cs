@@ -49,7 +49,10 @@ public sealed class TrayContext : ApplicationContext
     private bool _disposed;
     private PairingWindow? _pairingWindow;
     private SettingsWindow? _settingsWindow;
+    private WelcomeWindow? _welcomeWindow;
     private (string QrPayload, string ManualCode)? _lastPairingInfo;
+    private readonly System.Windows.Forms.Timer _pairingSettleTimer;
+    private bool _pairingSettled;
     private BridgeState _state = BridgeState.Disabled;
 
     /// <summary>Creates the tray icon and menu, and loads (or creates) <see cref="Config"/>.</summary>
@@ -108,6 +111,9 @@ public sealed class TrayContext : ApplicationContext
         var reloadConfigItem = new ToolStripMenuItem("Reload config");
         reloadConfigItem.Click += OnReloadConfigClicked;
 
+        var setupGuideItem = new ToolStripMenuItem("Setup guide…");
+        setupGuideItem.Click += (_, _) => ShowWelcomeWindow();
+
         var aboutItem = new ToolStripMenuItem("About");
         aboutItem.Click += OnAboutClicked;
 
@@ -123,6 +129,7 @@ public sealed class TrayContext : ApplicationContext
         _contextMenu.Items.Add(settingsItem);
         _contextMenu.Items.Add(reloadConfigItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
+        _contextMenu.Items.Add(setupGuideItem);
         _contextMenu.Items.Add(aboutItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(exitItem);
@@ -133,6 +140,16 @@ public sealed class TrayContext : ApplicationContext
             Text = "MatterHelm",
             ContextMenuStrip = _contextMenu,
             Visible = true,
+        };
+
+        // S10-7: after this settles with the link up and no pairing code, the
+        // node must already be commissioned - see CurrentPairingStage.
+        _pairingSettleTimer = new System.Windows.Forms.Timer { Interval = 4_000 };
+        _pairingSettleTimer.Tick += (_, _) =>
+        {
+            _pairingSettleTimer.Stop();
+            _pairingSettled = true;
+            RefreshPairingWindowStage();
         };
 
         Config.Changed += OnConfigChanged;
@@ -158,6 +175,35 @@ public sealed class TrayContext : ApplicationContext
 
     /// <summary>"Exit" was clicked, before teardown; subscribers should synchronously stop anything they own (e.g. the sidecar).</summary>
     public event EventHandler? ExitRequested;
+
+    /// <summary>
+    /// The welcome window's "Enable bridge &amp; pair" button (S10-7): ticks
+    /// "Enable bridge" (which persists and starts the sidecar through the
+    /// normal path) and opens the pairing window, so onboarding ends in the
+    /// right place instead of on a menu the user has to find.
+    /// </summary>
+    public void StartGuidedPairing()
+    {
+        if (!_enableBridgeItem.Checked)
+        {
+            _enableBridgeItem.Checked = true;
+        }
+
+        ShowOrFocusPairingWindow();
+    }
+
+    /// <summary>Shows the first-run/setup guide window (tray menu, or automatically on a never-paired install).</summary>
+    public void ShowWelcomeWindow()
+    {
+        if (_welcomeWindow is null || _welcomeWindow.IsDisposed)
+        {
+            _welcomeWindow = new WelcomeWindow();
+            _welcomeWindow.StartPairingRequested += (_, _) => StartGuidedPairing();
+        }
+
+        _welcomeWindow.Show();
+        _welcomeWindow.Activate();
+    }
 
     /// <summary>The loaded config; also the source of "Reload config"/<see cref="Config.Changed"/> for other components to subscribe to.</summary>
     public Config Config { get; }
@@ -193,11 +239,15 @@ public sealed class TrayContext : ApplicationContext
         void Apply()
         {
             _lastPairingInfo = (qrPayload, manualCode);
+            _pairingSettleTimer.Stop();
+            _pairingSettled = false;
             UpdateMenuForState();
             if (_pairingWindow is { IsDisposed: false })
             {
                 _pairingWindow.SetPairingInfo(qrPayload, manualCode);
             }
+
+            RefreshPairingWindowStage();
         }
 
         if (_uiThreadMarshal.InvokeRequired)
@@ -214,7 +264,38 @@ public sealed class TrayContext : ApplicationContext
     {
         _state = state;
         _notifyIcon.Icon = _stateIcons[state];
+
+        // S10-7: the tooltip says what the icon colour means, so hovering
+        // answers "is it working?" without opening anything. NotifyIcon.Text
+        // is capped at 63 chars by Windows - keep these short.
+        _notifyIcon.Text = state switch
+        {
+            BridgeState.Running => "MatterHelm - bridge running, not paired yet",
+            BridgeState.Connected => "MatterHelm - bridge running",
+            BridgeState.Faulted => "MatterHelm - bridge problem, see the log",
+            _ => "MatterHelm - bridge off",
+        };
+
+        // Restart the settle window on every state change: only a link that
+        // STAYS up without a code means "already commissioned".
+        _pairingSettled = false;
+        _pairingSettleTimer.Stop();
+        if (state == BridgeState.Connected && _lastPairingInfo is null)
+        {
+            _pairingSettleTimer.Start();
+        }
+
         UpdateMenuForState();
+        RefreshPairingWindowStage();
+    }
+
+    /// <summary>Pushes the current stage into an open pairing window so it follows bridge state live (S10-7).</summary>
+    private void RefreshPairingWindowStage()
+    {
+        if (_pairingWindow is { IsDisposed: false })
+        {
+            _pairingWindow.SetStage(CurrentPairingStage);
+        }
     }
 
     private void UpdateMenuForState()
@@ -300,13 +381,33 @@ public sealed class TrayContext : ApplicationContext
         if (_pairingWindow is null || _pairingWindow.IsDisposed)
         {
             _pairingWindow = new PairingWindow();
-            (string qrPayload, string manualCode) = _lastPairingInfo ?? ("MT:PENDING", "Not yet available");
-            _pairingWindow.SetPairingInfo(qrPayload, manualCode);
         }
 
+        // S10-7: only render a code when we actually have one - the old
+        // "MT:PENDING" placeholder drew a real (meaningless) QR that a phone
+        // would happily try to scan.
+        if (_lastPairingInfo is { } info)
+        {
+            _pairingWindow.SetPairingInfo(info.QrPayload, info.ManualCode);
+        }
+
+        _pairingWindow.SetStage(CurrentPairingStage);
         _pairingWindow.Show();
         _pairingWindow.Activate();
     }
+
+    /// <summary>
+    /// What the pairing window should be showing (S10-7). Derived, because
+    /// the protocol carries no commissioned flag yet (backlog P-2): once the
+    /// sidecar has started, it withholds a pairing code ONLY when the node is
+    /// already commissioned (adapter.ts semantics), so "link up and no code"
+    /// means paired. <see cref="_pairingSettleTimer"/> covers the brief race
+    /// where the IPC link authenticates just before the code is emitted.
+    /// </summary>
+    private PairingStage CurrentPairingStage =>
+        _lastPairingInfo is not null ? PairingStage.ReadyToScan
+        : _pairingSettled && _state == BridgeState.Connected ? PairingStage.Paired
+        : PairingStage.Starting;
 
     /// <summary>Same single-instance pattern as the pairing window: recreate only when never opened or closed (disposed), else focus. A fresh window per open also means a fresh staged copy of the config.</summary>
     private void ShowOrFocusSettingsWindow()
@@ -401,6 +502,8 @@ public sealed class TrayContext : ApplicationContext
             Config.Changed -= OnConfigChanged;
             _pairingWindow?.Dispose();
             _settingsWindow?.Dispose();
+            _welcomeWindow?.Dispose();
+            _pairingSettleTimer.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             _contextMenu.Dispose();
