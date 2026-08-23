@@ -159,6 +159,200 @@ public static class TrayIcons
         }
     }
 
+    // ---- S10-2 logo candidates (design aid only — NOT wired to Render) ----
+    // Trademark-safe replacements for the CSA certification mark (the launch
+    // checklist's blocker): original geometry, no tri-radial arm-and-arc
+    // motif. All lean on the ownable half of the name — the HELM.
+
+    /// <summary>Candidate A — ship's helm: outer ring, 8 handle stubs, 4 inner spokes, hub dot. "You're at the helm."</summary>
+    private static void DrawHelm(Graphics g, int size, Color glyph)
+    {
+        float s = size;
+        var center = new PointF(0.5f * s, 0.5f * s);
+        float ringR = 0.30f * s;
+        float handleOuterR = 0.46f * s;
+        float hubR = Math.Max(1.6f, 0.10f * s);
+        float ringStroke = Math.Max(1.5f, 0.085f * s);
+        float spokeStroke = Math.Max(1.1f, 0.055f * s);
+
+        using var ringPen = new Pen(glyph, ringStroke);
+        g.DrawEllipse(ringPen, center.X - ringR, center.Y - ringR, 2 * ringR, 2 * ringR);
+
+        using var handlePen = new Pen(glyph, ringStroke) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var spokePen = new Pen(glyph, spokeStroke) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        for (int i = 0; i < 8; i++)
+        {
+            double a = (i * 45.0) * Math.PI / 180.0;
+            var dir = new PointF((float)Math.Cos(a), (float)Math.Sin(a));
+            g.DrawLine(
+                handlePen,
+                center.X + (dir.X * ringR), center.Y + (dir.Y * ringR),
+                center.X + (dir.X * handleOuterR), center.Y + (dir.Y * handleOuterR));
+            if (i % 2 == 0)
+            {
+                g.DrawLine(
+                    spokePen,
+                    center.X + (dir.X * hubR), center.Y + (dir.Y * hubR),
+                    center.X + (dir.X * ringR), center.Y + (dir.Y * ringR));
+            }
+        }
+
+        using var hub = new SolidBrush(glyph);
+        g.FillEllipse(hub, center.X - hubR, center.Y - hubR, 2 * hubR, 2 * hubR);
+    }
+
+    /// <summary>Candidate B — helm around a home: ring + 6 handles, solid house silhouette at the hub. "Steer your home."</summary>
+    private static void DrawHelmHouse(Graphics g, int size, Color glyph)
+    {
+        float s = size;
+        var center = new PointF(0.5f * s, 0.5f * s);
+        float ringR = 0.33f * s;
+        float handleOuterR = 0.48f * s;
+        float ringStroke = Math.Max(1.5f, 0.08f * s);
+
+        using var ringPen = new Pen(glyph, ringStroke);
+        g.DrawEllipse(ringPen, center.X - ringR, center.Y - ringR, 2 * ringR, 2 * ringR);
+
+        using var handlePen = new Pen(glyph, ringStroke) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        for (int i = 0; i < 6; i++)
+        {
+            double a = (-90.0 + (i * 60.0)) * Math.PI / 180.0;
+            var dir = new PointF((float)Math.Cos(a), (float)Math.Sin(a));
+            g.DrawLine(
+                handlePen,
+                center.X + (dir.X * ringR), center.Y + (dir.Y * ringR),
+                center.X + (dir.X * handleOuterR), center.Y + (dir.Y * handleOuterR));
+        }
+
+        // House silhouette filling the hub: roof apex → eaves → walls → floor.
+        float h = 0.42f * s; // house box edge
+        float left = center.X - (h / 2f);
+        float top = center.Y - (h / 2f) + (0.02f * s);
+        using var house = new GraphicsPath();
+        house.AddPolygon(
+        [
+            new PointF(center.X, top),
+            new PointF(left + h, top + (0.42f * h)),
+            new PointF(left + (0.82f * h), top + (0.42f * h)),
+            new PointF(left + (0.82f * h), top + h),
+            new PointF(left + (0.18f * h), top + h),
+            new PointF(left + (0.18f * h), top + (0.42f * h)),
+            new PointF(left, top + (0.42f * h)),
+        ]);
+        using var fill = new SolidBrush(glyph);
+        g.FillPath(fill, house);
+        using var soften = new Pen(glyph, Math.Max(1f, 0.05f * s)) { LineJoin = LineJoin.Round };
+        g.DrawPath(soften, house);
+    }
+
+    /// <summary>Candidate C — the literal bridge: arch + deck between two endpoint nodes, house above. "A bridge into the home."</summary>
+    private static void DrawBridgeHouse(Graphics g, int size, Color glyph)
+    {
+        float s = size;
+        float stroke = Math.Max(1.5f, 0.085f * s);
+        float deckY = 0.78f * s;
+        float leftX = 0.10f * s;
+        float rightX = 0.90f * s;
+        float nodeR = Math.Max(1.5f, 0.075f * s);
+
+        using var pen = new Pen(glyph, stroke) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        // Deck + arch (the arch bows up from the deck ends).
+        g.DrawLine(pen, leftX, deckY, rightX, deckY);
+        var archRect = new RectangleF(leftX, deckY - (0.42f * s), rightX - leftX, 0.84f * s);
+        g.DrawArc(pen, archRect.X, archRect.Y, archRect.Width, archRect.Height, 180f, 180f);
+        using var node = new SolidBrush(glyph);
+        g.FillEllipse(node, leftX - nodeR, deckY - nodeR, 2 * nodeR, 2 * nodeR);
+        g.FillEllipse(node, rightX - nodeR, deckY - nodeR, 2 * nodeR, 2 * nodeR);
+
+        // Small house resting on the arch apex.
+        float h = 0.34f * s;
+        float cx = 0.5f * s;
+        float top = 0.06f * s;
+        using var house = new GraphicsPath();
+        house.AddPolygon(
+        [
+            new PointF(cx, top),
+            new PointF(cx + (h / 2f), top + (0.45f * h)),
+            new PointF(cx + (0.36f * h), top + (0.45f * h)),
+            new PointF(cx + (0.36f * h), top + h),
+            new PointF(cx - (0.36f * h), top + h),
+            new PointF(cx - (0.36f * h), top + (0.45f * h)),
+            new PointF(cx - (h / 2f), top + (0.45f * h)),
+        ]);
+        using var fill = new SolidBrush(glyph);
+        g.FillPath(fill, house);
+    }
+
+    /// <summary>
+    /// Design aid (<c>--export-logo-candidates</c>): renders the S10-2
+    /// trademark-safe logo candidates in all four state tints at tray sizes,
+    /// on dark and light strips, into one contact sheet. Returns the file path.
+    /// </summary>
+    public static string ExportLogoCandidates(string? directory = null)
+    {
+        string dir = directory ?? Path.Combine(AppContext.BaseDirectory, "logo-candidates");
+        Directory.CreateDirectory(dir);
+        int[] sizes = [16, 24, 32, 48, 64];
+        Action<Graphics, int, Color>[] candidates = [DrawHelm, DrawHelmHouse, DrawBridgeHouse];
+        BridgeState[] states =
+            [BridgeState.Disabled, BridgeState.Running, BridgeState.Connected, BridgeState.Faulted];
+
+        int cell = 76;
+        int width = (sizes.Length * states.Length * cell) + cell;
+        int height = candidates.Length * cell * 2;
+        using var sheet = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(sheet))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            int row = 0;
+            foreach (Action<Graphics, int, Color> candidate in candidates)
+            {
+                foreach (bool dark in (bool[])[true, false])
+                {
+                    using (var back = new SolidBrush(dark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(238, 238, 238)))
+                    {
+                        g.FillRectangle(back, 0, row * cell, width, cell);
+                    }
+
+                    int col = 0;
+                    foreach (BridgeState state in states)
+                    {
+                        Color glyph = state switch
+                        {
+                            BridgeState.Running => DotColors[BridgeState.Running],
+                            BridgeState.Connected => DotColors[BridgeState.Connected],
+                            BridgeState.Faulted => DotColors[BridgeState.Faulted],
+                            _ => dark ? Color.FromArgb(245, 245, 245) : Color.FromArgb(32, 32, 32),
+                        };
+                        foreach (int size in sizes)
+                        {
+                            using var tile = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+                            using (var tg = Graphics.FromImage(tile))
+                            {
+                                tg.SmoothingMode = SmoothingMode.AntiAlias;
+                                tg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                tg.Clear(Color.Transparent);
+                                candidate(tg, size, glyph);
+                            }
+
+                            int x = (col * cell) + ((cell - size) / 2);
+                            int y = (row * cell) + ((cell - size) / 2);
+                            g.DrawImage(tile, x, y, size, size);
+                            col++;
+                        }
+                    }
+
+                    row++;
+                }
+            }
+        }
+
+        string path = Path.Combine(dir, "logo-candidates.png");
+        sheet.Save(path, ImageFormat.Png);
+        return path;
+    }
+
     /// <summary>
     /// Debug/design aid (<c>--export-tray-icons</c>): writes per-state PNGs at
     /// several sizes plus a contact sheet on dark and light taskbar strips.
