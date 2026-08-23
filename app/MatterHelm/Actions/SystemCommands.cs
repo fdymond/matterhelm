@@ -76,6 +76,56 @@ public static partial class SystemCommands
         }
     }
 
+    /// <summary>
+    /// Stops a running screensaver by closing its <c>.scr</c> process (S9-8).
+    /// Why not input injection: the original net-zero ±1 px mouse nudge sat
+    /// below the screensaver framework's anti-jitter dismissal threshold and
+    /// did nothing (owner report). Why not <c>SPI_GETSCREENSAVERRUNNING</c>:
+    /// it only reports Windows-initiated (idle-timeout) savers — a saver
+    /// launched by <see cref="StartScreenSaver"/> runs as a plain process it
+    /// never sees. Both cases run the <c>.scr</c> as a user-session process,
+    /// so enumerate-and-close covers them uniformly (live-probed: found +
+    /// gone in under a second). No screensaver found = success, logged.
+    /// </summary>
+    public static bool StopScreenSaver()
+    {
+        bool found = false;
+        foreach (Process process in Process.GetProcesses())
+        {
+            try
+            {
+                string? path = process.MainModule?.FileName;
+                if (path is null || !path.EndsWith(".scr", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                found = true;
+                if (!process.CloseMainWindow())
+                {
+                    // No main window to close (preview-mode oddity) — a
+                    // screensaver holds no user data, so kill is safe.
+                    process.Kill();
+                }
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+            {
+                // Protected/exited/other-session processes: not ours to touch.
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        if (!found)
+        {
+            Log.Info("stopScreenSaver: no screensaver process was running.");
+        }
+
+        return true;
+    }
+
     /// <summary>Locks the workstation (same as Win+L).</summary>
     public static bool LockWorkstation()
     {

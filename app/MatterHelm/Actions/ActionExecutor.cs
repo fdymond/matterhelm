@@ -67,9 +67,7 @@ public sealed class ActionExecutor : IDisposable
                 case "startScreenSaver":
                     return SystemCommands.StartScreenSaver();
                 case "stopScreenSaver":
-                    // The same net-zero mouse nudge that wakes displays also
-                    // dismisses a running screensaver.
-                    return DisplayPower.WakeDisplays();
+                    return SystemCommands.StopScreenSaver();
                 case "lock":
                     return SystemCommands.LockWorkstation();
                 case "closeForeground":

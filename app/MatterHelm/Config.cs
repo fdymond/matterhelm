@@ -67,7 +67,7 @@ public enum SystemCommandName
     /// <summary>Start the user's configured Windows screensaver.</summary>
     StartScreenSaver,
 
-    /// <summary>Dismiss a running screensaver (net-zero mouse nudge).</summary>
+    /// <summary>Stop a running screensaver (closes its .scr process).</summary>
     StopScreenSaver,
 
     /// <summary>Put all displays into their low-power state.</summary>
