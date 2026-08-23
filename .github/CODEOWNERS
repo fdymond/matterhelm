@@ -1,0 +1,7 @@
+# Default owner for everything — review requests route here automatically.
+* @fdymond
+
+# Protocol parity pair (docs/BLUEPRINT.md §2.3): changing either side alone
+# is a review blocker; ownership kept explicit so the pairing is visible.
+/bridge/src/ipc/protocol.ts @fdymond
+/app/MatterHelm/Sidecar/Protocol.cs @fdymond
