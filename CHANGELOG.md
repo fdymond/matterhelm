@@ -10,6 +10,15 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] — 2026-08-23
+
+Multi-PC and multi-account readiness, from a pre-launch portability review.
+Every install now has its own Matter identity, Vendor/Product IDs are real
+settings, and Store apps like Spotify can be picked straight from the launch
+editor. Upgrading preserves your pairing - no re-pair needed.
+
 ### Added
 
 - **"Store app…" picker for launch commands** (S10-5): pick Spotify, Media
