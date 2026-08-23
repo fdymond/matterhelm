@@ -1,112 +1,133 @@
 # MatterHelm
 
 [![CI](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml/badge.svg)](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/fdymond/matterhelm)](https://github.com/fdymond/matterhelm/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**MatterHelm** — a standalone Windows tray application that makes your
-HTPC a **locally-paired Google Home device**. Say "Hey Google, set HTPC volume
-to 40 %", tap devices in the Home app, or wire routines ("movie time") — the
-app executes the media/volume/power actions directly on the PC.
+**Turn your Windows HTPC into a locally-paired Google Home device.** Say
+"Hey Google, set HTPC volume to 40 %", tap tiles in the Home app, or wire
+routines ("movie time") — MatterHelm executes the media, volume, power, and
+custom actions directly on the PC.
 
-No cloud, no OAuth server, no paid certification: pairing is a QR-code scan
-(Matter over the local network via a [matter.js](https://github.com/project-chip/matter.js/)
-virtual bridge). Two Google-side prerequisites (see `docs/adr/002`): a
-Google/Nest **Matter hub** device on the LAN (Nest speaker/display/Wifi Pro/
-Google TV Streamer), and a one-time **free** Google Home Developer Console
-project registering the bridge's test VID/PID. Fully independent product —
-see `docs/adr/001` (it shares a machine, but no code, with the VoiceRemote
-voice-control app).
+No cloud, no OAuth server, no paid certification: pairing is a one-time
+QR-code scan — Matter over your local network via a
+[matter.js](https://github.com/matter-js/matter.js) virtual bridge, executed
+natively by a tiny Windows tray app. Fully self-contained (`docs/adr/001`):
+no external services, no companion apps.
 
 ```
 Google Home app / Nest speaker
         │  Matter (local network)
         ▼
-bridge/  Node 22 + matter.js sidecar        (Matter Aggregator: Speaker + switches)
+bridge/  Node 22 + matter.js sidecar      (Matter Aggregator: Speaker + switches)
         │  localhost WebSocket, token-auth
         ▼
-app/     C# .NET 8 WinForms tray app        (supervisor + executor + UI)
-        ├─ ActionExecutor → SMTC / media keys / CoreAudio / display power
-        └─ Overlay HUD    → click-through pop-ups: incoming command + action taken
+app/     C# .NET 10 WinForms tray app     (supervisor + executor + UI)
+        ├─ ActionExecutor → media keys / CoreAudio / key chords / system commands
+        └─ Overlay HUD    → click-through pop-ups: incoming command + result
 ```
 
-## What you can control
+## Features
 
-| Google Home surface | Action on the PC |
+- **Voice + app + routines** — volume/mute with a real slider, play/pause,
+  next/previous, configurable power off (displays off / sleep / pause-then-off).
+- **Custom commands** — each becomes its own Google Home device: press a
+  media key, launch a program, send a keyboard chord (typed or captured),
+  run a system command (screensaver, lock, sleep, hibernate, shutdown…), or
+  chain them into a **macro** with waits.
+- **Robust command handling** — actions dispatch from Matter *commands*, so
+  repeated voice commands and every tile tap fire (no dropped taps); long
+  macros never block other commands.
+- **Overlay HUD** — click-through, non-activating pop-ups for each command
+  with a volume fill bar; 8 screen positions, light/dark/system theme,
+  adjustable opacity.
+- **Settings UI** — categorized pages with search, staged edits, inline
+  validation, live preview.
+- **Local-first diagnostics** — structured logs, metrics snapshots with
+  resource gauges, one-click privacy-scrubbed diagnostics export. Nothing
+  ever leaves the machine.
+- **Lean** — measured budgets, enforced: tray ≈ 15 MB private, one sidecar
+  process ≈ 95 MB, idle CPU < 0.5 % (see `docs/adr/007`).
+
+## Requirements
+
+1. **Windows 11** (x64).
+2. A **Google Nest hub device** on the same LAN — Nest Hub/Mini/Audio, Nest
+   Wifi Pro, or Google TV Streamer. A phone alone cannot commission Matter
+   devices (`docs/adr/002`).
+3. **IPv6 enabled** on the active network adapter (Matter requirement, even
+   though everything stays local).
+4. A one-time, **free** [Google Home Developer Console](https://console.home.google.com/)
+   registration of the test VID/PID — step-by-step in the
+   [user guide](docs/user-guide.md#one-time-google-home-developer-console-setup).
+
+## Install
+
+Download from [Releases](https://github.com/fdymond/matterhelm/releases/latest):
+
+- **Installer** — `MatterHelm-Setup-<version>.exe`: installs to Program
+  Files, Start-menu entry, optional start-with-Windows, clean uninstall.
+- **Portable** — `matterhelm-<version>-win-x64.zip`: unzip anywhere and run
+  `MatterHelm.exe`. Nothing else to install — the Matter sidecar ships as a
+  bundled single exe; no Node.js or .NET runtime needed.
+
+Verify downloads against `SHA256SUMS.txt` attached to each release:
+`certutil -hashfile MatterHelm-Setup-<version>.exe SHA256`.
+
+> **Note**: binaries are currently unsigned — SmartScreen may prompt on
+> first run ("More info" → "Run anyway"). Windows Firewall will ask to allow
+> the bridge on **Private** networks; that's required for pairing.
+
+Then follow the [user guide](docs/user-guide.md): enable the bridge from the
+tray, scan the pairing QR with the Google Home app, name your devices.
+
+## Documentation
+
+| Doc | What's in it |
 |---|---|
-| "set HTPC volume to 40 %" / volume slider | System volume (CoreAudio) |
-| "mute the HTPC speaker" | System mute |
-| "turn on HTPC Play Pause" / routine / app tap | Media play-pause toggle |
-| "turn on HTPC Next" · "…Previous" | Next / previous track |
-| "turn off HTPC Power" | Configurable: pause + screen off / sleep |
+| [User guide](docs/user-guide.md) | Install → console setup → pairing → settings tour → troubleshooting → privacy |
+| [Natural voice phrases](docs/routines.md) | Routine starters ("pause the HTPC") and stateless button tiles |
+| [Architecture blueprint](docs/BLUEPRINT.md) | Binding design & IPC protocol spec |
+| [ADRs](docs/adr/) | Every architectural decision, with context and consequences |
+| [Engineering standards](docs/ENGINEERING-STANDARDS.md) | The quality bar (TS + C#) |
+| [Research](docs/RESEARCH.md) | Why this integration route (July 2026 survey) |
 
-(Transport rides on momentary virtual switches — Google Home doesn't yet
-support Matter's media-playback cluster; see `docs/RESEARCH.md`.)
+## Building from source
+
+```bash
+cd bridge && npm ci && npm run verify        # sidecar: lint + types + 328 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 463 tests
+./build.ps1                                  # dist/: portable folder, SEA sidecar
+```
+
+Dev requirements: Node 22 LTS, .NET 10 SDK, Windows. CI runs the same gates
+on every push (bridge verify + coverage on ubuntu/windows, app build + tests
++ coverage on windows).
 
 ## Status
 
-**Phase: v0.2.0 released** (Sprint 8 trigger mechanics — see
-`CHANGELOG.md`). CI green on every commit (bridge verify+coverage on
-ubuntu/windows, app build+tests+coverage on windows). Commissioned against
-a real Nest hub.
-
-- **Bridge (`bridge/`)**: full Matter device model behind the adapter
-  boundary; actions dispatch from OnOff **commands** (ADR-008 — repeats
-  never drop, every tile tap fires), protocol v2 with custom commands,
-  structured diagnostics with session observability, esbuild single-file
-  bundle (one node process, ~0.9 s cold start). 328 tests, pure modules
-  gated at 90 %+.
-- **Tray app (`app/MatterHelm`)**: supervisor + loopback IPC, CoreAudio/
-  media-key/key-chord/system-command/display executor, command macros with
-  a non-blocking background runner, click-through overlay HUD with volume
-  fill bar, settings window (categorized nav, search, custom-command CRUD
-  incl. key-sequence capture and macro steps), dark mode, DPI-safe at
-  200 %, local metrics + privacy-hardened diagnostics export. 439 tests.
-  Budgets measured and enforced (ADR-007).
-- **Sprints 0–8 delivered and adversarially reviewed**, including Sprint 3
-  packaging (`build.ps1` single dist folder, Node SEA sidecar, factory
-  reset, user guide) and the Sprint 8 deep-review pass. Remaining: the full
-  hardware E2E checklist (`docs/e2e-log.md`) against the packaged dist.
-  Natural voice phrases: see `docs/routines.md`.
-
-## Repository layout
-
-| Path | Purpose |
-|---|---|
-| `bridge/` | Matter sidecar — Node 22 + TypeScript (strict), matter.js |
-| `app/` | Tray application — C# .NET WinForms (`MatterHelm`) |
-| `docs/BLUEPRINT.md` | Binding architecture & protocol spec |
-| `docs/RESEARCH.md` | Integration-route research (July 2026) |
-| `docs/DEVELOPMENT-PLAN.md` · `BACKLOG.md` | Process, sprints, story backlog |
-| `docs/ENGINEERING-STANDARDS.md` | Quality bar (TS + C#) |
-| `docs/adr/` | Architecture Decision Records |
-| `CLAUDE.md` | Sub-agent orchestration playbook |
-
-## Quick start
-
-```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + tests
-# app:  dotnet build app/MatterHelm/MatterHelm.csproj -c Release
-# dist: ./build.ps1  → single folder with both executables
-```
-
-Requires Node 22 LTS (dev) — end users get a single-exe sidecar (Node SEA)
-bundled next to the tray app.
+**v0.2.0 released; Sprint 9 (settings/overlay polish, launch prep) on
+`main`.** Commissioned and exercised against real Nest hub hardware.
+791 automated tests across both processes, measured resource budgets
+(`docs/adr/007`), and a scripted hardware E2E checklist
+(`docs/e2e-log.md`). See [`CHANGELOG.md`](CHANGELOG.md) for history and
+[`BACKLOG.md`](BACKLOG.md) for what's next.
 
 ## Contributing
 
-MatterHelm is currently a private, solo-maintained repository. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test workflow, the
-engineering bar, commit conventions, and the protocol-parity and ADR rules
-that govern changes here.
+Issues and PRs welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+build/test workflow, engineering bar, commit conventions, and the
+protocol-parity and ADR rules that govern changes. Questions → 
+[`SUPPORT.md`](SUPPORT.md).
 
 ## Security
 
-Please report suspected vulnerabilities privately per
-[`SECURITY.md`](SECURITY.md) (GitHub Security Advisories) rather than in a
-public issue.
+Report suspected vulnerabilities privately per [`SECURITY.md`](SECURITY.md)
+(GitHub Security Advisories), not in a public issue.
 
-## License
+## License & trademarks
 
 MIT — see [`LICENSE`](LICENSE). "Matter" and the Matter certification mark
-are trademarks of the Connectivity Standards Alliance; see
-[`NOTICE`](NOTICE) for the trademark note ahead of any public release.
+are trademarks of the Connectivity Standards Alliance (CSA); see
+[`NOTICE`](NOTICE). MatterHelm is an independent project, not affiliated
+with or endorsed by the CSA or Google.

@@ -12,6 +12,11 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Added
 
+- **Windows installer** (S10-1): `MatterHelm-Setup-<version>.exe` (Inno
+  Setup) - per-user by default (no UAC), optional start-with-Windows,
+  Start-menu entry, clean uninstall that preserves pairing/settings.
+  Releases now attach installer + portable zip + `SHA256SUMS.txt`.
+
 - **Live resource monitoring** (S9-6): the 60 s metrics snapshots now carry
   process gauges - private bytes (the ADR-007 budget metric), managed-heap
   bytes, handle count, thread count - so a leak shows as a trend in

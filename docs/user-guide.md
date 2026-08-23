@@ -87,21 +87,29 @@ options.
 
 ## Installing
 
-1. Download the MatterHelm release zip and unzip it anywhere (e.g.
-   `C:\Apps\MatterHelm\`). The folder contains `MatterHelm.exe` plus a
-   `sidecar\` folder — keep them together; nothing needs installing or an
-   administrator prompt.
-2. Run `MatterHelm.exe`. A small speaker/plug icon appears in the system
-   tray (the hidden-icons area near the clock) — that's the whole UI
-   surface; there's no separate installer or start-menu app.
+1. Download from the [releases page](https://github.com/fdymond/matterhelm/releases/latest) — either:
+   - **Installer** (`MatterHelm-Setup-<version>.exe`): run it — no
+     administrator prompt (it installs per-user), with an optional
+     start-with-Windows checkbox, a Start-menu entry, and a clean uninstall
+     that keeps your pairing and settings.
+   - **Portable zip** (`matterhelm-<version>-win-x64.zip`): unzip anywhere
+     (e.g. `C:\Apps\MatterHelm\`). The folder contains `MatterHelm.exe` plus
+     a `sidecar\` folder — keep them together.
+
+   Both are self-contained — no Node.js or .NET runtime needed. You can
+   verify a download against the release's `SHA256SUMS.txt`:
+   `certutil -hashfile <file> SHA256`.
+2. Run `MatterHelm.exe` (the installer offers to). The Matter-mark icon
+   appears in the system tray (the hidden-icons area near the clock) —
+   that's the whole UI surface.
 3. **Windows Firewall will likely prompt** the first time the bridge starts
    ("Windows Defender Firewall has blocked some features of this app").
    Click **Allow access** for **Private networks** (you don't need Public/
    Domain). This lets the bridge advertise itself and talk Matter to your
    Nest hub over the LAN — without it, pairing can't find the device.
-4. Optional: right-click the tray icon → there's no built-in "start with
-   Windows" toggle yet; if you want that, add a shortcut to `MatterHelm.exe`
-   to your Startup folder (Win+R → `shell:startup`).
+4. Optional (portable zip only): to start MatterHelm with Windows, add a
+   shortcut to `MatterHelm.exe` to your Startup folder (Win+R →
+   `shell:startup`). The installer offers this as a checkbox instead.
 
 ## Enabling the bridge and pairing
 

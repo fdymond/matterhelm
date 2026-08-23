@@ -16,9 +16,9 @@ defines Done.
 3. **Evidence or it didn't happen.** Paste verbatim `npm run verify` / test
    output into your final report. DoD requires it.
 4. **Never** run `git commit/checkout/reset/stash` unless your prompt says so.
-   The integrator owns git. Never push. Never touch `%APPDATA%` state and
-   never touch the sibling repo `../windows-voice-control` — this product is
-   independent of it by decision (ADR-001).
+   The integrator owns git. Never push. Never touch `%APPDATA%` state, and
+   never reference or depend on anything outside this repo — the product is
+   fully standalone by decision (ADR-001).
 5. **Deviation = ADR.** If the blueprint is wrong or matter.js reality differs,
    write the one-page ADR draft in `docs/adr/` and flag it prominently — don't
    silently improvise architecture.
@@ -40,7 +40,7 @@ Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
 (Sprint 0/2 stories) builds with
 `dotnet build app/MatterHelm/MatterHelm.csproj -c Release`
 (warnings-as-errors). This product is fully standalone (ADR-001): never
-reference, read config from, or depend on `../windows-voice-control` code.
+reference, read config from, or depend on code outside this repository.
 
 **Pre-Sprint-0 state**: `bridge/package.json` deps are intentionally empty
 (story S0-1 installs and pins them), so `npm ci`/`verify` fail until S0-1

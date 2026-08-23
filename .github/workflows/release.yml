@@ -51,13 +51,40 @@ jobs:
       - name: Build dist
         run: ./build.ps1 -SkipTests
 
-      - name: Zip dist
+      - name: Zip dist (portable)
         run: Compress-Archive -Path dist/* -DestinationPath matterhelm-${{ github.ref_name }}-win-x64.zip
+
+      # S10: Windows installer (Inno Setup 6 is preinstalled on
+      # windows-latest runners). Version = the tag without its leading "v".
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DAppVersion=$version installer\matterhelm.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          Get-ChildItem dist-installer
+
+      # S10: SHA-256 manifest over both assets so downloads are verifiable
+      # (README documents `certutil -hashfile <file> SHA256`).
+      - name: Generate SHA256SUMS
+        shell: pwsh
+        run: |
+          $lines = foreach ($f in @(
+              "matterhelm-${{ github.ref_name }}-win-x64.zip",
+              (Get-ChildItem dist-installer/MatterHelm-Setup-*.exe).FullName)) {
+            $h = Get-FileHash $f -Algorithm SHA256
+            "{0}  {1}" -f $h.Hash.ToLowerInvariant(), (Split-Path $f -Leaf)
+          }
+          Set-Content SHA256SUMS.txt $lines -Encoding ascii
+          Get-Content SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.2
         with:
           generate_release_notes: true
-          files: matterhelm-${{ github.ref_name }}-win-x64.zip
+          files: |
+            matterhelm-${{ github.ref_name }}-win-x64.zip
+            dist-installer/MatterHelm-Setup-*.exe
+            SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

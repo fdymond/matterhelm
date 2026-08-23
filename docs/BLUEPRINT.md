@@ -25,8 +25,8 @@ executes the resulting commands itself. No dependency on any other repo or app
 **Non-goals**
 - Matter Media Playback / Content Launcher clusters (Google doesn't surface
   them — RESEARCH.md). Revisit when Google's supported-clusters page changes.
-- Voice recognition of any kind — that is VoiceRemote's domain; the two apps
-  are unrelated processes that may coexist on one machine.
+- Voice recognition of any kind — "Hey Google" recognition happens on
+  Google's devices; this app only receives the resulting Matter commands.
 - Kodi-aware routing (icebox — would be a fresh implementation here if wanted).
 - Ecosystems beyond Google (Alexa/Apple may incidentally pair; untested).
 
@@ -36,7 +36,7 @@ executes the resulting commands itself. No dependency on any other repo or app
 flowchart LR
     GH[Google Home\napp / Nest speaker] -- Matter over LAN\nmDNS + UDP/TCP --> MB
     subgraph HTPC [Windows HTPC — this product]
-        MB[bridge/ sidecar\nNode 22 + matter.js] -- WS 127.0.0.1:39531\nJSON, token auth --> TA[app/ tray application\nC# .NET 8 WinForms]
+        MB[bridge/ sidecar\nNode 22 + matter.js] -- WS 127.0.0.1:39531\nJSON, token auth --> TA[app/ tray application\nC# .NET 10 WinForms]
         TA --> EX[ActionExecutor]
         EX --> OS[SMTC / media keys /\nCoreAudio / display power]
         TA --> HUD[Overlay HUD\nclick-through flash pop-ups]
@@ -73,7 +73,7 @@ Rules: `matter/` never imports `ipc/`; they meet in `index.ts` through
 matter.js facts fixed by integrator research 2026-07-26 (repo is now
 `matter-js/matter.js` under the Open Home Foundation):
 
-- Pin `@matter/main@0.17.6`; engines floor is Node **≥ 22.13** (22.0–22.12
+- Pin `@matter/main@0.17.7` (ADR-006 patch bump); engines floor is Node **≥ 22.13** (22.0–22.12
   excluded). Never depend on `@matter/nodejs-ble` (native bindings, broken on
   Windows, not needed — the phone/hub does BLE commissioning).
 - Confirmed pattern: `ServerNode.create(...)` → `new Endpoint(AggregatorEndpoint)`
@@ -179,7 +179,7 @@ State flows on connect and on every change (the executor observes system
 volume/mute via CoreAudio callbacks). If the socket is down, Matter writes are
 acked, the action is dropped with one WARN, and the bridge never crashes.
 
-### 2.4 `app/` — tray application (C# .NET 8 WinForms, `MatterHelm`)
+### 2.4 `app/` — tray application (C# .NET 10 WinForms, `MatterHelm` — ADR-005)
 
 ```
 app/MatterHelm/

@@ -16,9 +16,9 @@ self-hosted, low-ceremony** routes. Research conducted 2026-07-26.
 
 ## Recommendation
 
-**Primary: Route 1 — local Matter virtual bridge via matter.js**, driven as a
-new front-end onto VoiceRemote's existing `CommandRouter`. Only route that is
-simultaneously local, ceremony-free on the Google side, and Windows-native.
+**Primary: Route 1 — local Matter virtual bridge via matter.js**, executing
+actions natively in this app. Only route that is simultaneously local,
+ceremony-light on the Google side, and Windows-native.
 
 **Fallback:** Route 2, but only for households already running Home Assistant.
 

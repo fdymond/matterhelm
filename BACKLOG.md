@@ -108,6 +108,12 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S9-7 ✅ | Overlay opacity editor → slider (owner request): SettingKind.Slider (TrackBar + live "NN %" label, 5/10 steps); descriptor unchanged Get/Set so round-trip tests stand | Settings demo PASS, Overlay page screenshot-verified; app 463 green | S | S9-4 | integrator |
 | S9-8 ✅ | "Stop screensaver" fixed (owner report: did nothing): ±1 px nudge < scrnsave anti-jitter threshold; replaced with enumerate-and-CloseMainWindow of `.scr` processes (covers self-launched savers SPI never reports; kill fallback for windowless; protected-process exceptions skipped) | Live probe: saver found + gone <1 s via the exact mechanism; app 463 green | S | S8-5 | integrator |
 
+## Sprint 10 — public-launch preparation (owner-directed)
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S10-1 ✅ | Launch prep: VoiceRemote references purged (ADR-001 genericized, CLAUDE/README/BLUEPRINT/RESEARCH), doc-accuracy pass (README rewritten to launch structure: features/install/verify/docs map; BLUEPRINT .NET-10 + 0.17.7 drift fixed), OSS scaffolding (SUPPORT.md, CODEOWNERS, docs/launch-checklist.md with the CSA-trademark blocker), Inno installer (per-user, AppMutex, fabric-preserving uninstall) + release pipeline attaches Setup exe + portable zip + SHA256SUMS | git grep zero VoiceRemote hits; installer full cycle verified locally (install→boot+pair→uninstall, %APPDATA% intact); ISCC on runner | M | — | integrator |
+
 ## Proposed (from agent reports, integrator-triaged)
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the
