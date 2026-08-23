@@ -15,6 +15,9 @@ public enum SettingKind
     /// <summary>Integer within the descriptor's <see cref="SettingDescriptor.Minimum"/>–<see cref="SettingDescriptor.Maximum"/> range.</summary>
     Number,
 
+    /// <summary>Integer within the range, edited with a slider + live value label (S9-7).</summary>
+    Slider,
+
     /// <summary>Required free text (must be non-empty to save).</summary>
     Text,
 
@@ -659,9 +662,9 @@ public sealed class SettingsViewModel
                 {
                     // S9-4: layered-window constant alpha, 30-100 %.
                     Id = "overlay-opacity",
-                    Label = "Overlay opacity (%)",
-                    Description = "How opaque the overlay panel is. 100 = solid, lower = more see-through.",
-                    Kind = SettingKind.Number,
+                    Label = "Overlay opacity",
+                    Description = "How opaque the overlay panel is. 100 % = solid, lower = more see-through.",
+                    Kind = SettingKind.Slider,
                     Minimum = 30,
                     Maximum = 100,
                     Get = c => c.OverlayOpacityPercent,

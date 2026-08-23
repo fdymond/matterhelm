@@ -39,6 +39,8 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   - an enabled checkbox at the start of the line (untick greys the row and
   its name box - the disabled state reads at a glance), the description,
   and the device-name editor inline. Ten rows became five.
+- Overlay opacity is edited with a slider with a live percent readout
+  instead of a number spinner (S9-7).
 - Settings polish (S9-1): the per-row "takes effect" notes are factored into
   one footer message (rows carry a small marker instead); the overlay
   **Preview** now shows at the position you have staged in the window, not
