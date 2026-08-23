@@ -19,6 +19,10 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Changed
 
+- README is now self-sufficient for setup: a numbered from-scratch walkthrough
+  (requirements → free Console registration → install & verify → naming →
+  pairing → first voice command) plus a "Multiple PCs in one home" section.
+  The user guide stays the deeper reference.
 - The multi-PC guide is corrected: a second PC needs **no** separate
   Vendor/Product ID and no extra Developer Console registration (per-install
   identity already keeps them distinct) — only distinct names. Adds an
