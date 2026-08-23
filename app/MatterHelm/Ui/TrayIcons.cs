@@ -5,8 +5,9 @@ using Microsoft.Win32;
 namespace MatterHelm.Ui;
 
 /// <summary>
-/// Runtime-drawn tray iconography (no .ico assets): the Matter certification
-/// mark as the single glyph, tinted by bridge state. When idle it is
+/// Runtime-drawn tray iconography (no .ico assets): the HELM as the single
+/// glyph (owner pick 2026-08-23; trademark-safe original geometry - the
+/// prior CSA-mark glyph stays archived below), tinted by bridge state. When idle it is
 /// monochrome and theme-aware — near-white on a dark taskbar, near-black on
 /// a light one — matching how Windows 11 system tray glyphs (OneDrive,
 /// Teams, Defender) read. Everything is drawn proportionally to the
@@ -66,10 +67,12 @@ public static class TrayIcons
 
     /// <summary>
     /// Renders one state's icon into a fresh 32bpp bitmap of the given square
-    /// size. Owner-specified state language (2026-08-19: one glyph, tint only):
-    /// always the Matter certification mark, tinted by state — white/theme
-    /// silhouette = disabled, amber = enabling/connecting, green = bridge
-    /// running (hub-connected), red = faulted.
+    /// size. The glyph is the HELM (candidate A, owner pick 2026-08-23 —
+    /// trademark-safe original geometry replacing the CSA certification
+    /// mark, which stays archived in <see cref="DrawMatterMark"/>). State
+    /// language unchanged: white/theme silhouette = disabled, amber =
+    /// enabling/connecting, green = bridge running (hub-connected), red =
+    /// faulted.
     /// </summary>
     public static Bitmap Render(BridgeState state, int size, bool darkTaskbar)
     {
@@ -87,13 +90,15 @@ public static class TrayIcons
             _ => darkTaskbar ? Color.FromArgb(245, 245, 245) : Color.FromArgb(32, 32, 32),
         };
 
-        DrawMatterMark(g, size, glyph);
+        DrawHelm(g, size, glyph);
         return bitmap;
     }
 
     /// <summary>
-    /// The Matter mark, the sole glyph since 2026-08-19 (owner request
-    /// 2026-08-09 for the shape): a faithful
+    /// ARCHIVED (owner request 2026-08-23: keep, do not delete): the product
+    /// glyph 2026-08-09 → 2026-08-23, replaced by <see cref="DrawHelm"/> for
+    /// trademark safety. Still rendered as the reference row of
+    /// <see cref="ExportLogoCandidates"/>. A faithful
     /// rendition of the Matter certification mark — three units at 120°
     /// rotational symmetry, each a thick radial arm plus an arc whose circle
     /// is centered on that arm's OUTER tip (proportions measured from the
@@ -159,12 +164,13 @@ public static class TrayIcons
         }
     }
 
-    // ---- S10-2 logo candidates (design aid only — NOT wired to Render) ----
-    // Trademark-safe replacements for the CSA certification mark (the launch
-    // checklist's blocker): original geometry, no tri-radial arm-and-arc
-    // motif. All lean on the ownable half of the name — the HELM.
+    // ---- S10-2 logo marks: DrawHelm is the production glyph (candidate A,
+    // adopted 2026-08-23); B and C remain as design-aid alternatives in the
+    // ExportLogoCandidates sheet. Original geometry throughout - no
+    // tri-radial arm-and-arc motif (the launch checklist's trademark
+    // blocker).
 
-    /// <summary>Candidate A — ship's helm: outer ring, 8 handle stubs, 4 inner spokes, hub dot. "You're at the helm."</summary>
+    /// <summary>THE production mark since 2026-08-23 (was candidate A) — ship's helm: outer ring, 8 handle stubs, 4 inner spokes, hub dot. "You're at the helm."</summary>
     private static void DrawHelm(Graphics g, int size, Color glyph)
     {
         float s = size;
@@ -293,7 +299,7 @@ public static class TrayIcons
         string dir = directory ?? Path.Combine(AppContext.BaseDirectory, "logo-candidates");
         Directory.CreateDirectory(dir);
         int[] sizes = [16, 24, 32, 48, 64];
-        Action<Graphics, int, Color>[] candidates = [DrawHelm, DrawHelmHouse, DrawBridgeHouse];
+        Action<Graphics, int, Color>[] candidates = [DrawMatterMark, DrawHelm, DrawHelmHouse, DrawBridgeHouse];
         BridgeState[] states =
             [BridgeState.Disabled, BridgeState.Running, BridgeState.Connected, BridgeState.Faulted];
 
