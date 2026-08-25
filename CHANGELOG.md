@@ -10,6 +10,17 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.1] — 2026-08-25
+
+Getting started, and getting started again. A first-run guide walks a fresh
+install through registration, naming, and pairing; the pairing window now
+names the real Home-app path with numbered steps and a live status line; and
+re-pairing after a factory reset works instead of failing with "can't find
+device". The bridge itself is nameable, so several PCs in one home are
+tellable apart.
+
 ### Added
 
 - **First-run setup guide** (S10-7): a fresh install now opens a Welcome

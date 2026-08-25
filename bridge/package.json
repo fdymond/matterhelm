@@ -1,6 +1,6 @@
 {
   "name": "matterhelm-bridge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "MatterHelm's Matter virtual-device bridge sidecar — exposes a Windows HTPC to Google Home",
   "type": "module",
