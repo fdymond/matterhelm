@@ -176,9 +176,6 @@ PC's identity and the two will conflict. Fix: close MatterHelm on the clone,
 delete the `"uniqueIdSeed"` line from `config.json` and the `matter` folder
 beside it, then start it — a fresh identity is minted.
 
-> **Bridge name** requires a build newer than v0.4.0; on v0.4.0 the device
-> names alone still distinguish the two PCs.
-
 ## Documentation
 
 | Doc | What's in it |
@@ -193,8 +190,8 @@ beside it, then start it — a fresh identity is minted.
 ## Building from source
 
 ```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + 342 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 499 tests
+cd bridge && npm ci && npm run verify        # sidecar: lint + types + 343 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 501 tests
 ./build.ps1                                  # dist/: portable folder, SEA sidecar
 ```
 
@@ -204,11 +201,11 @@ on every push (bridge verify + coverage on ubuntu/windows, app build + tests
 
 ## Status
 
-**v0.4.0 released** (per-install Matter identity, configurable VID/PID,
-Store-app launch picker; Sprints 9-10 before it: helm icon, overlay
-theming/opacity, settings restructure, resource monitoring, Windows
-installer). Commissioned and exercised against real Nest hub hardware.
-841 automated tests across both processes, measured resource budgets
+**v0.4.1 released** (first-run setup guide, rebuilt pairing window,
+factory-reset re-pair fix, configurable bridge name; v0.4.0 before it:
+per-install Matter identity, configurable VID/PID, Store-app launch
+picker). Commissioned and exercised against real Nest hub hardware.
+844 automated tests across both processes, measured resource budgets
 (`docs/adr/007`), and a scripted hardware E2E checklist
 (`docs/e2e-log.md`). See [`CHANGELOG.md`](CHANGELOG.md) for history and
 [`BACKLOG.md`](BACKLOG.md) for what's next.
