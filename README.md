@@ -190,8 +190,8 @@ beside it, then start it — a fresh identity is minted.
 ## Building from source
 
 ```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + 343 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 501 tests
+cd bridge && npm ci && npm run verify        # sidecar: lint + types + 368 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 606 tests
 ./build.ps1                                  # dist/: portable folder, SEA sidecar
 ```
 
@@ -201,11 +201,14 @@ on every push (bridge verify + coverage on ubuntu/windows, app build + tests
 
 ## Status
 
-**v0.4.1 released** (first-run setup guide, rebuilt pairing window,
-factory-reset re-pair fix, configurable bridge name; v0.4.0 before it:
-per-install Matter identity, configurable VID/PID, Store-app launch
-picker). Commissioned and exercised against real Nest Hub 2 hardware.
-844 automated tests across both processes, measured resource budgets
+**v0.4.2 released** (Windows mDNS discovery fix — the bridge now answers
+mDNS queries instead of announcing into the void — tray auto-update,
+advertisement health status, live pairing window with auto-close, blue
+awaiting-pairing tray state, power-action fidelity with screensaver
+support; v0.4.1 before it: first-run guide, rebuilt pairing window,
+factory-reset re-pair fix). Commissioned and exercised against real
+Nest Hub 2 hardware, re-paired end-to-end after the discovery fix.
+974 automated tests across both processes, measured resource budgets
 (`docs/adr/007`), and a scripted hardware E2E checklist
 (`docs/e2e-log.md`). See [`CHANGELOG.md`](CHANGELOG.md) for history and
 [`BACKLOG.md`](BACKLOG.md) for what's next.
