@@ -20,6 +20,9 @@
  * like the environment vars, are not restored on close — a closing node still
  * logs, and the next node in this process reinstalls them anyway.
  */
+import { networkInterfaces } from "node:os";
+import type { NetworkInterfaceInfo } from "node:os";
+
 import {
   Endpoint,
   Environment,
@@ -30,6 +33,7 @@ import {
   ServerNode,
   VendorId,
 } from "@matter/main";
+import type { NetworkInterfaceDetails } from "@matter/main";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import {
   OnOffPlugInUnitDevice,
@@ -37,9 +41,94 @@ import {
 } from "@matter/main/devices/on-off-plug-in-unit";
 import { SpeakerDevice } from "@matter/main/devices/speaker";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
+import { NodeJsNetwork } from "@matter/nodejs";
 
 import { makeMatterLogWriter, wireSessionObservability } from "./diagnostics.js";
 import type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
+
+/** Snapshot shape returned by `node:os`'s `networkInterfaces()`. */
+export type NetworkInterfaceTable = Readonly<
+  Record<string, readonly NetworkInterfaceInfo[] | undefined>
+>;
+
+/**
+ * Maps matter.js's Windows IPv6 scope-id identifier back to its OS-friendly
+ * interface name. Friendly names pass through; other identifiers do not.
+ */
+export function resolveFriendlyNetworkInterfaceName(
+  identifier: string,
+  interfaces: NetworkInterfaceTable,
+): string | undefined {
+  if (interfaces[identifier] !== undefined) {
+    return identifier;
+  }
+  if (!/^\d+$/u.test(identifier)) {
+    return undefined;
+  }
+  const scopeId = Number(identifier);
+  return Object.entries(interfaces).find(([, entries]) =>
+    entries?.some(({ family, scopeid }) => family === "IPv6" && scopeid === scopeId),
+  )?.[0];
+}
+
+interface PatchableNodeJsNetworkClass {
+  getMulticastInterfaceIpv4(identifier: string): string | undefined;
+  getNetInterfaceZoneIpv6(identifier: string): string | undefined;
+  prototype: {
+    getIpMac(identifier: string): NetworkInterfaceDetails | undefined;
+  };
+}
+
+interface WindowsMdnsPatchOptions {
+  platform?: NodeJS.Platform;
+  getNetworkInterfaces?: () => NetworkInterfaceTable;
+  networkClass?: PatchableNodeJsNetworkClass;
+}
+
+const patchedWindowsMdnsNetworkClasses = new WeakSet<PatchableNodeJsNetworkClass>();
+
+function captureMethod<T extends object, K extends keyof T>(target: T, key: K): T[K] {
+  return target[key];
+}
+
+/**
+ * Installs the contained matter.js Windows mDNS workaround once per network
+ * class. Optional dependencies are a deterministic unit-test seam.
+ */
+export function installWindowsMdnsScopeIdWorkaround(options: WindowsMdnsPatchOptions = {}): void {
+  const platform = options.platform ?? process.platform;
+  const getInterfaces = options.getNetworkInterfaces ?? networkInterfaces;
+  const networkClass = options.networkClass ?? NodeJsNetwork;
+  if (platform !== "win32" || patchedWindowsMdnsNetworkClasses.has(networkClass)) {
+    return;
+  }
+
+  const friendlyName = (identifier: string) =>
+    resolveFriendlyNetworkInterfaceName(identifier, getInterfaces()) ?? identifier;
+  const originalGetIpMac = captureMethod(networkClass.prototype, "getIpMac");
+  const originalGetNetInterfaceZoneIpv6 = captureMethod(networkClass, "getNetInterfaceZoneIpv6");
+  const originalGetMulticastInterfaceIpv4 = captureMethod(
+    networkClass,
+    "getMulticastInterfaceIpv4",
+  );
+
+  /*
+   * matter.js 0.17.7 labels inbound Windows mDNS packets with a numeric IPv6
+   * scope id, but its record and response lookups expect os.networkInterfaces()
+   * friendly-name keys. This drops every query before a response is sent.
+   * Keep the compatibility shim at the adapter boundary; see ADR-010.
+   * Upstream: https://github.com/matter-js/matter.js (unfixed through 0.17.9).
+   */
+  networkClass.prototype.getIpMac = function (identifier) {
+    return originalGetIpMac.call(this, friendlyName(identifier));
+  };
+  networkClass.getNetInterfaceZoneIpv6 = (identifier) =>
+    originalGetNetInterfaceZoneIpv6.call(networkClass, friendlyName(identifier));
+  networkClass.getMulticastInterfaceIpv4 = (identifier) =>
+    originalGetMulticastInterfaceIpv4.call(networkClass, friendlyName(identifier));
+
+  patchedWindowsMdnsNetworkClasses.add(networkClass);
+}
 
 /** Pairing codes in protocol vocabulary (ipc `pairing` frame field names). */
 export interface PairingCodes {
@@ -349,6 +438,7 @@ export class MatterNode {
     // Before ServerNode.create so storage/network boot logs already flow
     // through the pino destination (ADR-006 §1).
     configureMatterLogging(options);
+    installWindowsMdnsScopeIdWorkaround();
     Environment.default.vars.set("storage.path", options.storageDir);
     Environment.default.vars.set("runtime.signals", false);
     if (options.mdnsInterface !== undefined) {
