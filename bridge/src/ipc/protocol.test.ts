@@ -1,6 +1,6 @@
 /**
  * Specification tests for the IPC protocol (docs/BLUEPRINT.md §2.3 as
- * amended by ADR-004: protocol v2, `custom` action variant).
+ * amended by ADR-004 and the v3 advertisement-health signal.
  *
  * Each `describe` block documents one frame kind; test names describe the
  * accepted/rejected behaviour, not the schema/method under test.
@@ -13,6 +13,7 @@ import {
   CUSTOM_KEY_MAX_LENGTH,
   CustomCommandKeySchema,
   HelloFrameSchema,
+  MatterStatusFrameSchema,
   PairingFrameSchema,
   PROTOCOL_VERSION,
   SidecarFrameSchema,
@@ -26,13 +27,46 @@ const uuid1 = "123e4567-e89b-12d3-a456-426614174000";
 const uuid2 = "00000000-0000-4000-8000-000000000000";
 
 describe("PROTOCOL_VERSION", () => {
-  it("is 2 (ADR-004: the additive custom action bumped v from 1)", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+  it("is 3 (advertisement health is an additive sidecar frame)", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+  });
+});
+
+describe("matter status frame", () => {
+  it.each([
+    { commissioned: false, advertisement: "checking" },
+    { commissioned: false, advertisement: "visible" },
+    { commissioned: false, advertisement: "missing" },
+    { commissioned: true, advertisement: "notApplicable" },
+  ])("accepts a consistent lifecycle/advertisement state", (state) => {
+    expect(
+      MatterStatusFrameSchema.safeParse({ v: 3, type: "matterStatus", ...state }).success,
+    ).toBe(true);
+  });
+
+  it("rejects commissioned/applicability disagreement and extra fields", () => {
+    expect(
+      MatterStatusFrameSchema.safeParse({
+        v: 3,
+        type: "matterStatus",
+        commissioned: true,
+        advertisement: "missing",
+      }).success,
+    ).toBe(false);
+    expect(
+      MatterStatusFrameSchema.safeParse({
+        v: 3,
+        type: "matterStatus",
+        commissioned: false,
+        advertisement: "visible",
+        extra: true,
+      }).success,
+    ).toBe(false);
   });
 });
 
 describe("hello frame", () => {
-  const valid = { v: 2, type: "hello", token: "session-token", protocol: 1 };
+  const valid = { v: 3, type: "hello", token: "session-token", protocol: 1 };
 
   it("accepts a well-formed hello frame", () => {
     expect(HelloFrameSchema.safeParse(valid).success).toBe(true);
@@ -52,14 +86,14 @@ describe("hello frame", () => {
   });
 
   it("rejects a v field from a future revision", () => {
-    expect(HelloFrameSchema.safeParse({ ...valid, v: 3 }).success).toBe(false);
+    expect(HelloFrameSchema.safeParse({ ...valid, v: 4 }).success).toBe(false);
   });
 
   it("rejects the wrong type discriminator", () => {
     expect(HelloFrameSchema.safeParse({ ...valid, type: "action" }).success).toBe(false);
   });
 
-  it("keeps protocol at literal 1 (v2 was additive, not breaking — ADR-004)", () => {
+  it("keeps protocol at literal 1 (v3 is additive, not breaking)", () => {
     expect(HelloFrameSchema.safeParse({ ...valid, protocol: 2 }).success).toBe(false);
   });
 
@@ -72,27 +106,27 @@ describe("action frame — bare actions (no payload)", () => {
   const bareNames = ["playPause", "next", "previous", "powerOn", "powerOff"] as const;
 
   it.each(bareNames)("accepts a well-formed %s action", (name) => {
-    const frame = { v: 2, type: "action", id: uuid1, name };
+    const frame = { v: 3, type: "action", id: uuid1, name };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it.each(bareNames)("rejects %s carrying an unexpected value field", (name) => {
-    const frame = { v: 2, type: "action", id: uuid1, name, value: 1 };
+    const frame = { v: 3, type: "action", id: uuid1, name, value: 1 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects an unknown action name", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "rewind" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "rewind" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a malformed uuid in id", () => {
-    const frame = { v: 2, type: "action", id: "not-a-uuid", name: "playPause" };
+    const frame = { v: 3, type: "action", id: "not-a-uuid", name: "playPause" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a missing id", () => {
-    const frame = { v: 2, type: "action", name: "playPause" };
+    const frame = { v: 3, type: "action", name: "playPause" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
@@ -102,82 +136,82 @@ describe("action frame — bare actions (no payload)", () => {
   });
 
   it("rejects unknown extra keys (strict boundary)", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "playPause", extra: "nope" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "playPause", extra: "nope" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 });
 
 describe("action frame — setVolume", () => {
   it("accepts a well-formed setVolume action", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: 40 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: 40 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("accepts the boundary value 0", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: 0 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: 0 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("accepts the boundary value 100", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: 100 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: 100 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("rejects a missing value field", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects volume below 0", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: -1 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: -1 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects volume above 100", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: 101 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: 101 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a fractional volume", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: 100.5 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: 100.5 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a string volume", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setVolume", value: "40" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setVolume", value: "40" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 });
 
 describe("action frame — setMuted", () => {
   it("accepts a well-formed setMuted action (true)", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setMuted", value: true };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setMuted", value: true };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("accepts a well-formed setMuted action (false)", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setMuted", value: false };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setMuted", value: false };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("rejects a missing value field", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setMuted" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setMuted" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a non-boolean value (string)", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setMuted", value: "true" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setMuted", value: "true" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a non-boolean value (0/1 number)", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "setMuted", value: 1 };
+    const frame = { v: 3, type: "action", id: uuid1, name: "setMuted", value: 1 };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 });
 
 describe("action frame — custom (ADR-004 §3)", () => {
-  const valid = { v: 2, type: "action", id: uuid1, name: "custom", key: "movie-mode" };
+  const valid = { v: 3, type: "action", id: uuid1, name: "custom", key: "movie-mode" };
 
   it("accepts a well-formed custom action", () => {
     expect(ActionFrameSchema.safeParse(valid).success).toBe(true);
@@ -202,7 +236,7 @@ describe("action frame — custom (ADR-004 §3)", () => {
   });
 
   it("rejects a missing key field", () => {
-    const frame = { v: 2, type: "action", id: uuid1, name: "custom" };
+    const frame = { v: 3, type: "action", id: uuid1, name: "custom" };
     expect(ActionFrameSchema.safeParse(frame).success).toBe(false);
   });
 
@@ -262,7 +296,7 @@ describe("CustomCommandKeySchema (shared env/wire slug rule)", () => {
 
 describe("pairing frame", () => {
   const valid = {
-    v: 2,
+    v: 3,
     type: "pairing",
     qrPayload: "MT:Y.K9042C00KA0648G00",
     manualCode: "3497-011-2332",
@@ -289,7 +323,7 @@ describe("pairing frame", () => {
   });
 
   it("rejects a missing qrPayload", () => {
-    const rest = { v: 2, type: "pairing", manualCode: "3497-011-2332" };
+    const rest = { v: 3, type: "pairing", manualCode: "3497-011-2332" };
     expect(PairingFrameSchema.safeParse(rest).success).toBe(false);
   });
 
@@ -308,32 +342,32 @@ describe("pairing frame", () => {
 
 describe("ack frame", () => {
   it("accepts a well-formed ok:true ack with no error field", () => {
-    const frame = { v: 2, type: "ack", id: uuid1, ok: true };
+    const frame = { v: 3, type: "ack", id: uuid1, ok: true };
     expect(AckFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("rejects ok:true carrying an error field", () => {
-    const frame = { v: 2, type: "ack", id: uuid1, ok: true, error: "should not be here" };
+    const frame = { v: 3, type: "ack", id: uuid1, ok: true, error: "should not be here" };
     expect(AckFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("accepts a well-formed ok:false ack with an error string", () => {
-    const frame = { v: 2, type: "ack", id: uuid1, ok: false, error: "socket disconnected" };
+    const frame = { v: 3, type: "ack", id: uuid1, ok: false, error: "socket disconnected" };
     expect(AckFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("accepts ok:false with no error field (error is optional)", () => {
-    const frame = { v: 2, type: "ack", id: uuid1, ok: false };
+    const frame = { v: 3, type: "ack", id: uuid1, ok: false };
     expect(AckFrameSchema.safeParse(frame).success).toBe(true);
   });
 
   it("rejects a non-boolean ok field", () => {
-    const frame = { v: 2, type: "ack", id: uuid1, ok: "true" };
+    const frame = { v: 3, type: "ack", id: uuid1, ok: "true" };
     expect(AckFrameSchema.safeParse(frame).success).toBe(false);
   });
 
   it("rejects a malformed uuid in id", () => {
-    const frame = { v: 2, type: "ack", id: "not-a-uuid", ok: true };
+    const frame = { v: 3, type: "ack", id: "not-a-uuid", ok: true };
     expect(AckFrameSchema.safeParse(frame).success).toBe(false);
   });
 
@@ -343,13 +377,13 @@ describe("ack frame", () => {
   });
 
   it("rejects unknown extra keys (strict boundary)", () => {
-    const frame = { v: 2, type: "ack", id: uuid1, ok: true, extra: "nope" };
+    const frame = { v: 3, type: "ack", id: uuid1, ok: true, extra: "nope" };
     expect(AckFrameSchema.safeParse(frame).success).toBe(false);
   });
 });
 
 describe("state frame", () => {
-  const valid = { v: 2, type: "state", volume: 40, muted: false };
+  const valid = { v: 3, type: "state", volume: 40, muted: false };
 
   it("accepts a well-formed state frame", () => {
     expect(StateFrameSchema.safeParse(valid).success).toBe(true);
@@ -390,13 +424,13 @@ describe("state frame", () => {
 
 describe("parseSidecarFrame (trust boundary, sidecar -> tray)", () => {
   it("accepts a hello frame", () => {
-    const result = parseSidecarFrame({ v: 2, type: "hello", token: "t", protocol: 1 });
+    const result = parseSidecarFrame({ v: 3, type: "hello", token: "t", protocol: 1 });
     expect(result.success).toBe(true);
   });
 
   it("accepts an action frame and narrows its payload type", () => {
     const result = parseSidecarFrame({
-      v: 2,
+      v: 3,
       type: "action",
       id: uuid1,
       name: "setVolume",
@@ -412,7 +446,7 @@ describe("parseSidecarFrame (trust boundary, sidecar -> tray)", () => {
 
   it("accepts a custom action frame and narrows its key", () => {
     const result = parseSidecarFrame({
-      v: 2,
+      v: 3,
       type: "action",
       id: uuid1,
       name: "custom",
@@ -428,7 +462,7 @@ describe("parseSidecarFrame (trust boundary, sidecar -> tray)", () => {
 
   it("accepts a pairing frame", () => {
     const result = parseSidecarFrame({
-      v: 2,
+      v: 3,
       type: "pairing",
       qrPayload: "MT:ABC",
       manualCode: "1234-567-8901",
@@ -437,7 +471,7 @@ describe("parseSidecarFrame (trust boundary, sidecar -> tray)", () => {
   });
 
   it("rejects a tray-only frame type (state)", () => {
-    const result = parseSidecarFrame({ v: 2, type: "state", volume: 40, muted: false });
+    const result = parseSidecarFrame({ v: 3, type: "state", volume: 40, muted: false });
     expect(result.success).toBe(false);
   });
 
@@ -456,17 +490,17 @@ describe("parseSidecarFrame (trust boundary, sidecar -> tray)", () => {
 
 describe("parseTrayFrame (trust boundary, tray -> sidecar)", () => {
   it("accepts an ack frame", () => {
-    const result = parseTrayFrame({ v: 2, type: "ack", id: uuid2, ok: true });
+    const result = parseTrayFrame({ v: 3, type: "ack", id: uuid2, ok: true });
     expect(result.success).toBe(true);
   });
 
   it("accepts a state frame", () => {
-    const result = parseTrayFrame({ v: 2, type: "state", volume: 12, muted: true });
+    const result = parseTrayFrame({ v: 3, type: "state", volume: 12, muted: true });
     expect(result.success).toBe(true);
   });
 
   it("rejects a sidecar-only frame type (hello)", () => {
-    const result = parseTrayFrame({ v: 2, type: "hello", token: "t", protocol: 1 });
+    const result = parseTrayFrame({ v: 3, type: "hello", token: "t", protocol: 1 });
     expect(result.success).toBe(false);
   });
 
@@ -481,14 +515,14 @@ describe("parseTrayFrame (trust boundary, tray -> sidecar)", () => {
 
 describe("SidecarFrameSchema / TrayFrameSchema (direct schema symmetry)", () => {
   it("SidecarFrameSchema rejects frames only valid on the tray side", () => {
-    expect(SidecarFrameSchema.safeParse({ v: 2, type: "ack", id: uuid1, ok: true }).success).toBe(
+    expect(SidecarFrameSchema.safeParse({ v: 3, type: "ack", id: uuid1, ok: true }).success).toBe(
       false,
     );
   });
 
   it("TrayFrameSchema rejects frames only valid on the sidecar side", () => {
     expect(
-      TrayFrameSchema.safeParse({ v: 2, type: "action", id: uuid1, name: "playPause" }).success,
+      TrayFrameSchema.safeParse({ v: 3, type: "action", id: uuid1, name: "playPause" }).success,
     ).toBe(false);
   });
 });

@@ -16,7 +16,7 @@ namespace MatterHelm.Ui;
 public sealed class WelcomeWindow : Form
 {
     /// <summary>Builds the window. <see cref="StartPairingRequested"/> fires when the user clicks the primary button.</summary>
-    public WelcomeWindow()
+    public WelcomeWindow(int vendorId = 0xFFF1, int productId = 0x8000)
     {
         Text = "Welcome to MatterHelm";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -63,8 +63,8 @@ public sealed class WelcomeWindow : Form
             "1.  Register once with Google  (free, about 5 minutes)",
             "MatterHelm isn't a commercially certified Matter product, so Google only "
                 + "pairs it if your own account has registered its IDs. In the Developer "
-                + "Console: create a project → Add integration → Matter → Vendor ID 0xFFF1, "
-                + "Product ID 0x8000. Use the same Google account as your Home app.",
+                + $"Console: create a project → Add integration → Matter → Vendor ID 0x{vendorId:X4}, "
+                + $"Product ID 0x{productId:X4}. Use the same Google account as your Home app.",
             contentWidth));
 
         var consoleLink = new LinkLabel

@@ -60,7 +60,7 @@ public sealed class ActionExecutor : IDisposable
                 // For now power maps straight to the displays; S2-4 layers the
                 // configurable powerOff behavior (displays off vs. sleep) on top.
                 case "powerOn":
-                    return DisplayPower.WakeDisplays();
+                    return _displayPower.DisplaysOn();
                 case "powerOff":
                     return _displayPower.DisplaysOff();
                 // S8-5 system commands (the `system` custom-action type).
@@ -89,6 +89,9 @@ public sealed class ActionExecutor : IDisposable
             return false;
         }
     }
+
+    /// <summary>Clears the display keep-awake hold without waking the displays.</summary>
+    public bool ReleaseDisplayKeepAwake() => _displayPower.ReleaseKeepAwake();
 
     /// <summary>Disposes the volume observer and the display-power window.</summary>
     public void Dispose()

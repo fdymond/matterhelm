@@ -26,7 +26,7 @@ namespace MatterHelm.Sidecar;
 /// socket is detected promptly (loopback RST), freeing the slot well inside
 /// the supervisor's minimum restart backoff.
 ///
-/// Threading: <see cref="ActionReceived"/>/<see cref="PairingReceived"/>/
+/// Threading: <see cref="ActionReceived"/>/<see cref="PairingReceived"/>/<see cref="MatterStatusReceived"/>/
 /// <see cref="ClientChanged"/> fire on thread-pool threads — marshalling to
 /// the UI thread is the subscriber's job (S2-5).
 /// </summary>
@@ -65,6 +65,9 @@ public sealed class IpcServer : IDisposable
 
     /// <summary>An authenticated sidecar sent a valid pairing frame. Fires on a pool thread.</summary>
     public event EventHandler<PairingFrame>? PairingReceived;
+
+    /// <summary>An authenticated sidecar reported Matter lifecycle/advertisement health.</summary>
+    public event EventHandler<MatterStatusFrame>? MatterStatusReceived;
 
     /// <summary>Authenticated-client presence changed (true = connected, false = gone). Fires on a pool thread.</summary>
     public event EventHandler<bool>? ClientChanged;
@@ -403,6 +406,9 @@ public sealed class IpcServer : IDisposable
                     break;
                 case PairingFrame pairing:
                     Raise(() => PairingReceived?.Invoke(this, pairing));
+                    break;
+                case MatterStatusFrame status:
+                    Raise(() => MatterStatusReceived?.Invoke(this, status));
                     break;
                 default:
                     break;

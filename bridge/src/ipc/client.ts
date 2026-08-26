@@ -22,7 +22,13 @@
  *   invalid frames are logged (one WARN each) and ignored, never thrown.
  */
 import { PROTOCOL_VERSION, parseTrayFrame } from "./protocol.js";
-import type { ActionFrame, HelloFrame, PairingFrame, TrayFrame } from "./protocol.js";
+import type {
+  ActionFrame,
+  HelloFrame,
+  MatterStatusFrame,
+  PairingFrame,
+  TrayFrame,
+} from "./protocol.js";
 
 /** Narrow pino-compatible logger surface; the composition root wires pino. */
 export interface IpcLogger {
@@ -31,7 +37,7 @@ export interface IpcLogger {
 }
 
 /** Every frame the client sends on behalf of callers (`hello` is internal). */
-export type OutboundFrame = ActionFrame | PairingFrame;
+export type OutboundFrame = ActionFrame | PairingFrame | MatterStatusFrame;
 
 /** Observable lifecycle state (also the seam integration tests wait on). */
 export type IpcClientState = "idle" | "connecting" | "connected" | "waiting" | "stopped";

@@ -4,12 +4,13 @@ namespace MatterHelm.Demos;
 
 /// <summary>
 /// S2-4 acceptance evidence, extended for the S10-7 onboarding pass: walks
-/// <see cref="Ui.PairingWindow"/> through all three stages with a sample
+/// <see cref="Ui.PairingWindow"/> through all four stages with a sample
 /// commissioning payload, screenshots each next to the exe, and objectively
 /// checks that (a) it opens on "starting" rather than an empty code panel,
 /// (b) delivering a code moves it to "ready to scan" on its own, (c) the QR
 /// really rendered (non-trivial pixel variance, not a blank box), and (d) the
-/// "paired" stage hides the now-unscannable code and explains why. Returns 0
+/// "paired" stage hides the now-unscannable code, and (e) an advertisement
+/// failure hides the misleading code and reports the error. Returns 0
 /// iff every check passes. Invoked via
 /// <c>MatterHelm.exe --demo-pairing-window</c>; not part of the production
 /// tray flow.
@@ -51,9 +52,15 @@ internal static class PairingWindowDemo
         Capture(window, "pairing-window-demo-starting.png");
 
         // Delivering a code must move the window to "ready to scan" by itself.
+        Screen startingScreen = Screen.FromRectangle(window.Bounds);
         window.SetPairingInfo(DemoQrPayload, DemoManualCode);
         DemoSupport.Pump(DemoDisplayMilliseconds);
         bool codeShowsWaiting = window.StatusText.Contains("Waiting for the Google Home app", StringComparison.Ordinal);
+        Rectangle workingArea = startingScreen.WorkingArea;
+        Point expectedCenter = new(
+            workingArea.Left + ((workingArea.Width - window.Width) / 2),
+            workingArea.Top + ((workingArea.Height - window.Height) / 2));
+        bool stageChangeCentered = window.Location == expectedCenter;
 
         // Full window Size, not ClientSize: Form.DrawToBitmap renders the
         // whole window frame (title bar included), so a ClientSize-tall bitmap
@@ -81,14 +88,22 @@ internal static class PairingWindowDemo
             && window.StatusText.Contains("Paired", StringComparison.Ordinal);
         Capture(window, "pairing-window-demo-paired.png");
 
+        window.SetStage(Ui.PairingStage.DiscoveryError);
+        DemoSupport.Pump(StagePumpMilliseconds);
+        bool errorHidesCode = !window.QrVisible
+            && window.StatusText.Contains("not available", StringComparison.Ordinal);
+        Capture(window, "pairing-window-demo-discovery-error.png");
+
         Console.WriteLine($"[{Verdict(startsOnStarting)}] Opens on the \"starting\" stage, no blank QR.");
         Console.WriteLine($"[{Verdict(codeShowsWaiting)}] A delivered code moves the window to \"ready to scan\".");
+        Console.WriteLine($"[{Verdict(stageChangeCentered)}] A stage change re-centers the resized window on its current screen.");
         Console.WriteLine($"[{Verdict(hasVariance)}] QR image rendered with non-trivial pixel variance.");
         Console.WriteLine($"[{Verdict(pairedHidesCode)}] The \"paired\" stage hides the code and explains why.");
+        Console.WriteLine($"[{Verdict(errorHidesCode)}] Advertisement failure hides the code and reports the error.");
         Console.WriteLine($"(screenshot: {outputPath})");
 
         window.Close();
-        return startsOnStarting && codeShowsWaiting && hasVariance && pairedHidesCode ? 0 : 1;
+        return startsOnStarting && codeShowsWaiting && stageChangeCentered && hasVariance && pairedHidesCode && errorHidesCode ? 0 : 1;
     }
 
     private static string Verdict(bool pass) => pass ? "PASS" : "FAIL";

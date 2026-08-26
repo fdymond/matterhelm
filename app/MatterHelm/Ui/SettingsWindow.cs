@@ -28,6 +28,7 @@ public sealed partial class SettingsWindow : Form
     private readonly SettingsViewModel _vm;
     private readonly Action<OverlayPreviewRequest>? _overlayPreview;
     private readonly Action? _factoryReset;
+    private readonly Action<string, string> _showError;
 
     private readonly TextBox _searchBox;
     private readonly ListBox _navList;
@@ -68,11 +69,22 @@ public sealed partial class SettingsWindow : Form
     /// unlike Preview, a factory reset must never silently do nothing when
     /// unwired.
     /// </param>
-    public SettingsWindow(SettingsViewModel viewModel, Action<OverlayPreviewRequest>? overlayPreview = null, Action? factoryReset = null)
+    /// <param name="showError">Optional user-visible error sink for focused save-failure tests.</param>
+    public SettingsWindow(
+        SettingsViewModel viewModel,
+        Action<OverlayPreviewRequest>? overlayPreview = null,
+        Action? factoryReset = null,
+        Action<string, string>? showError = null)
     {
         _vm = viewModel;
         _overlayPreview = overlayPreview;
         _factoryReset = factoryReset;
+        _showError = showError ?? ((title, message) => MessageBox.Show(
+            this,
+            message,
+            title,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error));
         _search = SettingsSearch.Filter(SettingsViewModel.Categories, "");
 
         Text = "Settings";
@@ -156,7 +168,7 @@ public sealed partial class SettingsWindow : Form
         bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         var restartNote = new Label
         {
-            Text = "Settings marked ⟳ take effect the next time the bridge starts.",
+            Text = "Settings marked ⟳ restart the bridge automatically when saved.",
             AutoSize = true,
             Font = _noteFont,
             ForeColor = SystemColors.GrayText,
@@ -296,7 +308,7 @@ public sealed partial class SettingsWindow : Form
     }
 
     /// <summary>Runs the Save path (same as clicking Save). Public for demo/E2E walks.</summary>
-    public void SaveNow() => TrySave();
+    public bool SaveNow() => TrySave();
 
     /// <summary>Sets the search filter text (same as typing into the box). Public for demo/E2E walks.</summary>
     public void SetSearchQuery(string query) => _searchBox.Text = query;
@@ -432,9 +444,21 @@ public sealed partial class SettingsWindow : Form
         // on this thread — the guard keeps OnLiveConfigChanged from treating
         // our own save as an external change.
         _applyingSave = true;
+        bool needsRestart = _vm.NeedsBridgeRestart;
         try
         {
-            _vm.Apply();
+            if (!_vm.Apply())
+            {
+                string detail = _vm.Config.LastSaveError ?? "unknown file error";
+                _savedFlashTimer.Stop();
+                _savedFlash.Visible = false;
+                _showError(
+                    "Settings could not be saved",
+                    "MatterHelm could not write config.json. Your edits are still here; fix the file or folder permissions and try again."
+                        + Environment.NewLine + Environment.NewLine + detail);
+                UpdateValidationAndSaveState();
+                return false;
+            }
         }
         finally
         {
@@ -442,6 +466,7 @@ public sealed partial class SettingsWindow : Form
         }
 
         RefreshFromViewModel();
+        _savedFlash.Text = needsRestart ? "Saved — restarting bridge…" : "Saved";
         _savedFlash.Visible = true;
         _savedFlashTimer.Stop();
         _savedFlashTimer.Start();
@@ -881,6 +906,7 @@ public sealed partial class SettingsWindow : Form
             BackColor = SystemColors.Control,
             Width = S(320),
             TabStop = false,
+            TextAlign = HorizontalAlignment.Right,
         };
         _editorRefreshers.Add(() => box.Text = (string?)setting.Get!(_vm.Working) ?? "");
         return box;

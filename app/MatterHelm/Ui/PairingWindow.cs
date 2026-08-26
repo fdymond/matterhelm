@@ -13,6 +13,9 @@ public enum PairingStage
 
     /// <summary>Commissioned: this PC is already in Google Home.</summary>
     Paired,
+
+    /// <summary>The bridge is faulted and cannot currently be discovered.</summary>
+    DiscoveryError,
 }
 
 /// <summary>
@@ -28,12 +31,12 @@ public enum PairingStage
 /// <para><b>S10-7 onboarding pass.</b> The window is a wizard step, not a
 /// picture: it carries numbered instructions naming the real Home-app path,
 /// and a live status strip driven by <see cref="SetStage"/> so the user can
-/// see the outcome instead of guessing. Three stages:
+/// see the outcome instead of guessing. Four stages:
 /// <see cref="PairingStage.Starting"/> (no code yet — QR hidden rather than
 /// showing a meaningless placeholder), <see cref="PairingStage.ReadyToScan"/>,
-/// and <see cref="PairingStage.Paired"/>, which hides the code entirely —
-/// matter.js cannot mint a fresh code once commissioned (BLUEPRINT §2.1), so
-/// leaving a dead QR on screen invites a scan that can only fail.</para>
+/// <see cref="PairingStage.Paired"/>, which hides the code entirely, and
+/// <see cref="PairingStage.DiscoveryError"/>, which replaces a misleading
+/// QR code with an actionable failure.</para>
 ///
 /// <para>Layout is DPI-safe (S4-5): a single auto-sized
 /// <see cref="TableLayoutPanel"/> column with logical-unit sizes converted via
@@ -45,6 +48,7 @@ public enum PairingStage
 public sealed class PairingWindow : Form
 {
     private const int QrDisplaySizeLogical = 300;
+    private static readonly TimeSpan PairedAutoCloseDelay = TimeSpan.FromSeconds(4);
 
     private readonly PictureBox _qrBox;
     private readonly Label _codeCaption;
@@ -52,14 +56,29 @@ public sealed class PairingWindow : Form
     private readonly Label _heading;
     private readonly Label _steps;
     private readonly Label _status;
+    private readonly Label _matterIdentity;
     private readonly LinkLabel _consoleHint;
+    private readonly Label _installIdentityHint;
+    private readonly TableLayoutPanel _layout;
 
     private readonly Color _statusOkColor;
     private readonly Color _statusWaitingColor;
+    private readonly Action<Action, TimeSpan>? _autoCloseScheduler;
+    private readonly System.Windows.Forms.Timer _autoCloseTimer;
+    private bool _stageInitialized;
+    private bool _autoCloseScheduled;
+    private PairingStage _currentStage;
 
     /// <summary>Builds the (initially empty) window chrome; call <see cref="SetPairingInfo"/> to populate it.</summary>
-    public PairingWindow()
+    /// <param name="vendorId">The active Matter vendor identifier.</param>
+    /// <param name="productId">The active Matter product identifier.</param>
+    /// <param name="autoCloseScheduler">Optional deterministic timing seam for focused UI tests; production uses a WinForms timer.</param>
+    public PairingWindow(
+        int vendorId = 0xFFF1,
+        int productId = 0x8000,
+        Action<Action, TimeSpan>? autoCloseScheduler = null)
     {
+        _autoCloseScheduler = autoCloseScheduler;
         Text = "Pair with Google Home";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -78,7 +97,7 @@ public sealed class PairingWindow : Form
             : Color.FromArgb(28, 128, 60);
         _statusWaitingColor = SystemColors.GrayText;
 
-        var layout = new TableLayoutPanel
+        _layout = new TableLayoutPanel
         {
             // Not docked: the panel auto-sizes to its rows and the form (also
             // auto-sized) wraps it — Dock.Fill made the form under-measure the
@@ -89,7 +108,7 @@ public sealed class PairingWindow : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = SP(30, 24, 30, 22),
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
         // Stage-aware (SetStage rewrites it): "Add this PC…" is a promise the
         // Paired stage has already kept, and leaving it there read as if the
@@ -168,30 +187,60 @@ public sealed class PairingWindow : Form
             Margin = SP(0, 16, 0, 0),
         };
 
-        // The #1 cause of a hard pairing failure is skipping the one-time
-        // Developer Console registration, so it is one click away from here.
+        _matterIdentity = new Label
+        {
+            Text = $"Active Matter identity:  VID {MatterIds.Format(vendorId)} · PID {MatterIds.Format(productId)}",
+            AutoSize = true,
+            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            Margin = SP(0, 16, 0, 0),
+        };
+
+        // Google rejects an unregistered test identity before connecting and
+        // now often reports only a generic timeout. Keep the exact live pair
+        // and the controller-cache recovery step beside the code being used.
+        const string developerConsoleName = "Google Home Developer Console";
         _consoleHint = new LinkLabel
         {
-            Text = "Pairing rejected as \"not certified\"? Register VID 0xFFF1 / PID 0x8000 "
-                + "in your free Google Home Developer Console project.",
+            Text = $"These IDs must EXACTLY match a Matter integration in your {developerConsoleName} project. "
+                + "Reboot the Nest hub after any Console change.",
             AutoSize = true,
             MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
             Font = new Font("Segoe UI", 8.5f),
             LinkArea = new LinkArea(0, 0),
-            Margin = SP(0, 12, 0, 0),
+            Margin = SP(0, 4, 0, 0),
         };
         _consoleHint.Links.Clear();
-        _consoleHint.Links.Add(_consoleHint.Text.IndexOf("Google Home Developer Console", StringComparison.Ordinal), 29, "https://console.home.google.com/");
+        _consoleHint.Links.Add(_consoleHint.Text.IndexOf(developerConsoleName, StringComparison.Ordinal), developerConsoleName.Length, "https://console.home.google.com/");
         _consoleHint.LinkClicked += (_, e) => OpenLink(e.Link?.LinkData as string);
 
-        layout.Controls.Add(_heading);
-        layout.Controls.Add(_steps);
-        layout.Controls.Add(_qrBox);
-        layout.Controls.Add(_codeCaption);
-        layout.Controls.Add(_codeBox);
-        layout.Controls.Add(_status);
-        layout.Controls.Add(_consoleHint);
-        Controls.Add(layout);
+        _installIdentityHint = new Label
+        {
+            Text = "This PC's Matter identity is minted from a unique per-install seed. "
+                + "Each computer needs its own; never copy config.json or the seed between PCs.",
+            AutoSize = true,
+            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = SystemColors.GrayText,
+            Margin = SP(0, 8, 0, 0),
+        };
+
+        _layout.Controls.Add(_heading);
+        _layout.Controls.Add(_steps);
+        _layout.Controls.Add(_qrBox);
+        _layout.Controls.Add(_codeCaption);
+        _layout.Controls.Add(_codeBox);
+        _layout.Controls.Add(_status);
+        _layout.Controls.Add(_matterIdentity);
+        _layout.Controls.Add(_consoleHint);
+        _layout.Controls.Add(_installIdentityHint);
+        Controls.Add(_layout);
+
+        _autoCloseTimer = new System.Windows.Forms.Timer
+        {
+            Interval = checked((int)PairedAutoCloseDelay.TotalMilliseconds),
+        };
+        _autoCloseTimer.Tick += (_, _) => CompleteScheduledAutoClose();
 
         SetStage(PairingStage.Starting);
     }
@@ -204,6 +253,24 @@ public sealed class PairingWindow : Form
 
     /// <summary>The status strip's current text, exposed for demo/E2E verification.</summary>
     public string StatusText => _status.Text;
+
+    /// <summary>The stage currently rendered by the window, exposed for focused lifecycle tests.</summary>
+    public PairingStage CurrentStage => _currentStage;
+
+    /// <summary>Whether a successful live pairing has scheduled this open window to close.</summary>
+    public bool AutoCloseScheduled => _autoCloseScheduled;
+
+    /// <summary>The active VID/PID caption, exposed for focused UI specification tests.</summary>
+    public string MatterIdentityText => _matterIdentity.Text;
+
+    /// <summary>The Developer Console matching and hub-reboot guidance, exposed for focused UI specification tests.</summary>
+    public string DeveloperConsoleHintText => _consoleHint.Text;
+
+    /// <summary>The per-install seed warning, exposed for focused UI specification tests.</summary>
+    public string InstallIdentityHintText => _installIdentityHint.Text;
+
+    /// <summary>Whether the Matter identity helper area applies to the current stage.</summary>
+    public bool IdentityHelpVisible => _currentStage == PairingStage.ReadyToScan;
 
     /// <summary>
     /// Renders <paramref name="qrPayload"/> (the Matter <c>MT:…</c> onboarding
@@ -228,18 +295,50 @@ public sealed class PairingWindow : Form
     }
 
     /// <summary>
-    /// Switches the window between its three stages (S10-7). Safe to call
+    /// Switches the window between its four stages (S10-7 plus advertisement failure). Safe to call
     /// repeatedly; the tray context calls it on every bridge-state change so
     /// an open window follows along live.
     /// </summary>
     public void SetStage(PairingStage stage)
     {
+        SetStageCore(stage, showAutoCloseHint: false);
+    }
+
+    /// <summary>
+    /// Shows the successful-pairing stage immediately, then closes this window
+    /// after a short grace period. The user may close it sooner.
+    /// </summary>
+    public void ShowPairedAndAutoClose()
+    {
+        SetStageCore(PairingStage.Paired, showAutoCloseHint: true);
+        ScheduleAutoClose();
+    }
+
+    private void SetStageCore(PairingStage stage, bool showAutoCloseHint)
+    {
+        if (stage != PairingStage.Paired)
+        {
+            CancelAutoClose();
+        }
+
+        bool stageChanged = !_stageInitialized || _currentStage != stage;
+        Screen? currentScreen = stageChanged && Visible
+            ? Screen.FromRectangle(Bounds)
+            : null;
+
+        SuspendLayout();
+        _layout.SuspendLayout();
+
+        _currentStage = stage;
+        _stageInitialized = true;
         bool showCode = stage == PairingStage.ReadyToScan;
         _steps.Visible = showCode;
         _qrBox.Visible = showCode;
         _codeCaption.Visible = showCode;
         _codeBox.Visible = showCode;
+        _matterIdentity.Visible = showCode;
         _consoleHint.Visible = showCode;
+        _installIdentityHint.Visible = showCode;
 
         _heading.Text = stage == PairingStage.Paired
             ? "This PC is in Google Home"
@@ -249,17 +348,66 @@ public sealed class PairingWindow : Form
         {
             PairingStage.Paired => (
                 "Paired — nothing more to do here.\n"
+                    + (showAutoCloseHint ? "This window closes itself in about 4 seconds; you can close it now.\n" : "")
                     + "To pair it again, or to a different home, use "
                     + "\"Factory reset bridge…\" in the tray menu first.",
                 _statusOkColor),
             PairingStage.ReadyToScan => (
                 "Waiting for the Google Home app… this window updates by itself.",
                 _statusWaitingColor),
+            PairingStage.DiscoveryError => (
+                "Bridge is not available for discovery. Restart it and check the log for the specific cause.",
+                Color.Firebrick),
             _ => (
                 "Starting the bridge… the code appears here in a few seconds.\n"
                     + "If it doesn't, tick \"Enable bridge\" in the tray menu.",
                 _statusWaitingColor),
         };
+
+        // Resolve the content's new preferred size before painting, then move
+        // and resize together. The screen was captured before the resize so a
+        // large stage cannot accidentally select an adjacent monitor.
+        _layout.ResumeLayout(true);
+        Size preferredSize = GetPreferredSize(Size.Empty);
+        if (currentScreen is not null)
+        {
+            Rectangle workingArea = currentScreen.WorkingArea;
+            int left = workingArea.Left + ((workingArea.Width - preferredSize.Width) / 2);
+            int top = workingArea.Top + ((workingArea.Height - preferredSize.Height) / 2);
+            SetBounds(left, top, preferredSize.Width, preferredSize.Height, BoundsSpecified.All);
+        }
+
+        ResumeLayout(true);
+    }
+
+    private void ScheduleAutoClose()
+    {
+        CancelAutoClose();
+        _autoCloseScheduled = true;
+        if (_autoCloseScheduler is not null)
+        {
+            _autoCloseScheduler(CompleteScheduledAutoClose, PairedAutoCloseDelay);
+            return;
+        }
+
+        _autoCloseTimer.Start();
+    }
+
+    private void CancelAutoClose()
+    {
+        _autoCloseScheduled = false;
+        _autoCloseTimer.Stop();
+    }
+
+    private void CompleteScheduledAutoClose()
+    {
+        if (!_autoCloseScheduled || _currentStage != PairingStage.Paired)
+        {
+            return;
+        }
+
+        CancelAutoClose();
+        Close();
     }
 
     private static void OpenLink(string? url)
@@ -324,6 +472,7 @@ public sealed class PairingWindow : Form
     {
         if (disposing)
         {
+            _autoCloseTimer.Dispose();
             _qrBox.Image?.Dispose();
         }
 

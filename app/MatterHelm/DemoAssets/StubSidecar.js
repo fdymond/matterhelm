@@ -36,28 +36,28 @@ function sendAction(name, value) {
   const id = crypto.randomUUID();
   const frame =
     value === undefined
-      ? { v: 2, type: 'action', id, name }
-      : { v: 2, type: 'action', id, name, value };
+      ? { v: 3, type: 'action', id, name }
+      : { v: 3, type: 'action', id, name, value };
   send(frame);
   log(30, `stub-sent ${name} ${id}`);
 }
 
 function sendCustom(key) {
   const id = crypto.randomUUID();
-  send({ v: 2, type: 'action', id, name: 'custom', key });
+  send({ v: 3, type: 'action', id, name: 'custom', key });
   log(30, `stub-sent custom ${id}`);
 }
 
 ws.addEventListener('open', () => {
   log(30, 'stub: connected; sending hello');
-  send({ v: 2, type: 'hello', token, protocol: 1 });
+  send({ v: 3, type: 'hello', token, protocol: 1 });
   setTimeout(() => sendAction('setVolume', 37), 300);
   setTimeout(() => sendAction('setMuted', false), 800);
   setTimeout(() => sendAction('playPause'), 1300);
   setTimeout(() => sendCustom('demo-note'), 1550);
   setTimeout(() => {
     send({
-      v: 2,
+      v: 3,
       type: 'pairing',
       qrPayload: 'MT:STUB-DEMO-PAYLOAD',
       manualCode: '3497-011-2332',

@@ -221,7 +221,7 @@ internal static partial class Program
         // tray syncs its "Enable bridge" tick and opens the pairing window for
         // the fresh code once FactoryReset returns (it marshals internally).
         trayContext.FactoryResetRequested += (_, _) => Task.Run(() =>
-            trayContext.OnFactoryResetCompleted(host.FactoryReset().Ok));
+            trayContext.OnFactoryResetCompleted(host.FactoryReset()));
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
         // S9-1/S9-4: preview with the STAGED position/theme/opacity (the
         // settings window passes its unsaved working values), then restore the

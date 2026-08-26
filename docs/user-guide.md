@@ -96,7 +96,7 @@ options.
      administrator prompt (it installs per-user), with an optional
      start-with-Windows checkbox, a Start-menu entry, and a clean uninstall
      that keeps your pairing and settings.
-   - **Portable zip** (`matterhelm-<version>-win-x64.zip`): unzip anywhere
+   - **Portable zip** (`matterhelm-v<version>-win-x64.zip`): unzip anywhere
      (e.g. `C:\Apps\MatterHelm\`). The folder contains `MatterHelm.exe` plus
      a `sidecar\` folder — keep them together.
 
@@ -115,6 +115,32 @@ options.
    shortcut to `MatterHelm.exe` to your Startup folder (Win+R →
    `shell:startup`). The installer offers this as a checkbox instead.
 
+## Updating
+
+Right-click the tray icon and choose **Check for updates…**. MatterHelm checks
+the latest GitHub release and tells you when you are already current; if a
+newer version exists, it asks before downloading anything. Every download is
+verified against `SHA256SUMS.txt` from that same release before it can run.
+
+- An **installed** copy downloads the matching Inno Setup package, closes
+  MatterHelm and its bridge cleanly, then starts the verified installer in
+  silent mode. The installer shows progress and does not restart Windows.
+- A **portable** copy downloads the matching zip, closes MatterHelm and its
+  bridge, replaces the files in the current portable folder from a temporary
+  helper, and relaunches `MatterHelm.exe`.
+
+MatterHelm also checks quietly about one minute after startup and every 24
+hours. A newer release produces one subtle tray notification; it is never
+downloaded automatically. To disable background checks, set
+`"updateCheckEnabled": false` in `config.json` and choose **Reload config**;
+manual checks remain available.
+
+Until the GitHub repository becomes public, release checks return
+"unavailable" unless a tester starts MatterHelm with the optional
+`MATTERHELM_UPDATE_TOKEN` environment variable set to a GitHub token that can
+read the repository. The token is used only in memory for GitHub requests and
+is never saved, logged, or displayed. Normal public releases require no token.
+
 ## Enabling the bridge and pairing
 
 > **The setup guide does this for you.** On a fresh install a **Welcome**
@@ -123,8 +149,9 @@ options.
 > it any time from the tray menu → **Setup guide…**. If you'd rather drive it
 > manually, the steps are:
 
-1. Right-click the tray icon and check **Enable bridge**. The icon turns
-   amber ("running, not yet paired") within a few seconds. If it turns red,
+1. Right-click the tray icon and check **Enable bridge**. The icon briefly
+   shows amber while starting, then turns blue ("running, not paired yet")
+   within a few seconds. If it turns red,
    see [Troubleshooting](#troubleshooting). Hovering the tray icon always
    spells out what its colour means.
 2. Click **Pair with Google Home…** in the tray menu. A window opens with a
@@ -132,7 +159,9 @@ options.
    code if the QR code won't scan, e.g. photographed off a low-quality
    screen). It also carries the phone-side steps and a live status line, so
    you can watch it move from "starting" to "waiting for the Google Home
-   app" to paired without touching anything.
+   app" to paired without touching anything. While it is ready to scan, the
+   window also shows the active VID/PID to compare with your Developer
+   Console integration.
 3. On your phone, open the **Google Home** app → **+ Add** → **Matter-
    enabled device** (wording varies: "New device" → pick your home →
    "Matter device"/scan option).
@@ -162,23 +191,38 @@ options.
 | **HTPC Speaker** | System volume (voice "set … volume to 40 %" or the app's slider) and mute (voice "mute …" or the tile's power button) |
 | **HTPC Play Pause** | Toggles play/pause on whatever is currently playing (same as your keyboard's media key) |
 | **HTPC Next** / **HTPC Previous** | Skip to next/previous track |
-| **HTPC Power** | Configurable in Settings: turn off the displays, sleep the PC, or pause playback then turn off the displays |
+| **HTPC Power** | A stateful toggle whose Off and On behavior follows the configured power action (table below) |
 | Any custom command you've added | Whatever you configured it to do — see below |
 
-The transport controls (Play Pause/Next/Previous) and Power show up as
-switches that flip briefly to "on" and snap back — that's expected (Google
+The transport controls (Play Pause/Next/Previous) show up as switches that
+flip briefly to "on" and snap back — that's expected (Google
 doesn't currently expose a plain "button" concept for locally-paired
 devices with a direct voice target), it isn't a bug. How long the tile
 stays "on" is the **Tap reset delay** setting (Devices); the
 default is 0 — snap back immediately — and it's purely cosmetic either
 way, the command always fires. Raise it if you prefer seeing the tile
-light up briefly.
+light up briefly. HTPC Power is different: it remains a normal stateful
+On/Off toggle.
 
 Because these commands are stateless buttons, **any** on/off command fires
 them: tapping the tile always works no matter which state the Home app
 happens to display (Google's shown state can lag the bridge), and saying
 "turn **off** HTPC Next" presses it just like "turn on" would. Only HTPC
 Power keeps distinct on/off meanings.
+
+The **Power off behavior** setting defines both halves of that toggle:
+
+| Configured action | Power Off | Power On |
+|---|---|---|
+| **Displays off** | Turns the displays off and holds Windows awake while they are dark | Wakes the displays with a net-zero mouse nudge and releases the keep-awake hold |
+| **Pause, then displays off** | Presses play/pause, then turns the displays off with the same keep-awake hold | Wakes the displays and releases the hold |
+| **Start screensaver** | Starts the screensaver configured in Windows | Stops the running screensaver |
+| **Sleep** | Suspends the PC | No action; a sleeping PC cannot receive the remote command |
+
+The display keep-awake hold specifically prevents an S0 Modern Standby PC
+from treating commanded display-off as an invitation to sleep. MatterHelm
+always releases it when Power is toggled On, when the bridge is disabled, or
+when the app exits; it does not otherwise change your normal sleep settings.
 
 **Shown as a plug/outlet instead of a switch?** On the Matter wire these
 devices are On/Off Plug-in Units (the only certified type Google both
@@ -207,17 +251,24 @@ Right-clicking the tray icon is the whole control surface:
 |---|---|
 | **Enable bridge** | Starts/stops the Matter sidecar; persists across restarts |
 | **Pair with Google Home…** | The pairing window (QR + manual code + live status) |
-| **Factory reset bridge…** | Deletes the pairing data 2014 see [Factory reset](#factory-reset--re-pairing) |
+| **Factory reset bridge…** | Deletes the pairing data — see [Factory reset](#factory-reset--re-pairing) |
 | **Overlay pop-ups** | Toggles the on-screen command HUD |
 | **Settings…** | The settings window, below |
 | **Reload config** | Re-reads `config.json` from disk |
 | **Setup guide…** | Reopens the first-run walkthrough |
+| **Check for updates…** | Checks GitHub and offers a verified tray-driven update when a newer release exists |
 | **About** | Version and links |
 | **Exit** | Stops the sidecar and quits |
 
-Hovering the icon shows the current state in words; its colour means gray =
-off, amber = running but not paired, green = running, red = a problem worth
-checking the log for.
+Hovering the icon shows the current state in words:
+
+| Colour | Meaning |
+|---|---|
+| **Gray** | Bridge disabled |
+| **Amber** | Bridge starting or waiting for sidecar status |
+| **Blue** | Enabled and running but not commissioned; tooltip: "running, not paired yet" |
+| **Green** | Paired and connected |
+| **Red** | Sidecar crash/restart loop, or the pairing advertisement is not visible; check the log |
 
 ## Settings tour
 
@@ -229,7 +280,8 @@ click **Save** (closing the window with unsaved changes asks first).
   something else on your PC), the sidecar's log detail level, and this
   app's own log detail level (applies immediately, no restart).
 - **Devices** — rename or disable any of the five built-in
-  devices, choose what the Power device does, tune how quickly a tapped
+  devices, choose whether Power uses displays off, pause then displays off,
+  the Windows screensaver, or sleep, tune how quickly a tapped
   command's switch snaps back to "off" in Google Home (default 0 =
   immediately; purely cosmetic), and manage **custom commands**:
   - **Add…** creates a new command, which becomes its own Google Home
@@ -418,12 +470,27 @@ office PC"* vs *"…pause the HTPC"*.
   blocked "Node.js"/"MatterHelm" entries under Windows Security → Firewall
   → Allow an app, then restart the bridge (toggle **Enable bridge** off and
   on) to re-trigger the prompt.
+- **Pairing reaches "Connecting…" and then times out.** Discovery can still
+  work even when the phone-to-PC unicast PASE handshake is blocked. A common
+  cause is the phone being on the router's 2.4 GHz band while the PC is on
+  5 GHz and band/client isolation prevents traffic between them. Put the
+  phone on the same 5 GHz SSID as the PC (or disable that isolation), then
+  try again.
+- **The Home app says only "Can't connect" or times out before connecting.**
+  The modern Home app can show this generic failure when the active VID/PID
+  has no exact Matter integration in the Google Home Developer Console; it
+  does not always show the older "Not a Matter-certified device" wording.
+  Compare the VID/PID displayed in MatterHelm's ready-to-scan pairing window
+  with the integration, including every hex digit, and make sure the phone's
+  Google account belongs to that project. After any Console change, **reboot
+  the Nest hub** so it discards its cached integration configuration, then
+  pair again.
 - **Pairing fails with "Not a Matter-certified device" as a hard error**
-  (not just a warning screen you can continue past). The Developer Console
-  VID/PID registration (see Prerequisites) either wasn't completed, doesn't
-  match `0xFFF1`/`0x8000` exactly, or the phone's Google account isn't a
-  member of that project. Re-check that section; changes there can take a
-  few minutes to propagate.
+  (not just a warning screen you can continue past). This is the older form
+  of the Developer Console identity failure described immediately above:
+  the active VID/PID registration either wasn't completed, doesn't match
+  exactly, or the phone's Google account isn't a member of that project.
+  Correct it, then reboot the Nest hub before trying again.
 - **Pairing times out immediately, or matter.js errors mention IPv6.**
   IPv6 is disabled on your network adapter — re-enable it (adapter
   Properties → check "Internet Protocol Version 6 (TCP/IPv6)").
@@ -431,20 +498,24 @@ office PC"* vs *"…pause the HTPC"*.
   virtual adapters). The bridge may be advertising itself on the wrong one.
   Set Settings → Advanced → **mDNS network interface** to your real LAN
   adapter's name (from `ipconfig`) and re-enable the bridge.
-- **The tray icon is red.** The sidecar process is crash-looping (two or
-  more restarts without successfully reconnecting). Check the app log
-  (Settings → Advanced → Config folder → `logs\`) for the actual error, or
-  export diagnostics and take a look — a common cause is another program
-  already using the configured IPC port (change it in Settings → General).
+- **The tray icon is red.** Either the sidecar is crash-looping (two or more
+  restarts without successfully reconnecting), or the bridge is unpaired but
+  its Matter/mDNS advertisement cannot be seen. Check the app log (Settings →
+  Advanced → Config folder → `logs\`) for the specific cause, and verify the
+  selected network interface, IPv6, and the firewall rules above.
+- **Enable bridge is checked but the icon stays gray.** The local IPC listener
+  could not bind, commonly because another program already uses the configured
+  port. The bridge stays disabled; check the app log, then choose a free IPC
+  port in Settings → General and save.
 - **Need a clean slate.** Use [Factory reset](#factory-reset--re-pairing).
 
 ## Privacy notes
 
-- MatterHelm makes **no network calls beyond your own LAN** (Matter/mDNS to
-  your hub) and never talks to any MatterHelm-operated server — there isn't
-  one. Google's own Home/Assistant services are, of course, involved the
-  same way they are for any Google Home device; that's between you and
-  Google, not this app.
+- Apart from its optional release check to GitHub, MatterHelm makes **no
+  network calls beyond your own LAN** (Matter/mDNS to your hub) and never
+  talks to any MatterHelm-operated server — there isn't one. Google's own
+  Home/Assistant services are, of course, involved the same way they are for
+  any Google Home device; that's between you and Google, not this app.
 - The **diagnostics export** (Settings → Advanced → Export diagnostics…)
   never uploads anything — it just saves a zip to a location you choose.
   It intentionally excludes anything that could identify your PC (no
@@ -453,5 +524,7 @@ office PC"* vs *"…pause the HTPC"*.
   commissioning codes that might otherwise have been logged. Your live
   session's pairing token is never written to disk or logged in the first
   place, so it can't leak into a bundle.
-- `config.json` (included verbatim in a diagnostics export) is exactly what
-  you see in Settings — nothing hidden gets added to it.
+- `config.json` is included in full in a diagnostics export. It also contains
+  internal preferences that are not shown as editable Settings rows, such as
+  `onboardingShown` and `updateCheckEnabled`; it does **not** contain Matter
+  fabric credentials, which live separately under the Matter storage folder.
