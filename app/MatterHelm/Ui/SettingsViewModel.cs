@@ -134,8 +134,7 @@ public sealed class SettingsValidationError
 /// <see cref="BridgeConfig"/> (<see cref="Working"/>), dirty tracking against
 /// a snapshot, validation (port range, non-empty names, custom-key slug and
 /// uniqueness rules, launch-path existence), and the Save path — Apply copies
-/// the working values into <see cref="MatterHelm.Config.Current"/>,
-/// persists via <see cref="MatterHelm.Config.Save"/>, then
+/// persists the working snapshot via <see cref="MatterHelm.Config.Save()"/>, then
 /// <see cref="MatterHelm.Config.Reload"/>s so the existing
 /// <c>Config.Changed</c> machinery (tray checkboxes, overlay toggle, bridge
 /// enable) applies the change live.
@@ -202,6 +201,9 @@ public sealed class SettingsViewModel
 
     /// <summary>True iff the working copy differs from the last applied/loaded state.</summary>
     public bool IsDirty => Snapshot(Working) != _baseline;
+
+    /// <summary>True iff the staged edits include a setting marked as requiring a bridge restart.</summary>
+    public bool NeedsBridgeRestart => RequiresBridgeRestart(_baselineConfig, Working);
 
     /// <summary>True iff <see cref="Validate"/> finds nothing wrong.</summary>
     public bool IsValid => Validate().Count == 0;
@@ -382,23 +384,28 @@ public sealed class SettingsViewModel
     public void RemoveCustomCommand(string key) => Working.Commands.Custom.RemoveAll(c => c.Key == key);
 
     /// <summary>
-    /// Saves the staged edits: copies <see cref="Working"/> into the live
-    /// config, persists, then reloads so <c>Config.Changed</c> fires and the
+    /// Saves the staged edits without mutating the live config first, then
+    /// reloads so <c>Config.Changed</c> fires and the
     /// existing subscribers (tray checkboxes → bridge/overlay) apply what can
     /// apply live. Throws if <see cref="Validate"/> fails — the window keeps
-    /// Save disabled while invalid.
+    /// Save disabled while invalid. Returns false when persistence failed;
+    /// <see cref="Working"/> and the baseline remain untouched and dirty.
     /// </summary>
-    public void Apply()
+    public bool Apply()
     {
         if (!IsValid)
         {
             throw new InvalidOperationException("cannot apply an invalid working copy");
         }
 
-        CopyInto(Working, _config.Current);
-        _config.Save();
+        if (!_config.Save(Working))
+        {
+            return false;
+        }
+
         _config.Reload();
         Revert();
+        return true;
     }
 
     /// <summary>The live config this view-model stages over (for <c>Config.Changed</c> subscriptions).</summary>
@@ -431,15 +438,7 @@ public sealed class SettingsViewModel
         }
 
         BridgeConfig live = _config.Current;
-        if (Working.BridgeEnabled == _baselineConfig.BridgeEnabled)
-        {
-            Working.BridgeEnabled = live.BridgeEnabled;
-        }
-
-        if (Working.OverlayEnabled == _baselineConfig.OverlayEnabled)
-        {
-            Working.OverlayEnabled = live.OverlayEnabled;
-        }
+        ReconcileUnchangedFields(Working, _baselineConfig, live);
 
         _baselineConfig = Clone(live);
         _baseline = Snapshot(_baselineConfig);
@@ -468,24 +467,82 @@ public sealed class SettingsViewModel
     private static string Snapshot(BridgeConfig config) =>
         JsonSerializer.Serialize(config, ConfigJsonContext.Default.BridgeConfig);
 
-    private static void CopyInto(BridgeConfig from, BridgeConfig into)
+    /// <summary>True iff any descriptor marked with the restart glyph differs between two config snapshots.</summary>
+    internal static bool RequiresBridgeRestart(BridgeConfig before, BridgeConfig after)
     {
-        into.Commands = Clone(from).Commands;
-        into.IpcPort = from.IpcPort;
-        into.MomentaryResetMs = from.MomentaryResetMs;
-        into.PowerOffAction = from.PowerOffAction;
-        into.OverlayEnabled = from.OverlayEnabled;
-        into.OverlayPosition = from.OverlayPosition;
-        into.BridgeName = from.BridgeName;
-        into.VendorId = from.VendorId;
-        into.ProductId = from.ProductId;
-        into.UniqueIdSeed = from.UniqueIdSeed;
-        into.OverlayTheme = from.OverlayTheme;
-        into.OverlayOpacityPercent = from.OverlayOpacityPercent;
-        into.BridgeEnabled = from.BridgeEnabled;
-        into.MdnsInterface = from.MdnsInterface;
-        into.LogLevel = from.LogLevel;
-        into.AppLogLevel = from.AppLogLevel;
+        if (before.IpcPort != after.IpcPort
+            || before.MomentaryResetMs != after.MomentaryResetMs
+            || before.LogLevel != after.LogLevel
+            || before.BridgeName != after.BridgeName
+            || before.MdnsInterface != after.MdnsInterface
+            || before.VendorId != after.VendorId
+            || before.ProductId != after.ProductId)
+        {
+            return true;
+        }
+
+        return BuiltinChanged(before.Commands.Speaker, after.Commands.Speaker)
+            || BuiltinChanged(before.Commands.PlayPause, after.Commands.PlayPause)
+            || BuiltinChanged(before.Commands.Next, after.Commands.Next)
+            || BuiltinChanged(before.Commands.Previous, after.Commands.Previous)
+            || BuiltinChanged(before.Commands.Power, after.Commands.Power)
+            || CustomCommandsSnapshot(before.Commands.Custom) != CustomCommandsSnapshot(after.Commands.Custom);
+    }
+
+    private static bool BuiltinChanged(BuiltinCommandConfig before, BuiltinCommandConfig after) =>
+        before.Name != after.Name || before.Enabled != after.Enabled;
+
+    private static string CustomCommandsSnapshot(List<CustomCommandConfig> commands)
+    {
+        var wrapper = new BridgeConfig();
+        wrapper.Commands.Custom = commands;
+        return Snapshot(wrapper);
+    }
+
+    private static void ReconcileUnchangedFields(BridgeConfig working, BridgeConfig baseline, BridgeConfig live)
+    {
+        Reconcile(working.IpcPort, baseline.IpcPort, live.IpcPort, value => working.IpcPort = value);
+        Reconcile(working.MomentaryResetMs, baseline.MomentaryResetMs, live.MomentaryResetMs, value => working.MomentaryResetMs = value);
+        Reconcile(working.PowerOffAction, baseline.PowerOffAction, live.PowerOffAction, value => working.PowerOffAction = value);
+        Reconcile(working.OverlayEnabled, baseline.OverlayEnabled, live.OverlayEnabled, value => working.OverlayEnabled = value);
+        Reconcile(working.OverlayPosition, baseline.OverlayPosition, live.OverlayPosition, value => working.OverlayPosition = value);
+        Reconcile(working.OverlayTheme, baseline.OverlayTheme, live.OverlayTheme, value => working.OverlayTheme = value);
+        Reconcile(working.OverlayOpacityPercent, baseline.OverlayOpacityPercent, live.OverlayOpacityPercent, value => working.OverlayOpacityPercent = value);
+        Reconcile(working.BridgeEnabled, baseline.BridgeEnabled, live.BridgeEnabled, value => working.BridgeEnabled = value);
+        Reconcile(working.UpdateCheckEnabled, baseline.UpdateCheckEnabled, live.UpdateCheckEnabled, value => working.UpdateCheckEnabled = value);
+        Reconcile(working.MdnsInterface, baseline.MdnsInterface, live.MdnsInterface, value => working.MdnsInterface = value);
+        Reconcile(working.VendorId, baseline.VendorId, live.VendorId, value => working.VendorId = value);
+        Reconcile(working.ProductId, baseline.ProductId, live.ProductId, value => working.ProductId = value);
+        Reconcile(working.OnboardingShown, baseline.OnboardingShown, live.OnboardingShown, value => working.OnboardingShown = value);
+        Reconcile(working.BridgeName, baseline.BridgeName, live.BridgeName, value => working.BridgeName = value);
+        Reconcile(working.UniqueIdSeed, baseline.UniqueIdSeed, live.UniqueIdSeed, value => working.UniqueIdSeed = value);
+        Reconcile(working.LogLevel, baseline.LogLevel, live.LogLevel, value => working.LogLevel = value);
+        Reconcile(working.AppLogLevel, baseline.AppLogLevel, live.AppLogLevel, value => working.AppLogLevel = value);
+
+        ReconcileBuiltin(working.Commands.Speaker, baseline.Commands.Speaker, live.Commands.Speaker);
+        ReconcileBuiltin(working.Commands.PlayPause, baseline.Commands.PlayPause, live.Commands.PlayPause);
+        ReconcileBuiltin(working.Commands.Next, baseline.Commands.Next, live.Commands.Next);
+        ReconcileBuiltin(working.Commands.Previous, baseline.Commands.Previous, live.Commands.Previous);
+        ReconcileBuiltin(working.Commands.Power, baseline.Commands.Power, live.Commands.Power);
+
+        if (CustomCommandsSnapshot(working.Commands.Custom) == CustomCommandsSnapshot(baseline.Commands.Custom))
+        {
+            working.Commands.Custom = Clone(live).Commands.Custom;
+        }
+    }
+
+    private static void ReconcileBuiltin(BuiltinCommandConfig working, BuiltinCommandConfig baseline, BuiltinCommandConfig live)
+    {
+        Reconcile(working.Name, baseline.Name, live.Name, value => working.Name = value);
+        Reconcile(working.Enabled, baseline.Enabled, live.Enabled, value => working.Enabled = value);
+    }
+
+    private static void Reconcile<T>(T working, T baseline, T live, Action<T> adopt)
+    {
+        if (EqualityComparer<T>.Default.Equals(working, baseline))
+        {
+            adopt(live);
+        }
     }
 
     private static IReadOnlyList<SettingsCategory> BuildCategories() =>
@@ -581,8 +638,8 @@ public sealed class SettingsViewModel
                     Label = "Power off behavior",
                     Description = "What turning the power device off does on this PC.",
                     Kind = SettingKind.Choice,
-                    Choices = ["displaysOff", "pauseAndDisplaysOff", "sleep"],
-                    ChoiceLabels = ["Displays off", "Pause, then displays off", "Sleep"],
+                    Choices = ["displaysOff", "pauseAndDisplaysOff", "screensaver", "sleep"],
+                    ChoiceLabels = ["Displays off", "Pause, then displays off", "Start screensaver", "Sleep"],
                     Get = c => ToWireName(c.PowerOffAction),
                     Set = (c, v) => c.PowerOffAction = FromWireName((string)v!),
                 },
@@ -750,7 +807,7 @@ public sealed class SettingsViewModel
                 {
                     Id = "product-id",
                     Label = "Product ID (PID)",
-                    Description = "Test range 0x8000–0x801F; give a second PC in the same home its own. Changing it re-pairs the bridge.",
+                    Description = "Must match your Google Home Developer Console project. Changing it re-pairs the bridge.",
                     Kind = SettingKind.Text,
                     NeedsBridgeRestart = true,
                     Get = c => MatterIds.Format(c.ProductId),
@@ -827,6 +884,7 @@ public sealed class SettingsViewModel
     {
         PowerOffAction.DisplaysOff => "displaysOff",
         PowerOffAction.PauseAndDisplaysOff => "pauseAndDisplaysOff",
+        PowerOffAction.Screensaver => "screensaver",
         PowerOffAction.Sleep => "sleep",
         _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
     };
@@ -835,6 +893,7 @@ public sealed class SettingsViewModel
     {
         "displaysOff" => PowerOffAction.DisplaysOff,
         "pauseAndDisplaysOff" => PowerOffAction.PauseAndDisplaysOff,
+        "screensaver" => PowerOffAction.Screensaver,
         "sleep" => PowerOffAction.Sleep,
         _ => throw new ArgumentOutOfRangeException(nameof(wireName), wireName, null),
     };

@@ -7,6 +7,8 @@
  * until the bridge is started and `null` again once commissioned (adapter.ts
  * semantics), so `maybeEmitPairing` is naturally a no-op both before start
  * and after commissioning — no separate "stop re-sending" flag is needed.
+ * A decommission event exposes codes again; its handler sends the cleared
+ * Matter status first, then re-emits those codes for the tray pairing view.
  * `IpcClient` exposes lifecycle via `onStateChange` rather than a dedicated
  * "connected to a fresh session" callback; its `"connected"` state fires
  * exactly once per socket-open+hello-send (client.ts), which is the closest
@@ -22,6 +24,12 @@ import { PROTOCOL_VERSION } from "./ipc/protocol.js";
 import type { TrayFrame } from "./ipc/protocol.js";
 import { makeLogger } from "./log.js";
 import { stateFrameToSpeakerAttributes } from "./mapping/state.js";
+import {
+  AdvertisementHealthMonitor,
+  AdvertisementHealthMonitorLifecycle,
+  probeMatterAdvertisement,
+} from "./matter/advertisement-health.js";
+import type { AdvertisementHealth } from "./matter/advertisement-health.js";
 import { createBridge } from "./matter/bridge.js";
 import { PendingAckTimings, makeAckTimingObserver, makeActionDispatcher } from "./timing.js";
 
@@ -117,6 +125,45 @@ async function main(): Promise<void> {
     client.send({ v: PROTOCOL_VERSION, type: "pairing", ...codes });
   }
 
+  let commissioned = bridgeHandle.isCommissioned;
+  let advertisement: "checking" | AdvertisementHealth | "notApplicable" = commissioned
+    ? "notApplicable"
+    : "checking";
+  function emitMatterStatus(): void {
+    client.send({
+      v: PROTOCOL_VERSION,
+      type: "matterStatus",
+      commissioned,
+      advertisement,
+    });
+  }
+  const advertisementHealth = new AdvertisementHealthMonitorLifecycle(
+    () =>
+      new AdvertisementHealthMonitor({
+        probe: () =>
+          probeMatterAdvertisement({
+            ...(config.mdnsInterface === undefined ? {} : { interfaceName: config.mdnsInterface }),
+            expectedMatterPort: config.matterPort ?? 5540,
+          }),
+        onChange: (health) => {
+          if (commissioned) return;
+          advertisement = health;
+          if (health === "missing") {
+            logger.error(
+              { evt: "matter.advertisement", health },
+              "commissionable mDNS advertisement is not observable; pairing cannot discover this bridge",
+            );
+          } else {
+            logger.info(
+              { evt: "matter.advertisement", health },
+              "commissionable mDNS advertisement is observable",
+            );
+          }
+          emitMatterStatus();
+        },
+      }),
+  );
+
   // ADR-004: with the speaker endpoint disabled, tray state frames stay
   // tolerated but apply to nothing — logged at debug exactly once.
   let speakerDisabledLogged = false;
@@ -150,19 +197,31 @@ async function main(): Promise<void> {
   handlers.onStateChange = (state) => {
     if (state === "connected") {
       maybeEmitPairing();
+      emitMatterStatus();
     }
   };
 
-  bridgeHandle.onCommissionedChange((commissioned) => {
+  bridgeHandle.onCommissionedChange((newCommissioned) => {
+    commissioned = newCommissioned;
+    advertisement = commissioned ? "notApplicable" : "checking";
+    advertisementHealth.setCommissioned(commissioned);
     logger.info(
       { evt: "matter.commissioned", commissioned },
       commissioned ? "controller commissioned" : "controller removed",
     );
+    emitMatterStatus();
+    if (!commissioned) {
+      // The tray clears its paired state from matterStatus before accepting
+      // the newly available commissioning payload into the pairing window.
+      maybeEmitPairing();
+    }
   });
 
   client.start();
   await bridgeHandle.start();
   maybeEmitPairing();
+  emitMatterStatus();
+  advertisementHealth.setCommissioned(commissioned);
   logger.info({ evt: "bridge.started", ipcPort: config.ipcPort }, "bridge started");
 
   let shuttingDown = false;
@@ -178,6 +237,7 @@ async function main(): Promise<void> {
     }, SHUTDOWN_TIMEOUT_MS);
     hardExit.unref();
     client.stop();
+    advertisementHealth.close();
     void bridgeHandle
       .close()
       .then(() => {

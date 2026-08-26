@@ -26,7 +26,7 @@
 import { z } from "zod";
 
 /** Current per-message revision. Bump additively only — see module doc. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Upper length bound for a custom-command key (ADR-004 §3). */
 export const CUSTOM_KEY_MAX_LENGTH = 64;
@@ -128,11 +128,29 @@ export const PairingFrameSchema = z.strictObject({
 });
 export type PairingFrame = z.infer<typeof PairingFrameSchema>;
 
+/**
+ * Matter lifecycle and commissionable-advertisement health. This additive v3
+ * signal lets the tray distinguish an authenticated process from a bridge a
+ * commissioner can actually discover.
+ */
+export const MatterStatusFrameSchema = z
+  .strictObject({
+    v: vField,
+    type: z.literal("matterStatus"),
+    commissioned: z.boolean(),
+    advertisement: z.enum(["checking", "visible", "missing", "notApplicable"]),
+  })
+  .refine((frame) => frame.commissioned === (frame.advertisement === "notApplicable"), {
+    message: "commissioned and advertisement applicability disagree",
+  });
+export type MatterStatusFrame = z.infer<typeof MatterStatusFrameSchema>;
+
 /** Union of every frame the sidecar sends to the tray app. */
 export const SidecarFrameSchema = z.discriminatedUnion("type", [
   HelloFrameSchema,
   ActionFrameSchema,
   PairingFrameSchema,
+  MatterStatusFrameSchema,
 ]);
 export type SidecarFrame = z.infer<typeof SidecarFrameSchema>;
 

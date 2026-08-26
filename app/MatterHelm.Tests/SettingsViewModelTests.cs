@@ -109,6 +109,44 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.True(vm.IsDirty);
     }
 
+    [Fact]
+    public void ExternalChangeThreeWayMergesEveryUntouchedFieldBeforeApply()
+    {
+        Config config = NewConfig();
+        SettingsViewModel vm = NewViewModel(config);
+        vm.Working.Commands.Speaker.Name = "My staged speaker";
+
+        var external = new Config(_path, _log.Sink);
+        external.Current.IpcPort = 40123;
+        external.Current.OverlayPosition = OverlayPosition.TopLeft;
+        external.Current.Commands.Next.Name = "Externally renamed next";
+        external.Current.Commands.Custom.Add(MediaKeyCommand("external-command"));
+        external.Current.UpdateCheckEnabled = false;
+        external.Current.OnboardingShown = true;
+        Assert.True(external.Save());
+        config.Reload();
+
+        vm.AbsorbExternalConfigChange();
+
+        Assert.Equal("My staged speaker", vm.Working.Commands.Speaker.Name);
+        Assert.Equal(40123, vm.Working.IpcPort);
+        Assert.Equal(OverlayPosition.TopLeft, vm.Working.OverlayPosition);
+        Assert.Equal("Externally renamed next", vm.Working.Commands.Next.Name);
+        Assert.Equal("external-command", Assert.Single(vm.Working.Commands.Custom).Key);
+        Assert.False(vm.Working.UpdateCheckEnabled);
+        Assert.True(vm.Working.OnboardingShown);
+        Assert.True(vm.IsDirty);
+
+        Assert.True(vm.Apply());
+        Config persisted = NewConfig();
+        Assert.Equal("My staged speaker", persisted.Current.Commands.Speaker.Name);
+        Assert.Equal(40123, persisted.Current.IpcPort);
+        Assert.Equal("Externally renamed next", persisted.Current.Commands.Next.Name);
+        Assert.Equal("external-command", Assert.Single(persisted.Current.Commands.Custom).Key);
+        Assert.False(persisted.Current.UpdateCheckEnabled);
+        Assert.True(persisted.Current.OnboardingShown);
+    }
+
     // ---- staging / dirty tracking -----------------------------------------
 
     [Fact]
@@ -515,7 +553,7 @@ public sealed class SettingsViewModelTests : IDisposable
         vm.Working.MomentaryResetMs = 450;
         vm.Working.Commands.Speaker.Name = "Demo Speaker";
         vm.Working.Commands.Power.Enabled = false;
-        vm.Working.PowerOffAction = PowerOffAction.Sleep;
+        vm.Working.PowerOffAction = PowerOffAction.Screensaver;
         vm.Working.MdnsInterface = "Ethernet";
         vm.Working.LogLevel = "debug";
         vm.Working.AppLogLevel = "warn";
@@ -532,7 +570,7 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal(450, reloaded.Current.MomentaryResetMs);
         Assert.Equal("Demo Speaker", reloaded.Current.Commands.Speaker.Name);
         Assert.False(reloaded.Current.Commands.Power.Enabled);
-        Assert.Equal(PowerOffAction.Sleep, reloaded.Current.PowerOffAction);
+        Assert.Equal(PowerOffAction.Screensaver, reloaded.Current.PowerOffAction);
         Assert.Equal("Ethernet", reloaded.Current.MdnsInterface);
         Assert.Equal("debug", reloaded.Current.LogLevel);
         Assert.Equal("warn", reloaded.Current.AppLogLevel);
@@ -566,8 +604,29 @@ public sealed class SettingsViewModelTests : IDisposable
 
         vm.Working.IpcPort = 0;
 
-        Assert.Throws<InvalidOperationException>(vm.Apply);
+        Assert.Throws<InvalidOperationException>(() => vm.Apply());
         Assert.Equal(39531, config.Current.IpcPort);
+    }
+
+    [Fact]
+    public void SaveFailureStaysDirtyLeavesLiveConfigUntouchedAndSurfacesAnError()
+    {
+        var config = new Config(_dir, _log.Sink);
+        var vm = new SettingsViewModel(config);
+        vm.Working.IpcPort = 40123;
+        var errors = new List<(string Title, string Message)>();
+        using var window = new SettingsWindow(
+            vm,
+            showError: (title, message) => errors.Add((title, message)));
+
+        bool saved = window.SaveNow();
+
+        Assert.False(saved);
+        Assert.True(vm.IsDirty);
+        Assert.Equal(39531, config.Current.IpcPort);
+        (string title, string message) = Assert.Single(errors);
+        Assert.Equal("Settings could not be saved", title);
+        Assert.Contains("Your edits are still here", message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -683,10 +742,11 @@ public sealed class SettingsViewModelTests : IDisposable
         SettingsViewModel vm = NewViewModel();
         SettingDescriptor choice = SettingsViewModel.Describe("power-off-action");
 
-        Assert.Equal(["displaysOff", "pauseAndDisplaysOff", "sleep"], choice.Choices);
+        Assert.Equal(["displaysOff", "pauseAndDisplaysOff", "screensaver", "sleep"], choice.Choices);
+        Assert.Equal(["Displays off", "Pause, then displays off", "Start screensaver", "Sleep"], choice.ChoiceLabels);
         Assert.Equal("pauseAndDisplaysOff", choice.Get!(vm.Working));
-        choice.Set!(vm.Working, "displaysOff");
-        Assert.Equal(PowerOffAction.DisplaysOff, vm.Working.PowerOffAction);
+        choice.Set!(vm.Working, "screensaver");
+        Assert.Equal(PowerOffAction.Screensaver, vm.Working.PowerOffAction);
     }
 
     [Fact]
@@ -708,6 +768,18 @@ public sealed class SettingsViewModelTests : IDisposable
                 "vendor-id", "product-id",
             ],
             flagged);
+    }
+
+    [Fact]
+    public void RestartRequirementTracksOnlyRestartMarkedStagedChanges()
+    {
+        SettingsViewModel vm = NewViewModel();
+
+        vm.Working.OverlayOpacityPercent = 80;
+        Assert.False(vm.NeedsBridgeRestart);
+
+        vm.Working.ProductId++;
+        Assert.True(vm.NeedsBridgeRestart);
     }
 
     [Fact]

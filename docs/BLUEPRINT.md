@@ -167,17 +167,23 @@ evolution via `v`, breaking changes bump `protocol` in `hello`.
 
 Sidecar → tray app:
 ```json
-{ "v": 1, "type": "hello", "token": "…", "protocol": 1 }
-{ "v": 1, "type": "action", "id": "uuid", "name": "playPause" }
-{ "v": 1, "type": "action", "id": "uuid", "name": "setVolume", "value": 40 }
-{ "v": 1, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
+{ "v": 3, "type": "hello", "token": "…", "protocol": 1 }
+{ "v": 3, "type": "action", "id": "uuid", "name": "playPause" }
+{ "v": 3, "type": "action", "id": "uuid", "name": "setVolume", "value": 40 }
+{ "v": 3, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
+{ "v": 3, "type": "matterStatus", "commissioned": false, "advertisement": "visible" }
 ```
 
 Tray app → sidecar:
 ```json
-{ "v": 1, "type": "ack", "id": "uuid", "ok": true }
-{ "v": 1, "type": "state", "volume": 40, "muted": false }
+{ "v": 3, "type": "ack", "id": "uuid", "ok": true }
+{ "v": 3, "type": "state", "volume": 40, "muted": false }
 ```
+
+`matterStatus` (protocol v3) carries the Matter lifecycle plus the active mDNS
+self-check (`checking` / `visible` / `missing`; commissioned nodes use
+`notApplicable`). It prevents an authenticated sidecar from being reported as
+healthy while its commissionable advertisement is unobservable.
 
 State flows on connect and on every change (the executor observes system
 volume/mute via CoreAudio callbacks). If the socket is down, Matter writes are
@@ -210,7 +216,7 @@ app/MatterHelm/
 
 - **Tray states**: gray = bridge off · green = paired & connected · amber =
   running, not commissioned (shows "Pair…" menu item) · red = sidecar
-  crashed/restarting.
+  crashed/restarting or commissionable mDNS advertisement unobservable.
 - **Menu**: Enable bridge · Pair with Google Home… · Overlay pop-ups (toggle,
   persisted) · Device names… (opens config) · Open config · Reload config ·
   About · Exit.

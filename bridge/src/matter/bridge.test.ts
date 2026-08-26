@@ -14,6 +14,7 @@ import {
   DEFAULT_MOMENTARY_RESET_MS,
   EchoSuppressor,
   MomentaryResetScheduler,
+  SerializedSpeakerStateWriter,
   endpointEventToClusterWrite,
   makePlugCommandHandler,
   type EndpointEvent,
@@ -56,6 +57,39 @@ describe("EchoSuppressor — value-based FIFO suppression of local writes", () =
     suppressor.expect("speaker.onOff", true);
     expect(suppressor.check("speaker.level", 254)).toBe(false);
     expect(suppressor.check("speaker.onOff", true)).toBe(true);
+  });
+
+  it("serializes racing same-value speaker writes and enqueues one expectation", async () => {
+    const suppressor = new EchoSuppressor();
+    let level = 0;
+    let releaseWrite = (): void => undefined;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writes: { level?: number; onOff?: boolean }[] = [];
+    const writer = new SerializedSpeakerStateWriter(
+      {
+        getLevel: () => level,
+        getOnOff: () => true,
+        setState: async (patch) => {
+          writes.push(patch);
+          await writeGate;
+          level = patch.level ?? level;
+        },
+      },
+      suppressor,
+    );
+
+    const first = writer.setState(100, true);
+    const second = writer.setState(100, true);
+    await Promise.resolve();
+    expect(writes).toEqual([{ level: 100 }]);
+    releaseWrite();
+    await Promise.all([first, second]);
+
+    expect(writes).toEqual([{ level: 100 }]);
+    expect(suppressor.check("speaker.level", 100)).toBe(true);
+    expect(suppressor.check("speaker.level", 100)).toBe(false);
   });
 });
 

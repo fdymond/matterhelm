@@ -23,6 +23,9 @@ public interface IActionExecutor : IDisposable
     /// <summary>Executes one named action (the protocol action names, plus <c>"sleep"</c> for the power mapping). Never throws; <c>false</c> = failure.</summary>
     bool Execute(string name, object? value = null);
 
+    /// <summary>Clears any display-off keep-awake hold without waking the displays. Never throws.</summary>
+    bool ReleaseDisplayKeepAwake();
+
     /// <summary>Reads the current volume/mute; throws <see cref="InvalidOperationException"/> when no audio endpoint exists.</summary>
     VolumeState GetVolumeState();
 }
@@ -52,6 +55,9 @@ public sealed class ActionExecutorAdapter : IActionExecutor
 
     /// <inheritdoc />
     public VolumeState GetVolumeState() => _executor.Volume.GetState();
+
+    /// <inheritdoc />
+    public bool ReleaseDisplayKeepAwake() => _executor.ReleaseDisplayKeepAwake();
 
     /// <inheritdoc />
     public void Dispose()
@@ -218,16 +224,15 @@ internal sealed record SidecarEndpointsEnv(
 ///
 /// Tray-state derivation (<see cref="DeriveState"/>), from observable signals
 /// only: <b>gray</b> (Disabled) = bridge not running; <b>green</b> (Connected)
-/// = sidecar connected and token-authenticated; <b>red</b> (Faulted) = ≥ 2
+/// = sidecar authenticated and Matter reports commissioned; <b>red</b> (Faulted) = ≥ 2
 /// consecutive supervisor restarts since the last successful authentication (a
 /// healthy sidecar authenticates within moments of starting, so repeated exits
-/// without auth are a crash/restart loop); <b>amber</b> (Running) = everything
-/// else — running but not (yet) authenticated, including "pairing frame seen".
-/// True commissioned-vs-uncommissioned detection needs a richer signal from
-/// the sidecar (future additive protocol field; deliberately NOT added now),
-/// so green means "sidecar link up", not "Google fabric joined".
+/// without auth are a crash/restart loop), or the commissionable mDNS
+/// advertisement is unobservable; <b>blue</b> (AwaitingPairing) = authenticated
+/// and uncommissioned; <b>amber</b> (Running) = starting or awaiting status.
 ///
-/// power-off mapping: <see cref="PowerOffAction.PauseAndDisplaysOff"/> sends
+/// power mapping is symmetric: each configured off action has its own inverse
+/// on an On command. <see cref="PowerOffAction.PauseAndDisplaysOff"/> sends
 /// play/pause FIRST, then blanks displays — the pause lands while the player
 /// is still visible/audible, and display-off is the terminal effect; both must
 /// succeed for an ok ack.
@@ -289,6 +294,7 @@ public sealed class BridgeHost : IDisposable
     private SidecarSupervisor? _supervisor;
     private bool _running;
     private bool _clientAuthenticated;
+    private MatterStatusFrame? _matterStatus;
     private int _restartsSinceAuth;
     private BridgeState _state = BridgeState.Disabled;
     private bool _disposed;
@@ -335,6 +341,7 @@ public sealed class BridgeHost : IDisposable
         _log = log ?? DefaultLog;
         _storageDir = storageDir ?? Path.Combine(AppPaths.Root, "matter");
         _executor.VolumeChanged += OnVolumeChanged;
+        _config.Changed += OnConfigChanged;
     }
 
     /// <summary>The derived tray state changed. May fire on any thread; <c>TrayContext.SetState</c> marshals internally.</summary>
@@ -357,11 +364,16 @@ public sealed class BridgeHost : IDisposable
 
     /// <summary>
     /// Pure tray-state rule (see the class doc for the rationale):
-    /// not running → Disabled; authenticated sidecar → Connected;
+    /// not running → Disabled; commissioned/authenticated sidecar → Connected;
+    /// missing advertisement → Faulted; uncommissioned → AwaitingPairing;
     /// ≥ <see cref="FaultedRestartThreshold"/> restarts since the last
     /// authentication → Faulted; otherwise → Running (amber).
     /// </summary>
-    public static BridgeState DeriveState(bool running, bool clientAuthenticated, int restartsSinceAuth)
+    public static BridgeState DeriveState(
+        bool running,
+        bool clientAuthenticated,
+        int restartsSinceAuth,
+        MatterStatusFrame? matterStatus = null)
     {
         if (!running)
         {
@@ -370,7 +382,13 @@ public sealed class BridgeHost : IDisposable
 
         if (clientAuthenticated)
         {
-            return BridgeState.Connected;
+            return matterStatus switch
+            {
+                { Advertisement: AdvertisementStatus.Missing } => BridgeState.Faulted,
+                { Commissioned: true } => BridgeState.Connected,
+                { Commissioned: false } => BridgeState.AwaitingPairing,
+                _ => BridgeState.Running,
+            };
         }
 
         return restartsSinceAuth >= FaultedRestartThreshold ? BridgeState.Faulted : BridgeState.Running;
@@ -385,14 +403,22 @@ public sealed class BridgeHost : IDisposable
     {
         IpcServer? stoppingServer = null;
         SidecarSupervisor? stoppingSupervisor = null;
+        bool releaseDisplayKeepAwake = false;
         lock (_gate)
         {
-            if (_disposed || enabled == _running)
+            if (_disposed)
             {
                 return;
             }
 
-            if (enabled)
+            if (enabled == _running)
+            {
+                // A repeated disable is still a teardown boundary. The guard
+                // release is idempotent and this closes the safety path even
+                // if a prior stop only partially completed.
+                releaseDisplayKeepAwake = !enabled;
+            }
+            else if (enabled)
             {
                 if (!StartLocked())
                 {
@@ -401,6 +427,7 @@ public sealed class BridgeHost : IDisposable
             }
             else
             {
+                releaseDisplayKeepAwake = true;
                 stoppingSupervisor = _supervisor;
                 stoppingServer = _server;
                 _supervisor = null;
@@ -409,6 +436,11 @@ public sealed class BridgeHost : IDisposable
                 _clientAuthenticated = false;
                 _restartsSinceAuth = 0;
             }
+        }
+
+        if (releaseDisplayKeepAwake)
+        {
+            _ = _executor.ReleaseDisplayKeepAwake();
         }
 
         stoppingSupervisor?.Stop();
@@ -435,6 +467,7 @@ public sealed class BridgeHost : IDisposable
         // touch the token, and WaitDelayStep treats a disposed handle as
         // cancelled anyway.
         _macroCts.Cancel();
+        _config.Changed -= OnConfigChanged;
         _executor.VolumeChanged -= OnVolumeChanged;
         lock (_publishGate)
         {
@@ -473,6 +506,7 @@ public sealed class BridgeHost : IDisposable
     /// </summary>
     public FactoryResetResult FactoryReset()
     {
+        bool restoreEnabled = _config.Current.BridgeEnabled;
         SetEnabled(false);
 
         if (!TryDeleteStorageDirectory(_storageDir, out string? error))
@@ -480,11 +514,19 @@ public sealed class BridgeHost : IDisposable
             _log(
                 "WARN",
                 $"bridge: factory reset could not delete Matter storage at '{_storageDir}' ({error}); "
-                    + "nothing was partially deleted — the bridge is left disabled, retry once whatever "
+                    + "nothing was partially deleted — the previous enabled state is being restored; retry once whatever "
                     + "holds the folder open (e.g. an antivirus scan or a slow-to-exit sidecar) has released it.");
             if (_config.Current.OverlayEnabled)
             {
                 _overlaySink?.Invoke(new OverlayContent("Factory reset failed", error ?? "failed", IsError: true));
+            }
+
+            SetEnabled(restoreEnabled);
+            if (restoreEnabled && State == BridgeState.Disabled)
+            {
+                _config.Current.BridgeEnabled = false;
+                _ = _config.Save();
+                _log("WARN", "bridge: factory-reset recovery could not restart the bridge; persisted it disabled so the tray and host remain consistent.");
             }
 
             return new FactoryResetResult(false, error);
@@ -627,6 +669,7 @@ public sealed class BridgeHost : IDisposable
         var server = new IpcServer(port, supervisor.IpcToken, log: _log);
         server.ActionReceived += OnActionReceived;
         server.PairingReceived += OnPairingReceived;
+        server.MatterStatusReceived += OnMatterStatusReceived;
         server.ClientChanged += OnClientChanged;
         supervisor.RestartScheduled += OnRestartScheduled;
 
@@ -647,6 +690,7 @@ public sealed class BridgeHost : IDisposable
         _supervisor = supervisor;
         _running = true;
         _clientAuthenticated = false;
+        _matterStatus = null;
         _restartsSinceAuth = 0;
         _log("INFO", $"bridge: started (port {port}).");
         return true;
@@ -660,6 +704,59 @@ public sealed class BridgeHost : IDisposable
             return ReferenceEquals(server, _server);
         }
     }
+
+    private void OnConfigChanged(object? sender, ConfigChangedEventArgs e)
+    {
+        bool leftDisplayMode = IsDisplayPowerAction(e.OldConfig.PowerOffAction)
+            && !IsDisplayPowerAction(e.NewConfig.PowerOffAction);
+        if (leftDisplayMode)
+        {
+            _ = _executor.ReleaseDisplayKeepAwake();
+            _log("INFO", "bridge: power-off behavior left a display mode; released any display keep-awake hold.");
+        }
+
+        if (!e.NewConfig.BridgeEnabled
+            || !SettingsViewModel.RequiresBridgeRestart(e.OldConfig, e.NewConfig))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed || !_running)
+            {
+                return;
+            }
+        }
+
+        _ = Task.Run(RestartAfterConfigChange);
+    }
+
+    private void RestartAfterConfigChange()
+    {
+        lock (_gate)
+        {
+            if (_disposed || !_running)
+            {
+                return;
+            }
+        }
+
+        _log("INFO", "bridge: saved settings require a restart; restarting through the normal disable/enable path.");
+        if (_config.Current.OverlayEnabled)
+        {
+            _overlaySink?.Invoke(new OverlayContent("Settings saved", "restarting bridge…", IsError: false));
+        }
+
+        SetEnabled(false);
+        if (_config.Current.BridgeEnabled)
+        {
+            SetEnabled(true);
+        }
+    }
+
+    private static bool IsDisplayPowerAction(PowerOffAction action) =>
+        action is PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff;
 
     /// <summary>
     /// Runs on the IPC receive-loop thread (raised synchronously by
@@ -786,7 +883,7 @@ public sealed class BridgeHost : IDisposable
         PairingReceived?.Invoke(this, frame);
     }
 
-    private void OnClientChanged(object? sender, bool connected)
+    private void OnMatterStatusReceived(object? sender, MatterStatusFrame frame)
     {
         if (sender is not IpcServer server || !IsCurrent(server))
         {
@@ -795,7 +892,46 @@ public sealed class BridgeHost : IDisposable
 
         lock (_gate)
         {
+            _matterStatus = frame;
+        }
+
+        if (frame.Advertisement == AdvertisementStatus.Missing)
+        {
+            const string message = "bridge: commissionable mDNS advertisement is not observable; "
+                + "Google Home cannot discover this bridge. Restart the bridge and check mDNS/firewall conflicts.";
+            _log("ERROR", message);
+            if (_config.Current.OverlayEnabled)
+            {
+                _overlaySink?.Invoke(new OverlayContent(
+                    "Google Home pairing", "bridge advertisement is not visible — see the log", IsError: true));
+            }
+        }
+        else
+        {
+            _log("INFO", $"bridge: Matter status commissioned={frame.Commissioned}, advertisement={frame.Advertisement}.");
+        }
+
+        RecomputeState();
+    }
+
+    private void OnClientChanged(object? sender, bool connected)
+    {
+        if (sender is not IpcServer server || !IsCurrent(server))
+        {
+            return;
+        }
+
+        HandleAuthenticatedClientChanged(connected, server);
+    }
+
+    /// <summary>Applies an authenticated-client transition after the event source has been validated.</summary>
+    internal void HandleAuthenticatedClientChanged(bool connected, IpcServer? server = null)
+    {
+
+        lock (_gate)
+        {
             _clientAuthenticated = connected;
+            _matterStatus = null;
             if (connected)
             {
                 _restartsSinceAuth = 0;
@@ -806,7 +942,14 @@ public sealed class BridgeHost : IDisposable
         {
             // Synchronous on the connection thread so the on-connect snapshot
             // is the first outbound frame, before any acks.
-            PublishStateSnapshot(server);
+            if (server is not null)
+            {
+                PublishStateSnapshot(server);
+            }
+        }
+        else
+        {
+            _ = _executor.ReleaseDisplayKeepAwake();
         }
 
         RecomputeState();
@@ -818,17 +961,25 @@ public sealed class BridgeHost : IDisposable
         lock (_gate)
         {
             current = ReferenceEquals(sender, _supervisor);
-            if (current)
-            {
-                _restartsSinceAuth++;
-            }
         }
 
         if (current)
         {
-            AppMetrics.SupervisorRestarts.Add(1);
-            RecomputeState();
+            HandleSupervisorRestartScheduled();
         }
+    }
+
+    /// <summary>Applies a validated supervisor-restart notification.</summary>
+    internal void HandleSupervisorRestartScheduled()
+    {
+        lock (_gate)
+        {
+            _restartsSinceAuth++;
+        }
+
+        AppMetrics.SupervisorRestarts.Add(1);
+        _ = _executor.ReleaseDisplayKeepAwake();
+        RecomputeState();
     }
 
     /// <summary>Arrives on an audio-service thread — publish from the pool, never block the callback on the socket.</summary>
@@ -934,19 +1085,48 @@ public sealed class BridgeHost : IDisposable
         BareActionFrame { Name: BareActionName.PlayPause } => (_executor.Execute("playPause"), "play/pause pressed", null),
         BareActionFrame { Name: BareActionName.Next } => (_executor.Execute("next"), "next track", null),
         BareActionFrame { Name: BareActionName.Previous } => (_executor.Execute("previous"), "previous track", null),
-        BareActionFrame { Name: BareActionName.PowerOn } => (_executor.Execute("powerOn"), "displays woken", null),
-        BareActionFrame { Name: BareActionName.PowerOff } => ExecutePowerOff(),
+        BareActionFrame { Name: BareActionName.PowerOn } => ExecutePowerAction(on: true),
+        BareActionFrame { Name: BareActionName.PowerOff } => ExecutePowerAction(on: false),
         CustomActionFrame custom => ExecuteCustom(custom),
         _ => (false, "unknown action", null),
     };
 
-    private (bool Ok, string Pill, string? Error) ExecutePowerOff() => _config.Current.PowerOffAction switch
+    internal (bool Ok, string Pill, string? Error) ExecutePowerAction(bool on)
     {
-        PowerOffAction.DisplaysOff => (_executor.Execute("powerOff"), "displays off", null),
-        PowerOffAction.Sleep => (_executor.Execute("sleep"), "sleeping", null),
+        // A display-off hold belongs to the prior power-off action, not the
+        // currently configured route. Always clear it on Power On, including
+        // after the user changed the route to screensaver or sleep.
+        bool released = !on || _executor.ReleaseDisplayKeepAwake();
+        (bool ok, string pill) = RoutePowerAction(_config.Current.PowerOffAction, on, _executor.Execute);
+        return (released & ok, pill, null);
+    }
+
+    /// <summary>
+    /// Routes a stateful power command to the configured concrete primitive.
+    /// Kept free of IPC/native I/O so the complete action/direction matrix is
+    /// specification-tested without blanking displays or suspending a machine.
+    /// </summary>
+    internal static (bool Ok, string Pill) RoutePowerAction(
+        PowerOffAction action,
+        bool on,
+        Func<string, object?, bool> execute) => (on, action) switch
+    {
+        (true, PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff) =>
+            (execute("powerOn", null), "displays woken"),
+        (true, PowerOffAction.Screensaver) =>
+            (execute("stopScreenSaver", null), "screensaver dismissed"),
+        (true, PowerOffAction.Sleep) => (true, "no action needed"),
+        (false, PowerOffAction.DisplaysOff) =>
+            (execute("powerOff", null), "displays off"),
+        (false, PowerOffAction.Screensaver) =>
+            (execute("startScreenSaver", null), "screensaver started"),
+        (false, PowerOffAction.Sleep) =>
+            (execute("sleep", null), "sleeping"),
         // Pause first, then blank (see class doc); non-short-circuit `&` so
         // the displays still go off even if the pause key injection failed.
-        _ => (_executor.Execute("playPause") & _executor.Execute("powerOff"), "paused + displays off", null),
+        (false, PowerOffAction.PauseAndDisplaysOff) =>
+            (execute("playPause", null) & execute("powerOff", null), "paused + displays off"),
+        _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
     };
 
     /// <summary>
@@ -1189,6 +1369,7 @@ public sealed class BridgeHost : IDisposable
         BareActionFrame { Name: BareActionName.PowerOff } => _config.Current.PowerOffAction switch
         {
             PowerOffAction.DisplaysOff => "power off (→ displays off)",
+            PowerOffAction.Screensaver => "power off (→ screensaver)",
             PowerOffAction.Sleep => "power off (→ sleep)",
             _ => "power off (→ pause + displays off)",
         },
@@ -1202,7 +1383,7 @@ public sealed class BridgeHost : IDisposable
     {
         lock (_gate)
         {
-            BridgeState derived = DeriveState(_running, _clientAuthenticated, _restartsSinceAuth);
+            BridgeState derived = DeriveState(_running, _clientAuthenticated, _restartsSinceAuth, _matterStatus);
             if (derived == _state)
             {
                 return;

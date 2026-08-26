@@ -271,6 +271,9 @@ public enum PowerOffAction
     /// <summary>Pause media, then turn displays off (default).</summary>
     PauseAndDisplaysOff,
 
+    /// <summary>Start the user's configured Windows screensaver.</summary>
+    Screensaver,
+
     /// <summary>Suspend the machine.</summary>
     Sleep,
 }
@@ -319,6 +322,9 @@ public sealed class BridgeConfig
     /// user enables the bridge explicitly.
     /// </summary>
     public bool BridgeEnabled { get; set; }
+
+    /// <summary>Whether the tray performs delayed daily GitHub release checks; manual checks remain available.</summary>
+    public bool UpdateCheckEnabled { get; set; } = true;
 
     /// <summary>mDNS interface pin for multi-NIC hosts (maps to matter.js <c>mdns.networkInterface</c>); <c>null</c> = auto-detect.</summary>
     public string? MdnsInterface { get; set; }
@@ -397,6 +403,8 @@ public sealed class Config
 {
     private readonly string _path;
     private readonly Action<string, string> _log;
+    private readonly Lock _writeGate = new();
+    private string? _lastSaveError;
 
     /// <summary>
     /// Loads (or creates) the config at <paramref name="path"/>, defaulting to
@@ -425,8 +433,23 @@ public sealed class Config
     /// </summary>
     public event EventHandler<ConfigChangedEventArgs>? Changed;
 
-    /// <summary>Writes <see cref="Current"/> to disk (creating the parent directory if needed).</summary>
-    public void Save() => WriteFile(Current);
+    /// <summary>Writes <see cref="Current"/> to disk. False leaves the previous file authoritative.</summary>
+    public bool Save() => WriteFile(Current);
+
+    /// <summary>The most recent save failure, or null after a successful save.</summary>
+    public string? LastSaveError
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _lastSaveError;
+            }
+        }
+    }
+
+    /// <summary>Persists a staged snapshot without first mutating <see cref="Current"/>.</summary>
+    internal bool Save(BridgeConfig snapshot) => WriteFile(snapshot);
 
     /// <summary>
     /// Re-reads the file from disk (same malformed-field resilience as the
@@ -476,30 +499,53 @@ public sealed class Config
         }
     }
 
-    private void WriteFile(BridgeConfig config)
+    private bool WriteFile(BridgeConfig config)
     {
-        try
+        lock (_writeGate)
         {
-            string? dir = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(dir))
+            string? tmp = null;
+            try
             {
-                Directory.CreateDirectory(dir);
-            }
+                string? dir = Path.GetDirectoryName(_path);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
 
             // Source-generated contract (ADR-005): camelCase properties and
             // camelCase enum member names ("pauseAndDisplaysOff", not
             // "PauseAndDisplaysOff") — the wire format the file schema promises.
-            string json = JsonSerializer.Serialize(config, ConfigJsonContext.Default.BridgeConfig);
+                string json = JsonSerializer.Serialize(config, ConfigJsonContext.Default.BridgeConfig);
 
             // Write-then-move: a crash mid-write leaves the previous file intact
             // rather than a half-written config.json.
-            string tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, _path, overwrite: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _log("ERROR", $"config.json could not be written ({ex.Message}).");
+                string fileName = Path.GetFileName(_path);
+                tmp = Path.Combine(dir ?? "", $".{fileName}.{Guid.NewGuid():N}.tmp");
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, _path, overwrite: true);
+                _lastSaveError = null;
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _lastSaveError = ex.Message;
+                _log("ERROR", $"config.json could not be written ({ex.Message}).");
+                return false;
+            }
+            finally
+            {
+                if (tmp is not null && File.Exists(tmp))
+                {
+                    try
+                    {
+                        File.Delete(tmp);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        _log("WARN", $"config.json temporary file '{tmp}' could not be removed ({ex.Message}).");
+                    }
+                }
+            }
         }
     }
 
@@ -544,6 +590,7 @@ public sealed class Config
             ApplyOverlayTheme(root, result);
             ApplyOverlayOpacityPercent(root, result);
             ApplyBridgeEnabled(root, result);
+            ApplyUpdateCheckEnabled(root, result);
             ApplyMdnsInterface(root, result);
             ApplyMatterId(root, result, "vendorId", 0xFFF1, id => result.VendorId = id);
             ApplyMatterId(root, result, "productId", 0x8000, id => result.ProductId = id);
@@ -1010,13 +1057,16 @@ public sealed class Config
                 case "pauseAndDisplaysOff":
                     result.PowerOffAction = PowerOffAction.PauseAndDisplaysOff;
                     return;
+                case "screensaver":
+                    result.PowerOffAction = PowerOffAction.Screensaver;
+                    return;
                 case "sleep":
                     result.PowerOffAction = PowerOffAction.Sleep;
                     return;
             }
         }
 
-        _log("WARN", $"config.json \"powerOffAction\" must be one of displaysOff/pauseAndDisplaysOff/sleep; using default {ToWireName(result.PowerOffAction)}.");
+        _log("WARN", $"config.json \"powerOffAction\" must be one of displaysOff/pauseAndDisplaysOff/screensaver/sleep; using default {ToWireName(result.PowerOffAction)}.");
     }
 
     private void ApplyOverlayPosition(JsonElement root, BridgeConfig result)
@@ -1125,6 +1175,22 @@ public sealed class Config
         }
 
         _log("WARN", $"config.json \"bridgeEnabled\" must be a boolean; using default {result.BridgeEnabled}.");
+    }
+
+    private void ApplyUpdateCheckEnabled(JsonElement root, BridgeConfig result)
+    {
+        if (!root.TryGetProperty("updateCheckEnabled", out JsonElement element))
+        {
+            return;
+        }
+
+        if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            result.UpdateCheckEnabled = element.GetBoolean();
+            return;
+        }
+
+        _log("WARN", $"config.json \"updateCheckEnabled\" must be a boolean; using default {result.UpdateCheckEnabled}.");
     }
 
     private void ApplyMdnsInterface(JsonElement root, BridgeConfig result)
@@ -1274,6 +1340,7 @@ public sealed class Config
     {
         PowerOffAction.DisplaysOff => "displaysOff",
         PowerOffAction.PauseAndDisplaysOff => "pauseAndDisplaysOff",
+        PowerOffAction.Screensaver => "screensaver",
         PowerOffAction.Sleep => "sleep",
         _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
     };

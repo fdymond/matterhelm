@@ -3,26 +3,30 @@ using System.Drawing.Imaging;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using MatterHelm.Ui;
+using MatterHelm.Updates;
 
 namespace MatterHelm;
 
 /// <summary>
-/// Tray icon color/state (BLUEPRINT §2.4): gray = bridge disabled, amber =
-/// running but not yet commissioned, green = paired and connected, red =
-/// sidecar crashed/restarting.
+/// Tray icon color/state: gray = bridge disabled, amber = starting, blue =
+/// running and awaiting commissioning, green = paired and connected, red =
+/// sidecar crashed/restarting or its commissionable advertisement is missing.
 /// </summary>
 public enum BridgeState
 {
     /// <summary>Bridge disabled by the user (gray).</summary>
     Disabled,
 
-    /// <summary>Sidecar running, not yet commissioned by Google Home (amber).</summary>
+    /// <summary>Bridge is starting or has not reported Matter lifecycle status yet (amber).</summary>
     Running,
+
+    /// <summary>Sidecar authenticated and Matter reports uncommissioned (blue).</summary>
+    AwaitingPairing,
 
     /// <summary>Paired and connected (green).</summary>
     Connected,
 
-    /// <summary>Sidecar crashed and is restarting (red).</summary>
+    /// <summary>Sidecar crash loop or commissionable advertisement missing (red).</summary>
     Faulted,
 }
 
@@ -44,9 +48,22 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _pairItem;
     private readonly ToolStripMenuItem _factoryResetItem;
     private readonly ToolStripMenuItem _overlayItem;
+    private readonly ToolStripMenuItem _checkUpdatesItem;
+    private readonly UpdateService _updateService;
+    private readonly Func<UpdateRelease, string, string, IUpdateInstallationProbe, CancellationToken, Task<bool>> _startUpdateHandoff;
+    private readonly Action<string, string> _showError;
+    private readonly Action<Action, TimeSpan>? _pairingAutoCloseScheduler;
+    private readonly System.Threading.Timer _updateTimer;
+    private readonly CancellationTokenSource _updatesCts = new();
+    private readonly SemaphoreSlim _updateGate = new(1, 1);
+    private readonly Lock _updateTasksLock = new();
+    private readonly HashSet<Task> _updateTasks = [];
 
     private bool _applyingConfigChange;
-    private bool _disposed;
+    private bool _exiting;
+    private bool _updateHandoffStarted;
+    private bool _updateHandoffCanceledByWindow;
+    private volatile bool _disposed;
     private PairingWindow? _pairingWindow;
     private SettingsWindow? _settingsWindow;
     private WelcomeWindow? _welcomeWindow;
@@ -54,12 +71,30 @@ public sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _pairingSettleTimer;
     private bool _pairingSettled;
     private BridgeState _state = BridgeState.Disabled;
+    private SemanticVersion? _lastNotifiedUpdate;
 
     /// <summary>Creates the tray icon and menu, and loads (or creates) <see cref="Config"/>.</summary>
     /// <param name="config">Injectable for tests/demos; defaults to the real <c>%APPDATA%</c> config.</param>
-    public TrayContext(Config? config = null)
+    /// <param name="updateService">Injectable updater for tests; defaults to the production GitHub service.</param>
+    /// <param name="pairingAutoCloseScheduler">Optional deterministic timing seam for focused pairing-window tests.</param>
+    /// <param name="startUpdateHandoff">Optional post-exit helper launcher seam for focused handoff tests.</param>
+    /// <param name="showError">Optional user-visible error sink for focused tests.</param>
+    public TrayContext(
+        Config? config = null,
+        UpdateService? updateService = null,
+        Action<Action, TimeSpan>? pairingAutoCloseScheduler = null,
+        Func<UpdateRelease, string, string, IUpdateInstallationProbe, CancellationToken, Task<bool>>? startUpdateHandoff = null,
+        Action<string, string>? showError = null)
     {
         Config = config ?? new Config();
+        _updateService = updateService ?? UpdateService.CreateDefault();
+        _pairingAutoCloseScheduler = pairingAutoCloseScheduler;
+        _startUpdateHandoff = startUpdateHandoff ?? UpdateHandoff.StartAsync;
+        _showError = showError ?? ((title, message) => MessageBox.Show(
+            message,
+            title,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error));
 
         // A plain, never-shown Control purely as an Invoke/InvokeRequired
         // anchor (same technique OverlayHud's HudWindow uses): forcing its
@@ -72,6 +107,7 @@ public sealed class TrayContext : ApplicationContext
         _ = _uiThreadMarshal.Handle;
 
         _stateIcons = Ui.TrayIcons.CreateStateIcons();
+        _stateIcons[BridgeState.AwaitingPairing] = CreateAwaitingPairingIcon();
 
         _enableBridgeItem = new ToolStripMenuItem("Enable bridge")
         {
@@ -117,6 +153,9 @@ public sealed class TrayContext : ApplicationContext
         var aboutItem = new ToolStripMenuItem("About");
         aboutItem.Click += OnAboutClicked;
 
+        _checkUpdatesItem = new ToolStripMenuItem("Check for updates…");
+        _checkUpdatesItem.Click += OnCheckUpdatesClicked;
+
         var exitItem = new ToolStripMenuItem("Exit");
         exitItem.Click += OnExitClicked;
 
@@ -130,6 +169,7 @@ public sealed class TrayContext : ApplicationContext
         _contextMenu.Items.Add(reloadConfigItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(setupGuideItem);
+        _contextMenu.Items.Add(_checkUpdatesItem);
         _contextMenu.Items.Add(aboutItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(exitItem);
@@ -142,8 +182,8 @@ public sealed class TrayContext : ApplicationContext
             Visible = true,
         };
 
-        // S10-7: after this settles with the link up and no pairing code, the
-        // node must already be commissioned - see CurrentPairingStage.
+        // Preserve S10-7's short visual settle before showing the commissioned
+        // stage; BridgeHost now supplies the actual lifecycle state.
         _pairingSettleTimer = new System.Windows.Forms.Timer { Interval = 4_000 };
         _pairingSettleTimer.Tick += (_, _) =>
         {
@@ -154,6 +194,14 @@ public sealed class TrayContext : ApplicationContext
 
         Config.Changed += OnConfigChanged;
         UpdateMenuForState();
+
+        // S10-11: never compete with startup/sidecar work. The callback also
+        // re-checks config each time, so Reload config applies the flag live.
+        _updateTimer = new System.Threading.Timer(
+            _ => StartTrackedUpdate(RunBackgroundUpdateCheckAsync),
+            state: null,
+            dueTime: TimeSpan.FromMinutes(1),
+            period: TimeSpan.FromHours(24));
 
         Log.Info("TrayContext started; icon visible.");
     }
@@ -197,7 +245,7 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_welcomeWindow is null || _welcomeWindow.IsDisposed)
         {
-            _welcomeWindow = new WelcomeWindow();
+            _welcomeWindow = new WelcomeWindow(Config.Current.VendorId, Config.Current.ProductId);
             _welcomeWindow.StartPairingRequested += (_, _) => StartGuidedPairing();
         }
 
@@ -210,6 +258,27 @@ public sealed class TrayContext : ApplicationContext
 
     /// <summary>Current tray state.</summary>
     public BridgeState State => _state;
+
+    /// <summary>Current tray tooltip text, exposed for focused state-selection tests.</summary>
+    public string ToolTipText => _notifyIcon.Text;
+
+    /// <summary>Whether a pairing window is currently open, exposed for focused lifecycle tests.</summary>
+    public bool PairingWindowOpen => _pairingWindow is { IsDisposed: false, Visible: true };
+
+    /// <summary>The open pairing window's current stage, or null when no window is open.</summary>
+    public PairingStage? PairingWindowStage => PairingWindowOpen ? _pairingWindow!.CurrentStage : null;
+
+    /// <summary>The open pairing window title, exposed for focused bridge-off rendering tests.</summary>
+    public string? PairingWindowTitle => PairingWindowOpen ? _pairingWindow!.Text : null;
+
+    /// <summary>Whether Pair with Google Home is currently actionable.</summary>
+    public bool PairMenuEnabled => _pairItem.Enabled;
+
+    /// <summary>Whether the tray currently renders the bridge as enabled.</summary>
+    public bool BridgeMenuChecked => _enableBridgeItem.Checked;
+
+    /// <summary>Whether the open pairing window is waiting to close after a live commissioning event.</summary>
+    public bool PairingWindowAutoCloseScheduled => PairingWindowOpen && _pairingWindow!.AutoCloseScheduled;
 
     /// <summary>
     /// Sets the tray icon/menu to reflect <paramref name="state"/>. Safe to
@@ -238,6 +307,12 @@ public sealed class TrayContext : ApplicationContext
     {
         void Apply()
         {
+            if (_state == BridgeState.Disabled)
+            {
+                Log.Warn("Tray: ignored a late pairing payload because the bridge is off.");
+                return;
+            }
+
             // Never log the code itself (it is a commissioning secret), but do
             // record that it CHANGED: a stale code on screen and a fresh one in
             // hand look identical in the log otherwise, and that is exactly the
@@ -270,8 +345,44 @@ public sealed class TrayContext : ApplicationContext
         }
     }
 
+    /// <summary>
+    /// Creates the blue awaiting-pairing variant from the existing runtime
+    /// HELM silhouette, preserving its antialiased alpha at the system tray
+    /// size without introducing a separate icon asset.
+    /// </summary>
+    private static Icon CreateAwaitingPairingIcon()
+    {
+        int size = Math.Max(16, SystemInformation.SmallIconSize.Width);
+        using Bitmap bitmap = Ui.TrayIcons.Render(BridgeState.Running, size, darkTaskbar: true);
+        Color blue = Color.FromArgb(0, 120, 212);
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                Color pixel = bitmap.GetPixel(x, y);
+                if (pixel.A > 0)
+                {
+                    bitmap.SetPixel(x, y, Color.FromArgb(pixel.A, blue));
+                }
+            }
+        }
+
+        IntPtr hIcon = bitmap.GetHicon();
+        try
+        {
+            using Icon borrowed = Icon.FromHandle(hIcon);
+            return (Icon)borrowed.Clone();
+        }
+        finally
+        {
+            _ = Ui.NativeMethods.DestroyIcon(hIcon);
+        }
+    }
+
     private void ApplyState(BridgeState state)
     {
+        bool commissionedNow = _state != BridgeState.Connected && state == BridgeState.Connected;
+        bool autoCloseOpenPairingWindow = commissionedNow && PairingWindowOpen;
         _state = state;
         _notifyIcon.Icon = _stateIcons[state];
 
@@ -280,7 +391,8 @@ public sealed class TrayContext : ApplicationContext
         // is capped at 63 chars by Windows - keep these short.
         _notifyIcon.Text = state switch
         {
-            BridgeState.Running => "MatterHelm - bridge running, not paired yet",
+            BridgeState.Running => "MatterHelm - bridge starting",
+            BridgeState.AwaitingPairing => "MatterHelm — running, not paired yet",
             BridgeState.Connected => "MatterHelm - bridge running",
             BridgeState.Faulted => "MatterHelm - bridge problem, see the log",
             _ => "MatterHelm - bridge off",
@@ -290,13 +402,41 @@ public sealed class TrayContext : ApplicationContext
         // STAYS up without a code means "already commissioned".
         _pairingSettled = false;
         _pairingSettleTimer.Stop();
-        if (state == BridgeState.Connected && _lastPairingInfo is null)
+        if (state == BridgeState.Disabled)
         {
-            _pairingSettleTimer.Start();
+            // Commissioning data is session-scoped. A disabled bridge is not
+            // advertising, so retaining its code would make Pair appear
+            // actionable and could present a stale code after the next start.
+            _lastPairingInfo = null;
+        }
+        else if (state == BridgeState.Connected)
+        {
+            // A commissioning code belongs only to an uncommissioned node.
+            // Clear it as soon as Matter reports success so it cannot outrank
+            // the Paired stage or be shown on a later open.
+            _lastPairingInfo = null;
+            if (autoCloseOpenPairingWindow)
+            {
+                _pairingSettled = true;
+            }
+            else
+            {
+                // Preserve the established already-paired opening behavior:
+                // a closed window stays closed, and the short settle covers
+                // startup ordering before a later manual open shows Paired.
+                _pairingSettleTimer.Start();
+            }
         }
 
         UpdateMenuForState();
-        RefreshPairingWindowStage();
+        if (autoCloseOpenPairingWindow)
+        {
+            _pairingWindow!.ShowPairedAndAutoClose();
+        }
+        else
+        {
+            RefreshPairingWindowStage();
+        }
     }
 
     /// <summary>Pushes the current stage into an open pairing window so it follows bridge state live (S10-7).</summary>
@@ -304,6 +444,9 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_pairingWindow is { IsDisposed: false })
         {
+            _pairingWindow.Text = _state == BridgeState.Disabled
+                ? "Pair with Google Home — bridge off"
+                : "Pair with Google Home";
             _pairingWindow.SetStage(CurrentPairingStage);
         }
     }
@@ -313,13 +456,12 @@ public sealed class TrayContext : ApplicationContext
         // "Enable bridge" is left purely user-driven here (not resynced from
         // SetState) so an external state update never fights an in-flight
         // user click; only the "actionable now" hint is state-derived.
-        // Pair… must stay enabled while Connected (green): green currently
-        // means "sidecar link up", NOT "commissioned" (BridgeHost.DeriveState)
-        // — the pairing code arrives over that link, so gating on Running
-        // alone would disable the item exactly when the code exists (S2-R
-        // finding 1). Enabled whenever the bridge runs or a code is cached.
+        // Pair… remains enabled while Connected so an already-commissioned
+        // user can inspect the paired state; it is also enabled whenever an
+        // uncommissioned bridge runs or a pairing code is cached.
         _pairItem.Enabled =
-            _lastPairingInfo is not null || _state is BridgeState.Running or BridgeState.Connected;
+            _lastPairingInfo is not null
+                || _state is BridgeState.Running or BridgeState.AwaitingPairing or BridgeState.Connected;
     }
 
     private void OnEnableBridgeCheckedChanged(object? sender, EventArgs e)
@@ -405,15 +547,10 @@ public sealed class TrayContext : ApplicationContext
     /// window, which shows "starting…" and then swaps itself to the fresh code
     /// the moment the sidecar reports it. Safe to call from any thread.
     /// </summary>
-    public void OnFactoryResetCompleted(bool ok)
+    public void OnFactoryResetCompleted(FactoryResetResult result)
     {
         void Apply()
         {
-            if (!ok)
-            {
-                return;
-            }
-
             _applyingConfigChange = true;
             try
             {
@@ -422,6 +559,16 @@ public sealed class TrayContext : ApplicationContext
             finally
             {
                 _applyingConfigChange = false;
+            }
+
+            if (!result.Ok)
+            {
+                string detail = result.Error ?? "The Matter storage directory could not be cleared.";
+                _showError(
+                    "Factory reset failed",
+                    "MatterHelm could not factory-reset the bridge. The previous enabled state was restored when possible."
+                        + Environment.NewLine + Environment.NewLine + detail);
+                return;
             }
 
             ShowOrFocusPairingWindow();
@@ -441,7 +588,10 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_pairingWindow is null || _pairingWindow.IsDisposed)
         {
-            _pairingWindow = new PairingWindow();
+            _pairingWindow = new PairingWindow(
+                Config.Current.VendorId,
+                Config.Current.ProductId,
+                _pairingAutoCloseScheduler);
         }
 
         // S10-7: only render a code when we actually have one - the old
@@ -453,6 +603,9 @@ public sealed class TrayContext : ApplicationContext
         }
 
         PairingStage stage = CurrentPairingStage;
+        _pairingWindow.Text = _state == BridgeState.Disabled
+            ? "Pair with Google Home — bridge off"
+            : "Pair with Google Home";
         _pairingWindow.SetStage(stage);
         _pairingWindow.Show();
         _pairingWindow.Activate();
@@ -460,16 +613,16 @@ public sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// What the pairing window should be showing (S10-7). Derived, because
-    /// the protocol carries no commissioned flag yet (backlog P-2): once the
-    /// sidecar has started, it withholds a pairing code ONLY when the node is
-    /// already commissioned (adapter.ts semantics), so "link up and no code"
-    /// means paired. <see cref="_pairingSettleTimer"/> covers the brief race
-    /// where the IPC link authenticates just before the code is emitted.
+    /// What the pairing window should be showing. A red bridge state takes
+    /// precedence over a cached code so an unobservable advertisement is
+    /// never presented as scannable. The settle fallback remains for older
+    /// timing paths where the IPC link authenticates just before status/code.
     /// </summary>
     private PairingStage CurrentPairingStage =>
-        _lastPairingInfo is not null ? PairingStage.ReadyToScan
+        _state == BridgeState.Disabled ? PairingStage.Starting
+        : _state == BridgeState.Faulted ? PairingStage.DiscoveryError
         : _pairingSettled && _state == BridgeState.Connected ? PairingStage.Paired
+        : _lastPairingInfo is not null ? PairingStage.ReadyToScan
         : PairingStage.Starting;
 
     /// <summary>Same single-instance pattern as the pairing window: recreate only when never opened or closed (disposed), else focus. A fresh window per open also means a fresh staged copy of the config.</summary>
@@ -510,6 +663,16 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnConfigChanged(object? sender, ConfigChangedEventArgs e)
     {
+        bool restartRequired = SettingsViewModel.RequiresBridgeRestart(e.OldConfig, e.NewConfig);
+        bool recreatePairingWindow = PairingWindowOpen && restartRequired;
+        if (restartRequired)
+        {
+            _lastPairingInfo = null;
+            _pairingSettled = false;
+            _pairingSettleTimer.Stop();
+            UpdateMenuForState();
+        }
+
         // Keep the checkboxes honest if the file was hand-edited before
         // Reload. An actual flip still raises the corresponding *Changed
         // event (CheckedChanged fires), so the live bridge/overlay follow the
@@ -524,6 +687,13 @@ public sealed class TrayContext : ApplicationContext
         {
             _applyingConfigChange = false;
         }
+
+        if (recreatePairingWindow)
+        {
+            _pairingWindow!.Dispose();
+            _pairingWindow = null;
+            ShowOrFocusPairingWindow();
+        }
     }
 
     private static void OnAboutClicked(object? sender, EventArgs e)
@@ -536,9 +706,308 @@ public sealed class TrayContext : ApplicationContext
             MessageBoxIcon.Information);
     }
 
+    private void OnCheckUpdatesClicked(object? sender, EventArgs e) =>
+        StartTrackedUpdate(RunManualUpdateCheckAsync);
+
+    private async Task RunManualUpdateCheckAsync()
+    {
+        _checkUpdatesItem.Enabled = false;
+        _checkUpdatesItem.Text = "Checking for updates…";
+        try
+        {
+            await _updateGate.WaitAsync(_updatesCts.Token);
+            try
+            {
+                UpdateCheckResult result = await _updateService.CheckForUpdatesAsync(_updatesCts.Token);
+                await ShowManualUpdateResultAsync(result);
+            }
+            finally
+            {
+                _updateGate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (_updatesCts.IsCancellationRequested)
+        {
+            // App teardown owns cancellation; no UI is useful while exiting.
+        }
+        finally
+        {
+            if (!_disposed)
+            {
+                _checkUpdatesItem.Text = "Check for updates…";
+                _checkUpdatesItem.Enabled = true;
+            }
+        }
+    }
+
+    private async Task ShowManualUpdateResultAsync(UpdateCheckResult result)
+    {
+        if (result.Status != UpdateCheckStatus.UpdateAvailable || result.Release is null)
+        {
+            MessageBox.Show(
+                result.Message,
+                "MatterHelm updates",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        UpdateRelease release = result.Release;
+        string mode = release.InstallMode == UpdateInstallMode.Installed ? "installer" : "portable zip";
+        DialogResult consent = MessageBox.Show(
+            $"MatterHelm {release.Version} is available ({mode})."
+                + Environment.NewLine + Environment.NewLine
+                + "Download, verify, and install it now? MatterHelm will close while the update is applied.",
+            "MatterHelm update available",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information,
+            MessageBoxDefaultButton.Button2);
+        if (consent != DialogResult.Yes)
+        {
+            Log.Info($"Update {release.Version}: user declined download.");
+            return;
+        }
+
+        _checkUpdatesItem.Text = "Downloading update…";
+        UpdateDownloadResult download = await _updateService.DownloadAndVerifyAsync(
+            release,
+            userConsented: true,
+            _updatesCts.Token);
+        if (download.Status != UpdateDownloadStatus.Ready
+            || download.PackagePath is null
+            || download.ExpectedSha256 is null)
+        {
+            MessageBox.Show(
+                download.Message,
+                "MatterHelm update",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+
+        bool handedOff = await StartUpdateHandoffAfterClosingWindowsAsync(
+            release,
+            download.PackagePath,
+            download.ExpectedSha256,
+            new WindowsUpdateInstallationProbe(),
+            _updatesCts.Token);
+        if (!handedOff)
+        {
+            if (_updateHandoffCanceledByWindow)
+            {
+                Log.Info("Update handoff canceled because an open window declined to close; no helper was started.");
+                return;
+            }
+
+            MessageBox.Show(
+                "The update was verified, but the post-exit update helper could not start. MatterHelm will keep running.",
+                "MatterHelm update",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+
+        BeginIrreversibleExit("Verified update handed off; shutting down for update.");
+    }
+
+    /// <summary>
+    /// Resolves every cancelable close before reserving and starting the one
+    /// post-exit helper. A failed helper start releases the reservation so a
+    /// later user-initiated retry remains possible.
+    /// </summary>
+    internal async Task<bool> StartUpdateHandoffAfterClosingWindowsAsync(
+        UpdateRelease release,
+        string packagePath,
+        string expectedSha256,
+        IUpdateInstallationProbe installationProbe,
+        CancellationToken cancellationToken = default)
+    {
+        _updateHandoffCanceledByWindow = false;
+        if (!TryCloseOpenWindows())
+        {
+            _updateHandoffCanceledByWindow = true;
+            return false;
+        }
+
+        lock (_updateTasksLock)
+        {
+            if (_updateHandoffStarted || _exiting || _disposed)
+            {
+                return false;
+            }
+
+            _updateHandoffStarted = true;
+        }
+
+        bool handedOff;
+        try
+        {
+            handedOff = await _startUpdateHandoff(
+                release,
+                packagePath,
+                expectedSha256,
+                installationProbe,
+                cancellationToken);
+        }
+        catch
+        {
+            lock (_updateTasksLock)
+            {
+                _updateHandoffStarted = false;
+            }
+
+            throw;
+        }
+
+        if (!handedOff)
+        {
+            lock (_updateTasksLock)
+            {
+                _updateHandoffStarted = false;
+            }
+        }
+
+        return handedOff;
+    }
+
+    private async Task RunBackgroundUpdateCheckAsync()
+    {
+        if (_disposed || !Config.Current.UpdateCheckEnabled || !_updateGate.Wait(0))
+        {
+            return;
+        }
+
+        try
+        {
+            UpdateCheckResult result = await _updateService.CheckForUpdatesAsync(_updatesCts.Token).ConfigureAwait(false);
+            if (result.Status == UpdateCheckStatus.UpdateAvailable
+                && result.Release is { } release
+                && _lastNotifiedUpdate != release.Version)
+            {
+                _lastNotifiedUpdate = release.Version;
+                ShowUpdateAvailableBalloon(release.Version);
+            }
+        }
+        catch (OperationCanceledException) when (_updatesCts.IsCancellationRequested)
+        {
+            // Normal app teardown.
+        }
+        finally
+        {
+            _updateGate.Release();
+        }
+    }
+
+    private void StartTrackedUpdate(Func<Task> operation)
+    {
+        Task task;
+        lock (_updateTasksLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            task = operation();
+            _updateTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completed =>
+            {
+                lock (_updateTasksLock)
+                {
+                    _updateTasks.Remove(completed);
+                }
+
+                if (completed.Exception is { } exception)
+                {
+                    Log.Error($"Update task failed unexpectedly: {exception.GetBaseException().Message}");
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void ShowUpdateAvailableBalloon(SemanticVersion version)
+    {
+        void Show()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _notifyIcon.BalloonTipTitle = "Update available";
+            _notifyIcon.BalloonTipText = $"MatterHelm {version} is available — open the tray menu to update.";
+            _notifyIcon.BalloonTipIcon = ToolTipIcon.Info;
+            _notifyIcon.ShowBalloonTip(5_000);
+        }
+
+        if (_uiThreadMarshal.InvokeRequired)
+        {
+            _uiThreadMarshal.BeginInvoke(new Action(Show));
+        }
+        else
+        {
+            Show();
+        }
+    }
+
     private void OnExitClicked(object? sender, EventArgs e)
     {
-        Log.Info("Exit requested from tray menu; shutting down.");
+        RequestExit("Exit requested from tray menu; shutting down.");
+    }
+
+    private void RequestExit(string logMessage)
+    {
+        lock (_updateTasksLock)
+        {
+            if (_exiting || _updateHandoffStarted || _disposed)
+            {
+                return;
+            }
+        }
+
+        if (!TryCloseOpenWindows())
+        {
+            Log.Info("Exit canceled by an open window.");
+            return;
+        }
+
+        BeginIrreversibleExit(logMessage);
+    }
+
+    private bool TryCloseOpenWindows()
+    {
+        if (_settingsWindow is { IsDisposed: false })
+        {
+            _settingsWindow.Close();
+            if (!_settingsWindow.IsDisposed)
+            {
+                return false;
+            }
+        }
+
+        _pairingWindow?.Close();
+        _welcomeWindow?.Close();
+        return true;
+    }
+
+    private void BeginIrreversibleExit(string logMessage)
+    {
+        lock (_updateTasksLock)
+        {
+            if (_exiting || _disposed)
+            {
+                return;
+            }
+
+            _exiting = true;
+        }
+
+        Log.Info(logMessage);
         ExitRequested?.Invoke(this, EventArgs.Empty);
 
         // Teardown itself now lives in Dispose(bool): Application.Run's
@@ -560,8 +1029,15 @@ public sealed class TrayContext : ApplicationContext
     {
         if (disposing && !_disposed)
         {
-            _disposed = true;
+            Task[] updateTasks;
+            lock (_updateTasksLock)
+            {
+                _disposed = true;
+                updateTasks = [.. _updateTasks];
+            }
 
+            _updateTimer.Dispose();
+            _updatesCts.Cancel();
             Config.Changed -= OnConfigChanged;
             _pairingWindow?.Dispose();
             _settingsWindow?.Dispose();
@@ -575,8 +1051,38 @@ public sealed class TrayContext : ApplicationContext
             {
                 icon.Dispose();
             }
+
+            Task allUpdates = Task.WhenAll(updateTasks);
+            try
+            {
+                _ = allUpdates.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (AggregateException)
+            {
+                // StartTrackedUpdate observes and logs task failures; teardown still owns cleanup.
+            }
+
+            if (allUpdates.IsCompleted)
+            {
+                DisposeUpdateResources();
+            }
+            else
+            {
+                Log.Warn("Update task did not stop within one second; deferring updater disposal until it completes.");
+                _ = allUpdates.ContinueWith(
+                    _ => DisposeUpdateResources(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
 
         base.Dispose(disposing);
+    }
+
+    private void DisposeUpdateResources()
+    {
+        _updateService.Dispose();
+        _updatesCts.Dispose();
     }
 }

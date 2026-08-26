@@ -7,3 +7,5 @@ coverage/
 # Matter fabric credentials / commissioning state — NEVER commit
 .matter-storage/
 dist-installer/
+.orchestrator/
+dist.pre-*/

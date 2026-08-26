@@ -4,7 +4,9 @@ namespace MatterHelm.Ui;
 /// Story S2-3 acceptance-evidence harness. Opens a plain focusable "focus
 /// sentinel" window, then drives <see cref="OverlayHud"/> through sequential
 /// success/error flashes and a rapid-fire burst, sampling after every flash.
-/// Asserts and records the four objective guarantees: (1) the HUD hwnd never
+/// Every flash renders the static "MatterHelm" top line while its command
+/// detail remains in the result row. Asserts and records the four objective
+/// guarantees: (1) the HUD hwnd never
 /// becomes the OS foreground window, (2) its ex-styles read back as exactly
 /// the non-activating/click-through combination, (3) a point at its own
 /// center resolves to a different window (click-through), and (4) the focus
@@ -46,6 +48,11 @@ internal static class OverlayHudDemo
         using var hud = new OverlayHud { Visible = true };
         Pump(100);
         log.Add($"(diag) active window right after `new OverlayHud()`: 0x{NativeMethods.GetActiveWindow():X} (hud=0x{hud.WindowHandle:X})");
+        Check("top line is the static product name MatterHelm", OverlayHud.TopLineText == "MatterHelm");
+        var customCommand = new OverlayContent("Google Home \u2192 Movie Mode", "Executed", IsError: false);
+        Check(
+            "custom command identity is rendered in the lower row without the redundant source prefix",
+            OverlayHud.LowerRowCommandText(customCommand) == "Movie Mode");
 
         // Baseline OS foreground window, captured once (see class doc for why
         // this — rather than "== sentinel" — is the portable gating check).
@@ -77,6 +84,31 @@ internal static class OverlayHudDemo
             SampleForegroundAndHud($"flash {i} (error)");
         }
 
+        hud.Show(customCommand);
+        Pump(120);
+        int shortIncomingWidth = hud.Bounds.Width;
+        using (Bitmap canvas = hud.CaptureCanvas())
+        {
+            string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-custom-command.png");
+            canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+            log.Add($"(evidence) lower-row custom command identity canvas: {pngPath}");
+        }
+
+        hud.Show(
+            "Google Home -> an intentionally very long custom command name that must ellipsize in the lower row",
+            "Executed",
+            isError: false);
+        Pump(120);
+        Check(
+            "long lower-row command names ellipsize without changing the measured overlay width",
+            hud.Bounds.Width == shortIncomingWidth);
+        using (Bitmap canvas = hud.CaptureCanvas())
+        {
+            string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-long-command.png");
+            canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+            log.Add($"(evidence) ellipsized lower-row command canvas: {pngPath}");
+        }
+
         for (int i = 0; i < 10; i++)
         {
             hud.Show($"Google Home -> rapid cmd {i}", i % 2 == 0 ? "OK" : "Retry", isError: i % 3 == 0);
@@ -87,8 +119,7 @@ internal static class OverlayHudDemo
         // S4-5 volume-bar pill: render at fixed percents, save each canvas
         // bitmap as visual evidence, and objectively assert the fill width
         // tracks the percent by sampling the track's center pixel row.
-        Rectangle track = hud.VolumeTrackBounds;
-        log.Add($"(diag) volume track bounds (canvas coords): {track}");
+        Rectangle track = Rectangle.Empty;
         foreach (int percent in (int[])[0, 37, 100])
         {
             hud.Show(new OverlayContent("Google Home -> Volume", $"volume set to {percent} %", IsError: false)
@@ -97,6 +128,8 @@ internal static class OverlayHudDemo
             });
             Pump(120);
             SampleForegroundAndHud($"volume bar {percent} %");
+            track = hud.VolumeTrackBounds;
+            log.Add($"(diag) volume track bounds at {percent} % (canvas coords): {track}");
 
             using Bitmap canvas = hud.CaptureCanvas();
             string pngPath = Path.Combine(AppContext.BaseDirectory, $"overlay-hud-volume-{percent}.png");

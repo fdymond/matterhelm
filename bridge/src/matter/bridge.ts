@@ -26,11 +26,12 @@
  * silently. Values are only enqueued when they differ from the current
  * attribute value (matter.js emits no event for a no-op write, so an
  * unconditional enqueue would leak stale expectations that could later
- * swallow a genuine remote write). Concurrency caveat: a remote write that
- * commits between our read and our write can pair with the wrong queue entry
- * when it carries the identical value — the suppressed event is then the
- * remote one, which is harmless (the state it reports is exactly what the
- * tray app already has). Momentary resets need no suppression at all: the
+ * swallow a genuine remote write). Local writes are serialized so each read
+ * observes the preceding write's committed state; racing same-value tray
+ * updates therefore enqueue only one expectation. A remote write that commits
+ * between our read and our write can still pair with the identical expectation,
+ * which is harmless because it reports exactly the state the tray already has.
+ * Momentary resets need no suppression at all: the
  * reset is a direct attribute write, invokes no command, and so never reaches
  * the command observer (ADR-008) — which is what makes it safe for
  * `mapping/actions.ts` to treat EVERY controller command on a momentary
@@ -226,6 +227,43 @@ export class EchoSuppressor {
       return true;
     }
     return false;
+  }
+}
+
+interface SpeakerStateTarget {
+  getLevel(): number | null;
+  getOnOff(): boolean;
+  setState(patch: { level?: number; onOff?: boolean }): Promise<void>;
+}
+
+/** Serializes local speaker writes so dedup reads always observe prior commits. */
+export class SerializedSpeakerStateWriter {
+  readonly #speaker: SpeakerStateTarget;
+  readonly #suppressor: EchoSuppressor;
+  #tail: Promise<void> = Promise.resolve();
+
+  constructor(speaker: SpeakerStateTarget, suppressor: EchoSuppressor) {
+    this.#speaker = speaker;
+    this.#suppressor = suppressor;
+  }
+
+  async setState(level0to254: number, onOff: boolean): Promise<void> {
+    const pending = this.#tail.then(async () => {
+      const patch: { level?: number; onOff?: boolean } = {};
+      if (this.#speaker.getLevel() !== level0to254) {
+        patch.level = level0to254;
+        this.#suppressor.expect(SPEAKER_LEVEL, level0to254);
+      }
+      if (this.#speaker.getOnOff() !== onOff) {
+        patch.onOff = onOff;
+        this.#suppressor.expect(SPEAKER_ONOFF, onOff);
+      }
+      if (patch.level !== undefined || patch.onOff !== undefined) {
+        await this.#speaker.setState(patch);
+      }
+    });
+    this.#tail = pending.catch(() => undefined);
+    await pending;
   }
 }
 
@@ -498,6 +536,8 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     constructed.push({ id: spec.info.id, name: spec.info.name, kind: spec.kind });
   }
 
+  const speakerStateWriter =
+    speaker === undefined ? undefined : new SerializedSpeakerStateWriter(speaker, suppressor);
   let closed = false;
 
   return {
@@ -527,22 +567,10 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
           `setSpeakerState: level must be an integer 0-254, got ${String(level0to254)}`,
         );
       }
-      if (speaker === undefined) {
+      if (speakerStateWriter === undefined) {
         return; // speaker disabled (ADR-004): tolerate state, apply nothing
       }
-      const patch: { level?: number; onOff?: boolean } = {};
-      if (speaker.getLevel() !== level0to254) {
-        patch.level = level0to254;
-        suppressor.expect(SPEAKER_LEVEL, level0to254);
-      }
-      if (speaker.getOnOff() !== onOff) {
-        patch.onOff = onOff;
-        suppressor.expect(SPEAKER_ONOFF, onOff);
-      }
-      if (patch.level === undefined && patch.onOff === undefined) {
-        return;
-      }
-      await speaker.setState(patch);
+      await speakerStateWriter.setState(level0to254, onOff);
     },
     resetMomentary,
     invokePlugOnOff: async (endpointId, on): Promise<void> => {

@@ -70,6 +70,22 @@ public sealed record SetMutedFrame(Guid Id, bool Value) : ActionFrame(Id);
 /// </summary>
 public sealed record PairingFrame(string QrPayload, string ManualCode) : SidecarFrame;
 
+/// <summary>Whether an uncommissioned bridge is actually discoverable over mDNS.</summary>
+public enum AdvertisementStatus
+{
+    /// <summary>The first active observation is still running.</summary>
+    Checking,
+    /// <summary>A commissionable Matter record was observed.</summary>
+    Visible,
+    /// <summary>No commissionable Matter record was observed before timeout.</summary>
+    Missing,
+    /// <summary>The node is commissioned, so commissionable advertising does not apply.</summary>
+    NotApplicable,
+}
+
+/// <summary>Matter lifecycle plus commissionable-advertisement health (protocol v3).</summary>
+public sealed record MatterStatusFrame(bool Commissioned, AdvertisementStatus Advertisement) : SidecarFrame;
+
 // ---------------------------------------------------------------------------
 // Typed frames — tray app -> sidecar
 // ---------------------------------------------------------------------------
@@ -157,9 +173,9 @@ public sealed class SidecarParseResult
 public static class Protocol
 {
     /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). 2 since the <c>custom</c> action variant landed (ADR-004 §3); only this exact value parses.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
-    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v2 — no breaking field changes.</summary>
+    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v3 — no breaking field changes.</summary>
     public const int HandshakeProtocol = 1;
 
     private static readonly string[] _helloKeys = ["v", "type", "token", "protocol"];
@@ -167,6 +183,7 @@ public static class Protocol
     private static readonly string[] _valueActionKeys = ["v", "type", "id", "name", "value"];
     private static readonly string[] _customActionKeys = ["v", "type", "id", "name", "key"];
     private static readonly string[] _pairingKeys = ["v", "type", "qrPayload", "manualCode"];
+    private static readonly string[] _matterStatusKeys = ["v", "type", "commissioned", "advertisement"];
 
     /// <summary>
     /// Parses one raw WebSocket text message as a sidecar-&gt;tray frame. The
@@ -205,6 +222,7 @@ public static class Protocol
                 "hello" => ParseHello(root),
                 "action" => ParseAction(root),
                 "pairing" => ParsePairing(root),
+                "matterStatus" => ParseMatterStatus(root),
                 "ack" or "state" => SidecarParseResult.Fail($"tray-only frame type \"{type}\""),
                 _ => SidecarParseResult.Fail($"unknown frame type \"{type}\""),
             };
@@ -391,6 +409,43 @@ public static class Protocol
         }
 
         return SidecarParseResult.Ok(new PairingFrame(qrPayload, manualCode));
+    }
+
+    private static SidecarParseResult ParseMatterStatus(JsonElement obj)
+    {
+        bool commissioned = false;
+        string advertisement = "";
+        string? err = CheckKeys(obj, _matterStatusKeys)
+            ?? CheckVersion(obj)
+            ?? RequireBool(obj, "commissioned", ref commissioned)
+            ?? RequireString(obj, "advertisement", ref advertisement);
+        if (err is not null)
+        {
+            return SidecarParseResult.Fail(err);
+        }
+
+        AdvertisementStatus status = advertisement switch
+        {
+            "checking" => AdvertisementStatus.Checking,
+            "visible" => AdvertisementStatus.Visible,
+            "missing" => AdvertisementStatus.Missing,
+            "notApplicable" => AdvertisementStatus.NotApplicable,
+            _ => (AdvertisementStatus)(-1),
+        };
+        if (!Enum.IsDefined(status))
+        {
+            return SidecarParseResult.Fail("\"advertisement\" has an unsupported value");
+        }
+
+        if (commissioned != (status == AdvertisementStatus.NotApplicable))
+        {
+            return SidecarParseResult.Fail(
+                commissioned
+                    ? "a commissioned node must use advertisement \"notApplicable\""
+                    : "an uncommissioned node cannot use advertisement \"notApplicable\"");
+        }
+
+        return SidecarParseResult.Ok(new MatterStatusFrame(commissioned, status));
     }
 
     // -- field helpers: each returns null on success or a rejection reason ---

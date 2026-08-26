@@ -61,6 +61,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal(0, config.Current.MomentaryResetMs); // immediate reset (S8-2)
         Assert.Equal(PowerOffAction.PauseAndDisplaysOff, config.Current.PowerOffAction);
         Assert.True(config.Current.OverlayEnabled);
+        Assert.True(config.Current.UpdateCheckEnabled);
         Assert.Null(config.Current.MdnsInterface);
         Assert.Equal("info", config.Current.LogLevel);
         Assert.Equal("info", config.Current.AppLogLevel);
@@ -110,6 +111,7 @@ public sealed class ConfigTests : IDisposable
         config.Current.MomentaryResetMs = 450;
         config.Current.PowerOffAction = PowerOffAction.Sleep;
         config.Current.OverlayEnabled = false;
+        config.Current.UpdateCheckEnabled = false;
         config.Current.MdnsInterface = "Ethernet";
         config.Current.LogLevel = "debug";
         config.Current.AppLogLevel = "warn";
@@ -144,6 +146,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal(450, reloaded.Current.MomentaryResetMs);
         Assert.Equal(PowerOffAction.Sleep, reloaded.Current.PowerOffAction);
         Assert.False(reloaded.Current.OverlayEnabled);
+        Assert.False(reloaded.Current.UpdateCheckEnabled);
         Assert.Equal("Ethernet", reloaded.Current.MdnsInterface);
         Assert.Equal("debug", reloaded.Current.LogLevel);
         Assert.Equal("warn", reloaded.Current.AppLogLevel);
@@ -1136,6 +1139,20 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void ScreensaverPowerOffActionParsesAndRoundTrips()
+    {
+        File.WriteAllText(_path, """{"powerOffAction": "screensaver"}""");
+
+        Config config = NewConfig();
+        Assert.Equal(PowerOffAction.Screensaver, config.Current.PowerOffAction);
+
+        config.Save();
+
+        Assert.Contains("\"powerOffAction\": \"screensaver\"", File.ReadAllText(_path));
+        Assert.Equal(PowerOffAction.Screensaver, NewConfig().Current.PowerOffAction);
+    }
+
+    [Fact]
     public void NullMdnsInterfaceIsAcceptedAsAutoDetect()
     {
         File.WriteAllText(_path, """{"mdnsInterface": null}""");
@@ -1230,6 +1247,32 @@ public sealed class ConfigTests : IDisposable
         config.Reload();
 
         Assert.Equal(39531, config.Current.IpcPort);
+    }
+
+    [Fact]
+    public void SaveFailureReturnsFalseAndRetainsTheErrorForTheUi()
+    {
+        var config = new Config(_dir, _log.Sink);
+
+        bool saved = config.Save();
+
+        Assert.False(saved);
+        Assert.False(string.IsNullOrWhiteSpace(config.LastSaveError));
+        Assert.True(_log.Contains("ERROR", "could not be written"));
+    }
+
+    [Fact]
+    public async Task ConcurrentSavesAreSerializedAndLeaveOneValidFileWithoutTempCollisions()
+    {
+        Config config = NewConfig();
+        config.Current.BridgeName = "Serialized saves";
+
+        bool[] results = await Task.WhenAll(Enumerable.Range(0, 64).Select(_ => Task.Run(config.Save)));
+
+        Assert.All(results, Assert.True);
+        Assert.Empty(Directory.EnumerateFiles(_dir, ".config.json.*.tmp"));
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_path));
+        Assert.Equal("Serialized saves", document.RootElement.GetProperty("bridgeName").GetString());
     }
 }
 
