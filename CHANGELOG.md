@@ -12,6 +12,63 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 Nothing yet.
 
+## [0.4.2] — 2026-08-26
+
+The release that makes pairing actually work. A field-debugging session on the
+owner's network uncovered that matter.js 0.17.7 on Windows never answers mDNS
+queries — devices were only ever discoverable by luck during the announcement
+burst after startup (S10-9, ADR-010). With that fixed, the whole re-pairing
+story got hardened end to end, an auto-updater arrived, and a five-dimension
+pre-release review swept 25 confirmed findings out of the tree.
+
+### Fixed
+- **Windows mDNS discovery (S10-9, ADR-010)**: matter.js labels inbound mDNS
+  packets with the numeric IPv6 scope-id while its record store uses friendly
+  interface names, so the bridge announced but never answered a single query.
+  A contained adapter-boundary workaround normalizes the identifiers; verified
+  empirically (query answers in ~15 ms sustained, end-to-end commissioning by
+  a local controller). Remove when fixed upstream.
+- Power command respects the configured action: "turn displays off" no longer
+  sleeps Modern-Standby machines — a keep-awake hold is held while displays
+  are commanded dark and released on power-on, config change, bridge disable,
+  client loss, crash-loop entry, and app exit (S10-13, S10-17A).
+- Factory-reset/disable/settings edge cases: stale pairing code on disable,
+  silent factory-reset failure, restart-marked settings not restarting the
+  sidecar, silent config-write loss, config write races, external-change
+  reconciliation (S10-17A).
+- Pairing codes re-emitted after un-pairing, so the pairing window recovers
+  without an app restart (S10-17C).
+
+### Added
+- **Tray auto-update (S10-11)**: check GitHub releases from the tray (plus a
+  daily background check), consent-gated download, SHA-256 verification
+  against the release manifest, silent Inno handoff or portable folder swap
+  with relaunch-on-failure. Hardened by an adversarial security review
+  (hash re-verified at execution time, redirect token-stripping pinned by
+  test, size caps, cancellation cleanup, install-mode detection matched to
+  the running executable) (S10-14, S10-17B).
+- **Advertisement health (S10-12)**: the bridge probes its own mDNS
+  advertisement (IPv4 + IPv6) and reports it over a new matterStatus frame
+  (protocol v3, additive); surfaced in the pairing window and tray states
+  (S10-15, S10-17C).
+- Pairing window: shows the active VID/PID (must match a Google Home
+  Developer Console integration) and the per-install identity-seed note;
+  recenters on stage changes; flips to Paired live and auto-closes (S10-10,
+  S10-10b, S10-10c).
+- Blue tray state "running, not paired yet" for an enabled, uncommissioned
+  bridge (ADR-011).
+- "screensaver" power action with symmetric on/off toggle semantics (S10-13).
+
+### Changed
+- Overlay header is the static product name; the command row carries the
+  command identity (incl. custom commands) with width-stable ellipsis
+  (S10-16, S10-17B).
+- Settings: identity seed value right-aligned with the other Advanced fields.
+- User guide: troubleshooting rewritten from tonight's real-world failure
+  modes — band isolation (phone on 2.4 GHz vs PC on 5 GHz), Console VID/PID
+  mismatch presenting as generic can't-connect, hub reboot after Console
+  changes, corrected red/gray icon states, updating section.
+
 ## [0.4.1] — 2026-08-25
 
 Getting started, and getting started again. A first-run guide walks a fresh
