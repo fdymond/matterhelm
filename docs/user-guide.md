@@ -214,15 +214,31 @@ The **Power off behavior** setting defines both halves of that toggle:
 
 | Configured action | Power Off | Power On |
 |---|---|---|
-| **Displays off** | Turns the displays off and holds Windows awake while they are dark | Wakes the displays with a net-zero mouse nudge and releases the keep-awake hold |
-| **Pause, then displays off** | Presses play/pause, then turns the displays off with the same keep-awake hold | Wakes the displays and releases the hold |
+| **Displays off** | Powers compatible displays off in hardware through DDC/CI, without telling Windows that the screens are off | Restores DDC/CI-managed displays, sends a harmless net-zero mouse nudge, and releases any fallback keep-awake hold |
+| **Pause, then displays off** | Presses play/pause, then uses the same DDC/CI-first display handling | Restores the displays and releases any fallback hold |
 | **Start screensaver** | Starts the screensaver configured in Windows | Stops the running screensaver |
 | **Sleep** | Suspends the PC | No action; a sleeping PC cannot receive the remote command |
 
-The display keep-awake hold specifically prevents an S0 Modern Standby PC
-from treating commanded display-off as an invitation to sleep. MatterHelm
-always releases it when Power is toggled On, when the bridge is disabled, or
-when the app exits; it does not otherwise change your normal sleep settings.
+For **Displays off**, MatterHelm first sends VESA DDC/CI power mode to every
+physical monitor that accepts it. This switches the display hardware off while
+Windows continues to see an active screen, so screen-off does not trigger S0
+Modern Standby and media players keep running normally. DDC/CI may need to be
+enabled in the monitor or TV's own settings.
+
+If no monitor accepts DDC/CI (common for laptop internal panels), MatterHelm
+falls back to Windows' global display-blanking command and acquires the legacy
+keep-awake hold. On Modern Standby hardware that hold cannot veto the
+screen-off transition, so the PC may still enter Modern Standby and suspend
+media apps. The log identifies this fallback on every transition.
+
+On a mixed setup, such as a DDC/CI television plus a non-DDC laptop panel,
+MatterHelm powers the compatible display off but deliberately leaves the
+unsupported panel on. Windows blanking affects every display and would undo
+the no-standby benefit for the whole PC. Power On restores only the displays
+that MatterHelm powered off, then sends the harmless mouse nudge for any
+Windows-blanked panel. Any fallback keep-awake hold is still released on Power
+On, bridge disable, client loss/restart, configuration changes away from a
+display mode, crash-loop handling, and app exit.
 
 **Shown as a plug/outlet instead of a switch?** On the Matter wire these
 devices are On/Off Plug-in Units (the only certified type Google both
@@ -331,10 +347,12 @@ click **Save** (closing the window with unsaved changes asks first).
   see-through), and use **Preview** to see a sample without waiting for a
   real command.
 - **Advanced**:
-  - **mDNS network interface** — leave blank unless your PC has more than
-    one active network adapter (e.g. Wi-Fi *and* Ethernet, or a VPN/virtual
-    adapter) and pairing can't find the device; pin it to your real LAN
-    adapter's name (from `ipconfig`) in that case.
+  - **mDNS network interface** — keep **Auto (recommended)** unless your PC
+    has more than one active adapter (e.g. Wi-Fi *and* Ethernet, or a
+    VPN/virtual adapter) and pairing can't find the device. The dropdown lists
+    each active adapter with its IPv4 address (or **no IPv4**) so you can pick
+    the real LAN connection. A saved adapter that was unplugged or renamed is
+    shown as **(not detected)**; choose Auto or a detected adapter to replace it.
   - **Matter storage** — read-only, shows where the pairing data lives (see
     [Factory reset](#factory-reset--re-pairing)).
   - **Config file** / **Config folder** — opens `config.json` or its folder
@@ -496,8 +514,11 @@ office PC"* vs *"…pause the HTPC"*.
   Properties → check "Internet Protocol Version 6 (TCP/IPv6)").
 - **Multiple network adapters** (Wi-Fi + Ethernet, a VPN, Hyper-V/VMware
   virtual adapters). The bridge may be advertising itself on the wrong one.
-  Set Settings → Advanced → **mDNS network interface** to your real LAN
-  adapter's name (from `ipconfig`) and re-enable the bridge.
+  In Settings → Advanced → **mDNS network interface**, choose the real LAN
+  adapter by its name and IPv4 address; saving restarts the bridge
+  automatically. Use **Auto (recommended)** to return to automatic selection.
+  If the current choice says **(not detected)**, the adapter was unplugged or
+  renamed — select Auto or another detected adapter.
 - **The tray icon is red.** Either the sidecar is crash-looping (two or more
   restarts without successfully reconnecting), or the bridge is unpaired but
   its Matter/mDNS advertisement cannot be seen. Check the app log (Settings →
