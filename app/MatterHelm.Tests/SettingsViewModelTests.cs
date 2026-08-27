@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.NetworkInformation;
 using MatterHelm.Ui;
 using Xunit;
 
@@ -39,8 +41,11 @@ public sealed class SettingsViewModelTests : IDisposable
 
     private Config NewConfig() => new(_path, _log.Sink);
 
-    private SettingsViewModel NewViewModel(Config? config = null, Func<string, bool>? pathExists = null) =>
-        new(config ?? NewConfig(), pathExists);
+    private SettingsViewModel NewViewModel(
+        Config? config = null,
+        Func<string, bool>? pathExists = null,
+        INetworkAdapterProvider? networkAdapters = null) =>
+        new(config ?? NewConfig(), pathExists, networkAdapters ?? new StubNetworkAdapterProvider([]));
 
     private static CustomCommandConfig MediaKeyCommand(string key, string? name = null) => new()
     {
@@ -612,7 +617,7 @@ public sealed class SettingsViewModelTests : IDisposable
     public void SaveFailureStaysDirtyLeavesLiveConfigUntouchedAndSurfacesAnError()
     {
         var config = new Config(_dir, _log.Sink);
-        var vm = new SettingsViewModel(config);
+        SettingsViewModel vm = NewViewModel(config);
         vm.Working.IpcPort = 40123;
         var errors = new List<(string Title, string Message)>();
         using var window = new SettingsWindow(
@@ -737,6 +742,91 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void MdnsInterfaceChoicesMapAdapterNamesToAnnotatedDisplayLabels()
+    {
+        var adapters = new StubNetworkAdapterProvider(
+        [
+            new NetworkAdapterInfo("Ethernet", "192.168.1.20"),
+            new NetworkAdapterInfo("Wi-Fi", null),
+        ]);
+        SettingsViewModel vm = NewViewModel(networkAdapters: adapters);
+
+        Assert.Equal(
+        [
+            ("", "Auto (recommended)"),
+            ("Ethernet", "Ethernet — 192.168.1.20"),
+            ("Wi-Fi", "Wi-Fi — no IPv4"),
+        ],
+            vm.GetMdnsInterfaceChoices());
+
+        SettingDescriptor mdns = SettingsViewModel.Describe("mdns-interface");
+        mdns.Set!(vm.Working, "Wi-Fi");
+        Assert.Equal("Wi-Fi", vm.Working.MdnsInterface);
+        Assert.Equal("Wi-Fi", mdns.Get!(vm.Working));
+    }
+
+    [Fact]
+    public void AutoMdnsChoicePersistsAsNullAndReadsBackAsEmpty()
+    {
+        Config config = NewConfig();
+        config.Current.MdnsInterface = "Ethernet";
+        SettingsViewModel vm = NewViewModel(
+            config,
+            networkAdapters: new StubNetworkAdapterProvider([new NetworkAdapterInfo("Ethernet", "10.0.0.5")]));
+        SettingDescriptor mdns = SettingsViewModel.Describe("mdns-interface");
+
+        mdns.Set!(vm.Working, "");
+
+        Assert.Null(vm.Working.MdnsInterface);
+        Assert.Equal("", mdns.Get!(vm.Working));
+        Assert.True(vm.Apply());
+        Assert.Null(NewConfig().Current.MdnsInterface);
+    }
+
+    [Fact]
+    public void SavedUndetectedMdnsInterfaceRemainsASelectableStaleChoice()
+    {
+        Config config = NewConfig();
+        config.Current.MdnsInterface = "USB Ethernet";
+        SettingsViewModel vm = NewViewModel(
+            config,
+            networkAdapters: new StubNetworkAdapterProvider([new NetworkAdapterInfo("Ethernet", "192.168.1.20")]));
+
+        IReadOnlyList<(string Value, string Label)> choices = vm.GetMdnsInterfaceChoices();
+        Assert.Equal(
+            ("USB Ethernet", "USB Ethernet (not detected)"),
+            choices[choices.Count - 1]);
+        Assert.Equal("USB Ethernet", vm.Working.MdnsInterface);
+
+        SettingsViewModel.Describe("mdns-interface").Set!(vm.Working, choices[0].Value);
+        Assert.Null(vm.Working.MdnsInterface);
+    }
+
+    [Fact]
+    public void AdapterListIsEnumeratedOnceForEachSettingsViewModel()
+    {
+        var adapters = new StubNetworkAdapterProvider([new NetworkAdapterInfo("Ethernet", "192.168.1.20")]);
+
+        _ = NewViewModel(networkAdapters: adapters);
+        _ = NewViewModel(networkAdapters: adapters);
+
+        Assert.Equal(2, adapters.CallCount);
+    }
+
+    [Fact]
+    public void ChangingMdnsChoiceRemainsRestartMarked()
+    {
+        SettingsViewModel vm = NewViewModel(
+            networkAdapters: new StubNetworkAdapterProvider([new NetworkAdapterInfo("Wi-Fi", "192.168.1.21")]));
+        SettingDescriptor mdns = SettingsViewModel.Describe("mdns-interface");
+
+        Assert.Equal(SettingKind.NetworkAdapterChoice, mdns.Kind);
+        Assert.True(mdns.NeedsBridgeRestart);
+        mdns.Set!(vm.Working, "Wi-Fi");
+        Assert.True(vm.NeedsBridgeRestart);
+    }
+
+    [Fact]
     public void PowerOffActionChoiceExposesTheWireNames()
     {
         SettingsViewModel vm = NewViewModel();
@@ -792,5 +882,44 @@ public sealed class SettingsViewModelTests : IDisposable
                 "matter"),
             SettingsViewModel.StorageDirDisplay);
         Assert.Equal(SettingsViewModel.StorageDirDisplay, SettingsViewModel.Describe("storage-dir").Get!(new BridgeConfig()));
+    }
+
+    private sealed class StubNetworkAdapterProvider(IReadOnlyList<NetworkAdapterInfo> adapters) : INetworkAdapterProvider
+    {
+        internal int CallCount { get; private set; }
+
+        public IReadOnlyList<NetworkAdapterInfo> GetAdapters()
+        {
+            CallCount++;
+            return adapters;
+        }
+    }
+}
+
+public sealed class NetworkAdapterEnumerationTests
+{
+    [Theory]
+    [InlineData(OperationalStatus.Up, NetworkInterfaceType.Ethernet, true)]
+    [InlineData(OperationalStatus.Up, NetworkInterfaceType.Loopback, false)]
+    [InlineData(OperationalStatus.Down, NetworkInterfaceType.Ethernet, false)]
+    public void OnlyUpNonLoopbackAdaptersAreEligible(
+        OperationalStatus status,
+        NetworkInterfaceType type,
+        bool expected)
+    {
+        Assert.Equal(expected, SystemNetworkAdapterProvider.IsEligible(status, type));
+    }
+
+    [Fact]
+    public void FirstIpv4AddressSkipsIpv6AndReturnsNullWhenNoneExists()
+    {
+        Assert.Equal(
+            "192.168.50.12",
+            SystemNetworkAdapterProvider.FirstIpv4Address(
+            [
+                IPAddress.Parse("fe80::1"),
+                IPAddress.Parse("192.168.50.12"),
+            ]));
+        Assert.Null(SystemNetworkAdapterProvider.FirstIpv4Address([IPAddress.Parse("fe80::1")]));
     }
 }

@@ -27,6 +27,9 @@ public enum SettingKind
     /// <summary>One value from <see cref="SettingDescriptor.Choices"/>.</summary>
     Choice,
 
+    /// <summary>An active Windows network adapter, plus Auto and any saved adapter that is no longer detected.</summary>
+    NetworkAdapterChoice,
+
     /// <summary>The custom-command list editor (ListView + add/edit/remove).</summary>
     CustomCommands,
 
@@ -146,6 +149,7 @@ public sealed class SettingsViewModel
 
     private readonly Config _config;
     private readonly Func<string, bool> _pathExists;
+    private readonly IReadOnlyList<NetworkAdapterInfo> _networkAdapters;
     private string _baseline;
     private BridgeConfig _baselineConfig;
 
@@ -153,9 +157,18 @@ public sealed class SettingsViewModel
     /// <param name="config">The live config to stage edits against.</param>
     /// <param name="pathExists">Launch-path existence probe; defaults to <see cref="File.Exists(string?)"/>. Injectable for tests.</param>
     public SettingsViewModel(Config config, Func<string, bool>? pathExists = null)
+        : this(config, pathExists, SystemNetworkAdapterProvider.Instance)
+    {
+    }
+
+    internal SettingsViewModel(
+        Config config,
+        Func<string, bool>? pathExists,
+        INetworkAdapterProvider networkAdapterProvider)
     {
         _config = config;
         _pathExists = pathExists ?? File.Exists;
+        _networkAdapters = networkAdapterProvider.GetAdapters();
         Working = Clone(config.Current);
         _baselineConfig = Clone(config.Current);
         _baseline = Snapshot(Working);
@@ -211,6 +224,25 @@ public sealed class SettingsViewModel
     /// <summary>Finds the descriptor with the given id across all categories (throws for an unknown id — ids are compile-time constants).</summary>
     public static SettingDescriptor Describe(string settingId) =>
         Categories.SelectMany(c => c.Settings).First(s => s.Id == settingId);
+
+    internal IReadOnlyList<(string Value, string Label)> GetMdnsInterfaceChoices()
+    {
+        var choices = new List<(string Value, string Label)>
+        {
+            ("", "Auto (recommended)"),
+        };
+        choices.AddRange(_networkAdapters.Select(adapter =>
+            (adapter.Name, $"{adapter.Name} — {adapter.Ipv4Address ?? "no IPv4"}")));
+
+        string? saved = Working.MdnsInterface;
+        if (!string.IsNullOrWhiteSpace(saved)
+            && !_networkAdapters.Any(adapter => adapter.Name == saved))
+        {
+            choices.Add((saved, $"{saved} (not detected)"));
+        }
+
+        return choices;
+    }
 
     /// <summary>Validates the working copy; empty = saveable.</summary>
     public IReadOnlyList<SettingsValidationError> Validate()
@@ -768,8 +800,8 @@ public sealed class SettingsViewModel
                 {
                     Id = "mdns-interface",
                     Label = "mDNS network interface",
-                    Description = "Pin Matter announcements to one network interface on multi-NIC machines. Empty = auto-detect.",
-                    Kind = SettingKind.OptionalText,
+                    Description = "Choose where Matter announces this bridge. Auto is recommended unless this PC has multiple adapters.",
+                    Kind = SettingKind.NetworkAdapterChoice,
                     NeedsBridgeRestart = true,
                     Get = c => c.MdnsInterface ?? "",
                     Set = (c, v) => c.MdnsInterface = string.IsNullOrWhiteSpace((string?)v) ? null : (string)v!,
