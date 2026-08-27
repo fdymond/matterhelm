@@ -12,6 +12,25 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 Nothing yet.
 
+## [0.4.3] — 2026-08-27
+
+### Fixed
+- **"Turn displays off" no longer sleeps Modern Standby PCs (S10-18)**:
+  0.4.2's keep-awake hold cannot veto S0ix standby (screen-off IS the
+  trigger — confirmed via kernel power events). Compatible monitors are now
+  powered off at the hardware level via DDC/CI, so the OS never sees a
+  screen-off and playback continues; non-DDC panels fall back to the legacy
+  blanking + hold, and mixed setups leave non-DDC panels on. The path taken
+  is logged per monitor.
+
+### Changed
+- Overlay simplified to a single identity pill: command name, or volume
+  percentage / mute state for the speaker; static MatterHelm header (S10-19).
+- mDNS network interface is now an adapter dropdown with
+  "Auto (recommended)", per-adapter IPv4 annotations, and a visible
+  "(not detected)" state for stale saved adapters — a mistyped or outdated
+  pin can no longer silently break advertising (S10-21).
+
 ## [0.4.2] — 2026-08-26
 
 The release that makes pairing actually work. A field-debugging session on the
