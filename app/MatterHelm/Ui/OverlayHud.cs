@@ -7,10 +7,10 @@ namespace MatterHelm.Ui;
 
 /// <summary>
 /// One overlay flash's content. <see cref="VolumePercent"/> non-null (and not
-/// an error) switches the result pill to a horizontal volume bar showing the
-/// resulting level (S4-5); <see cref="Muted"/> dims that bar and replaces the
-/// percent label with "muted". The lower row also renders <see cref="Primary"/>
-/// as the command identity; everything else renders the classic text pill.
+/// an error) switches the command pill to a horizontal volume bar showing the
+/// resulting level (S4-5); mute actions label that bar with their resulting
+/// state. Successful command pills use <see cref="Primary"/> as their identity;
+/// errors retain the supplied result text and existing red treatment.
 /// </summary>
 public sealed record OverlayContent(string Primary, string Pill, bool IsError)
 {
@@ -27,8 +27,8 @@ public sealed record OverlayPreviewRequest(OverlayPosition Position, OverlayThem
 /// <summary>
 /// Persistent, click-through, non-activating flash overlay (BLUEPRINT §2.4,
 /// ADR-003 item 5). <see cref="Show(OverlayContent)"/> updates the same window
-/// in place: top line = the static product name "MatterHelm"; lower row = command plus
-/// executed action/failure — or, for volume actions, a percentage fill bar.
+/// in place: top line = the static product name "MatterHelm"; lower row = one
+/// command pill/failure treatment — or, for speaker actions, a volume fill bar.
 /// Content snaps to full alpha, holds ~2.5 s, then fades ~300 ms. All
 /// geometry and fonts scale with the window's startup DPI (S4-5) — the HUD is
 /// re-created only with the app, so a mid-session DPI change is deliberately
@@ -129,10 +129,36 @@ public sealed class OverlayHud : IDisposable
     /// <summary>Copies the HUD's current canvas bitmap, exposed only for demo/E2E objective verification. Call on the HUD's UI thread after a <see cref="Show(OverlayContent)"/>.</summary>
     public Bitmap CaptureCanvas() => _window.CaptureCanvas();
 
-    /// <summary>Command-name text rendered in the lower row, without the redundant Google Home source prefix.</summary>
-    internal static string LowerRowCommandText(OverlayContent content)
+    /// <summary>Text rendered inside the lower-row pill or beside its volume bar.</summary>
+    internal static string DisplayedPillText(OverlayContent content)
     {
         ArgumentNullException.ThrowIfNull(content);
+        if (content.IsError)
+        {
+            return content.Pill;
+        }
+
+        string command = CommandIdentity(content);
+        if (content.VolumePercent is int volumePercent)
+        {
+            if (command.Equals("mute", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Muted";
+            }
+
+            if (command.Equals("unmute", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Unmuted";
+            }
+
+            return $"{Math.Clamp(volumePercent, 0, 100)} %";
+        }
+
+        return IsGoogleHomeCommand(content) ? CommandPillIdentity(command) : content.Pill;
+    }
+
+    private static string CommandIdentity(OverlayContent content)
+    {
         string primary = content.Primary?.Trim() ?? string.Empty;
         const string Source = "Google Home";
         if (!primary.StartsWith(Source, StringComparison.OrdinalIgnoreCase))
@@ -151,6 +177,26 @@ public sealed class OverlayHud : IDisposable
             : primary;
     }
 
+    private static bool IsGoogleHomeCommand(OverlayContent content) =>
+        !CommandIdentity(content).Equals(content.Primary?.Trim() ?? string.Empty, StringComparison.Ordinal);
+
+    private static string CommandPillIdentity(string command)
+    {
+        if (command.StartsWith("power off", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Power Off";
+        }
+
+        return command.ToUpperInvariant() switch
+        {
+            "PLAY/PAUSE" => "Play/Pause",
+            "NEXT TRACK" => "Next",
+            "PREVIOUS TRACK" => "Previous",
+            "POWER ON" => "Power On",
+            _ => command,
+        };
+    }
+
     /// <summary>Exact production width calculation exposed to unit tests.</summary>
     internal static int MeasureDesiredCanvasWidthForTest(OverlayContent content) =>
         HudWindow.MeasureDesiredCanvasWidth(content, scale: 1f);
@@ -160,7 +206,7 @@ public sealed class OverlayHud : IDisposable
 
     /// <summary>
     /// Displays (or updates in place) the static product-name top line and the
-    /// lower-row command plus result pill/volume bar. Resets the hold timer and
+    /// lower-row command pill/failure treatment or speaker volume bar. Resets the hold timer and
     /// snaps to full alpha even if a fade was already in progress, so rapid-fire
     /// calls never flicker.
     /// </summary>
@@ -209,7 +255,7 @@ public sealed class OverlayHud : IDisposable
         private const float ContentInsetLogical = 18f;
         private const float VolumeTrackWidthLogical = 150f;
         private const float VolumeTrackHeightLogical = 10f;
-        private const float VolumeLabelWidthLogical = 52f;
+        private const float VolumeLabelWidthLogical = 72f;
         private const float CommandResultGapLogical = 12f;
         private const float CommandMinimumWidthLogical = 120f;
         private const float PrimaryFontPxLogical = 15.33f; // 11.5 pt at 96 dpi
@@ -494,7 +540,7 @@ public sealed class OverlayHud : IDisposable
             _canvasWidth - (SF(ShadowMarginLogical) * 2),
             _canvasHeight - (SF(ShadowMarginLogical) * 2));
 
-        /// <summary>The lower row where command identity and its result render.</summary>
+        /// <summary>The lower row where the command pill or speaker state renders.</summary>
         private RectangleF PillRowRect()
         {
             RectangleF panel = PanelRect();
@@ -561,8 +607,13 @@ public sealed class OverlayHud : IDisposable
             using var pillFont = new Font("Segoe UI", SF(PillFontPxLogical), FontStyle.Bold, GraphicsUnit.Pixel);
             if (content is { VolumePercent: int volumePercent, IsError: false })
             {
-                RenderCommandName(g, primaryFont, content, VolumeTrackRect().X - SF(CommandResultGapLogical), palette);
-                RenderVolumeBar(g, pillFont, Math.Clamp(volumePercent, 0, 100), content.Muted, palette);
+                RenderVolumeBar(
+                    g,
+                    pillFont,
+                    Math.Clamp(volumePercent, 0, 100),
+                    DisplayedPillText(content),
+                    content.Muted,
+                    palette);
             }
             else
             {
@@ -573,6 +624,7 @@ public sealed class OverlayHud : IDisposable
         private void RenderTextPill(Graphics g, Font commandFont, Font pillFont, OverlayContent content, Palette palette)
         {
             RectangleF row = PillRowRect();
+            string pillText = DisplayedPillText(content);
             Color pillColor = content.IsError ? Color.FromArgb(230, 196, 60, 58) : Color.FromArgb(230, 55, 158, 96);
             using var pillFormat = new StringFormat
             {
@@ -585,9 +637,12 @@ public sealed class OverlayHud : IDisposable
             // The chip hugs its measured text (owner request): comfortable
             // side padding, and the height grows with the font rather than
             // assuming the row constant stays larger than the line height.
-            SizeF pillTextSize = g.MeasureString(content.Pill, pillFont, int.MaxValue, pillFormat);
+            SizeF pillTextSize = g.MeasureString(pillText, pillFont, int.MaxValue, pillFormat);
             float pillHeight = Math.Max(row.Height, pillTextSize.Height + SF(6f));
-            float maximumPillWidth = Math.Max(1f, row.Width - SF(CommandMinimumWidthLogical + CommandResultGapLogical));
+            bool showCommandBesideError = content.IsError;
+            float maximumPillWidth = showCommandBesideError
+                ? Math.Max(1f, row.Width - SF(CommandMinimumWidthLogical + CommandResultGapLogical))
+                : row.Width;
             float pillWidth = Math.Min(maximumPillWidth, pillTextSize.Width + SF(32f));
             var pillRect = new RectangleF(
                 row.Right - pillWidth, row.Y + ((row.Height - pillHeight) / 2f), pillWidth, pillHeight);
@@ -596,8 +651,11 @@ public sealed class OverlayHud : IDisposable
             g.FillPath(pillBrush, pillPath);
 
             using var pillTextBrush = new SolidBrush(Color.White);
-            g.DrawString(content.Pill, pillFont, pillTextBrush, pillRect, pillFormat);
-            RenderCommandName(g, commandFont, content, pillRect.X - SF(CommandResultGapLogical), palette);
+            g.DrawString(pillText, pillFont, pillTextBrush, pillRect, pillFormat);
+            if (showCommandBesideError)
+            {
+                RenderCommandName(g, commandFont, content, pillRect.X - SF(CommandResultGapLogical), palette);
+            }
         }
 
         private void RenderCommandName(
@@ -617,7 +675,7 @@ public sealed class OverlayHud : IDisposable
                 FormatFlags = StringFormatFlags.NoWrap,
             };
             var commandRect = new RectangleF(row.X, row.Y, Math.Max(1f, right - row.X), row.Height);
-            g.DrawString(LowerRowCommandText(content), commandFont, commandBrush, commandRect, commandFormat);
+            g.DrawString(CommandIdentity(content), commandFont, commandBrush, commandRect, commandFormat);
         }
 
         /// <summary>
@@ -628,7 +686,7 @@ public sealed class OverlayHud : IDisposable
         /// with a "muted" label (the level stays visible so unmute expectations
         /// are clear).
         /// </summary>
-        private void RenderVolumeBar(Graphics g, Font labelFont, int percent, bool muted, Palette palette)
+        private void RenderVolumeBar(Graphics g, Font labelFont, int percent, string label, bool muted, Palette palette)
         {
             RectangleF row = PillRowRect();
             RectangleF track = VolumeTrackRect();
@@ -649,7 +707,6 @@ public sealed class OverlayHud : IDisposable
                 g.FillPath(fillBrush, fillPath);
             }
 
-            string label = muted ? "muted" : $"{percent} %";
             using var labelBrush = new SolidBrush(muted ? palette.MutedLabel : palette.PrimaryText);
             using var labelFormat = new StringFormat
             {
@@ -686,7 +743,7 @@ public sealed class OverlayHud : IDisposable
 
         /// <summary>
         /// The canvas width (device px) whose panel hugs <paramref name="content"/>:
-        /// max of the static product-name line and the reserved command/result row, plus
+        /// max of the static product-name line and the width-stable lower row, plus
         /// insets and shadow, quantized to <see cref="CanvasWidthStepLogical"/>
         /// and clamped.
         /// </summary>
@@ -701,17 +758,24 @@ public sealed class OverlayHud : IDisposable
             using var pillFont = new Font("Segoe UI", Scale(PillFontPxLogical), FontStyle.Bold, GraphicsUnit.Pixel);
 
             float primaryWidth = g.MeasureString(TopLineText, primaryFont).Width;
-            float resultWidth;
+            float rowWidth;
             if (content is { VolumePercent: not null, IsError: false })
             {
-                resultWidth = Scale(VolumeTrackWidthLogical + 10f + VolumeLabelWidthLogical);
+                rowWidth = Scale(CommandMinimumWidthLogical + CommandResultGapLogical
+                    + VolumeTrackWidthLogical + 10f + VolumeLabelWidthLogical);
+            }
+            else if (!content.IsError && IsGoogleHomeCommand(content))
+            {
+                // Successful command names use a stable row width and ellipsize
+                // inside it; the producer's now-hidden result must not resize the HUD.
+                rowWidth = Scale(CommandMinimumWidthLogical);
             }
             else
             {
-                resultWidth = g.MeasureString(content.Pill, pillFont).Width + Scale(32f);
+                float resultWidth = g.MeasureString(content.Pill, pillFont).Width + Scale(32f);
+                rowWidth = Scale(CommandMinimumWidthLogical + CommandResultGapLogical) + resultWidth;
             }
 
-            float rowWidth = Scale(CommandMinimumWidthLogical + CommandResultGapLogical) + resultWidth;
             float total = Math.Max(primaryWidth, rowWidth)
                 + (Scale(ContentInsetLogical) * 2) + (Scale(ShadowMarginLogical) * 2);
             int step = Math.Max(1, ScaleInt(CanvasWidthStepLogical));
