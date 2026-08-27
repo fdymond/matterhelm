@@ -787,6 +787,7 @@ public sealed partial class SettingsWindow : Form
         SettingKind.Slider => BuildSlider(setting),
         SettingKind.Text or SettingKind.OptionalText => BuildTextBox(setting),
         SettingKind.Choice => BuildChoice(setting),
+        SettingKind.NetworkAdapterChoice => BuildNetworkAdapterChoice(setting),
         SettingKind.ReadOnlyText => BuildReadOnly(setting),
         SettingKind.Command => BuildCommandButton(setting),
         _ => throw new ArgumentOutOfRangeException(nameof(setting), setting.Kind, "no editor for kind"),
@@ -893,6 +894,39 @@ public sealed partial class SettingsWindow : Form
             // shown as no selection; picking an item overwrites it.
             string value = (string)setting.Get!(_vm.Working)!;
             combo.SelectedIndex = setting.Choices.ToList().IndexOf(value);
+        });
+        return combo;
+    }
+
+    private ComboBox BuildNetworkAdapterChoice(SettingDescriptor setting)
+    {
+        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(300) };
+        IReadOnlyList<(string Value, string Label)> choices = [];
+        combo.SelectedIndexChanged += (_, _) =>
+        {
+            if (combo.SelectedIndex >= 0)
+            {
+                OnEdited(setting, choices[combo.SelectedIndex].Value);
+            }
+        };
+        _editorRefreshers.Add(() =>
+        {
+            choices = _vm.GetMdnsInterfaceChoices();
+            combo.BeginUpdate();
+            combo.Items.Clear();
+            foreach ((string _, string label) in choices)
+            {
+                combo.Items.Add(label);
+            }
+
+            string value = (string)setting.Get!(_vm.Working)!;
+            combo.SelectedIndex = choices
+                .Select((choice, index) => (choice, index))
+                .Where(pair => pair.choice.Value == value)
+                .Select(pair => pair.index)
+                .DefaultIfEmpty(-1)
+                .First();
+            combo.EndUpdate();
         });
         return combo;
     }
