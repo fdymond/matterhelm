@@ -4,8 +4,9 @@ namespace MatterHelm.Ui;
 /// Story S2-3 acceptance-evidence harness. Opens a plain focusable "focus
 /// sentinel" window, then drives <see cref="OverlayHud"/> through sequential
 /// success/error flashes and a rapid-fire burst, sampling after every flash.
-/// Every flash renders the static "MatterHelm" top line while its command
-/// detail remains in the result row. Asserts and records the four objective
+/// Every flash renders the static "MatterHelm" top line while successful
+/// command identity or speaker state occupies the single lower pill. Asserts
+/// the pill content per action type and records the four objective
 /// guarantees: (1) the HUD hwnd never
 /// becomes the OS foreground window, (2) its ex-styles read back as exactly
 /// the non-activating/click-through combination, (3) a point at its own
@@ -49,10 +50,19 @@ internal static class OverlayHudDemo
         Pump(100);
         log.Add($"(diag) active window right after `new OverlayHud()`: 0x{NativeMethods.GetActiveWindow():X} (hud=0x{hud.WindowHandle:X})");
         Check("top line is the static product name MatterHelm", OverlayHud.TopLineText == "MatterHelm");
-        var customCommand = new OverlayContent("Google Home \u2192 Movie Mode", "Executed", IsError: false);
+        var customCommand = new OverlayContent("Google Home \u2192 Movie Mode", "launched kodi.exe", IsError: false);
         Check(
-            "custom command identity is rendered in the lower row without the redundant source prefix",
-            OverlayHud.LowerRowCommandText(customCommand) == "Movie Mode");
+            "custom command pill carries identity instead of execution result",
+            OverlayHud.DisplayedPillText(customCommand) == "Movie Mode");
+        Check(
+            "transport command pill carries its command identity",
+            OverlayHud.DisplayedPillText(new OverlayContent("Google Home \u2192 play/pause", "media key sent", false)) == "Play/Pause");
+        Check(
+            "power command pill carries its command identity",
+            OverlayHud.DisplayedPillText(new OverlayContent("Google Home \u2192 power off (\u2192 displays off)", "displays off", false)) == "Power Off");
+        Check(
+            "error pill retains the existing result treatment",
+            OverlayHud.DisplayedPillText(new OverlayContent("Google Home \u2192 Power off", "failed", true)) == "failed");
 
         // Baseline OS foreground window, captured once (see class doc for why
         // this — rather than "== sentinel" — is the portable gating check).
@@ -91,22 +101,22 @@ internal static class OverlayHudDemo
         {
             string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-custom-command.png");
             canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
-            log.Add($"(evidence) lower-row custom command identity canvas: {pngPath}");
+            log.Add($"(evidence) custom command identity pill canvas: {pngPath}");
         }
 
         hud.Show(
-            "Google Home -> an intentionally very long custom command name that must ellipsize in the lower row",
+            "Google Home -> an intentionally very long custom command name that must ellipsize in the pill",
             "Executed",
             isError: false);
         Pump(120);
         Check(
-            "long lower-row command names ellipsize without changing the measured overlay width",
+            "long command pills ellipsize without changing the measured overlay width",
             hud.Bounds.Width == shortIncomingWidth);
         using (Bitmap canvas = hud.CaptureCanvas())
         {
             string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-long-command.png");
             canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
-            log.Add($"(evidence) ellipsized lower-row command canvas: {pngPath}");
+            log.Add($"(evidence) ellipsized command pill canvas: {pngPath}");
         }
 
         for (int i = 0; i < 10; i++)
@@ -126,6 +136,12 @@ internal static class OverlayHudDemo
             {
                 VolumePercent = percent,
             });
+            Check(
+                $"volume action pill carries {percent} %",
+                OverlayHud.DisplayedPillText(new OverlayContent("Google Home -> Volume", "ignored result", false)
+                {
+                    VolumePercent = percent,
+                }) == $"{percent} %");
             Pump(120);
             SampleForegroundAndHud($"volume bar {percent} %");
             track = hud.VolumeTrackBounds;
@@ -151,6 +167,13 @@ internal static class OverlayHudDemo
             VolumePercent = 40,
             Muted = true,
         });
+        Check(
+            "mute action pill carries the mute state",
+            OverlayHud.DisplayedPillText(new OverlayContent("Google Home -> mute", "ignored result", false)
+            {
+                VolumePercent = 40,
+                Muted = true,
+            }) == "Muted");
         Pump(120);
         using (Bitmap canvas = hud.CaptureCanvas())
         {
@@ -159,6 +182,13 @@ internal static class OverlayHudDemo
             log.Add($"(evidence) volume-bar canvas muted at 40 %: {pngPath}");
             Check("muted volume bar renders no accent (green) fill pixels", MeasureFillRun(canvas, track) == 0);
         }
+
+        Check(
+            "unmute action pill carries the unmute state",
+            OverlayHud.DisplayedPillText(new OverlayContent("Google Home -> unmute", "ignored result", false)
+            {
+                VolumePercent = 40,
+            }) == "Unmuted");
 
         int exStyle = unchecked((int)NativeMethods.GetWindowLongPtr(hud.WindowHandle, NativeMethods.GwlExstyle).ToInt64());
         Check("HUD ex-style has WS_EX_NOACTIVATE", (exStyle & NativeMethods.WsExNoActivate) != 0);
