@@ -214,6 +214,12 @@ public static class SidecarSupervisorTests
             // Runs 1 and 2 crash instantly (attempt climbs); run 3 survives
             // past BackoffResetMs, so the delay scheduled after ITS exit must
             // drop back to the base.
+            //
+            // A child's measured lifetime INCLUDES node process startup, so
+            // BackoffResetMs must sit well above the slowest plausible cold
+            // start — at 400 ms a loaded CI runner classified an
+            // instant-crash child as healthy, reset the backoff early and
+            // produced a base-delay second restart (0.4.4 CI regression).
             const string script =
                 "const fs = require('fs');" +
                 "const file = process.argv[1];" +
@@ -221,7 +227,7 @@ public static class SidecarSupervisorTests
                 "try { n = parseInt(fs.readFileSync(file, 'utf8'), 10) || 0; } catch {}" +
                 "fs.writeFileSync(file, String(n + 1));" +
                 "if (n < 2) process.exit(1);" +
-                "setTimeout(() => process.exit(1), 500);";
+                "setTimeout(() => process.exit(1), 3500);";
             try
             {
                 using var supervisor = new SidecarSupervisor(
@@ -232,7 +238,7 @@ public static class SidecarSupervisorTests
                     {
                         BackoffBaseMs = 100,
                         BackoffCapMs = 2_000,
-                        BackoffResetMs = 400,
+                        BackoffResetMs = 3_000,
                         StopGraceMs = 250,
                     },
                     log: capture.Sink);
