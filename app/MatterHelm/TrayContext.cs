@@ -70,6 +70,7 @@ public sealed class TrayContext : ApplicationContext
     private (string QrPayload, string ManualCode)? _lastPairingInfo;
     private readonly System.Windows.Forms.Timer _pairingSettleTimer;
     private bool _pairingSettled;
+    private bool _commissioned;
     private BridgeState _state = BridgeState.Disabled;
     private SemanticVersion? _lastNotifiedUpdate;
 
@@ -79,14 +80,19 @@ public sealed class TrayContext : ApplicationContext
     /// <param name="pairingAutoCloseScheduler">Optional deterministic timing seam for focused pairing-window tests.</param>
     /// <param name="startUpdateHandoff">Optional post-exit helper launcher seam for focused handoff tests.</param>
     /// <param name="showError">Optional user-visible error sink for focused tests.</param>
+    /// <param name="commissionedAtStartup">Optional startup fabric-presence seam; production uses the same Matter-storage signal as first-run onboarding.</param>
     public TrayContext(
         Config? config = null,
         UpdateService? updateService = null,
         Action<Action, TimeSpan>? pairingAutoCloseScheduler = null,
         Func<UpdateRelease, string, string, IUpdateInstallationProbe, CancellationToken, Task<bool>>? startUpdateHandoff = null,
-        Action<string, string>? showError = null)
+        Action<string, string>? showError = null,
+        bool? commissionedAtStartup = null)
     {
+        bool usingProductionConfig = config is null;
         Config = config ?? new Config();
+        _commissioned = commissionedAtStartup
+            ?? (usingProductionConfig && Directory.Exists(Path.Combine(AppPaths.Root, "matter")));
         _updateService = updateService ?? UpdateService.CreateDefault();
         _pairingAutoCloseScheduler = pairingAutoCloseScheduler;
         _startUpdateHandoff = startUpdateHandoff ?? UpdateHandoff.StartAsync;
@@ -116,11 +122,9 @@ public sealed class TrayContext : ApplicationContext
         };
         _enableBridgeItem.CheckedChanged += OnEnableBridgeCheckedChanged;
 
-        // BLUEPRINT §2.4: amber's parenthetical is "shows 'Pair…' menu item" —
-        // read as "this is when it's actionable", not "only time it exists":
-        // the item stays visible always (so users can find it) and is enabled
-        // whenever the bridge is running or a pairing code has been cached
-        // (see UpdateMenuForState for why Connected must count).
+        // S10-23: bridge controls are contextual. An uncommissioned install
+        // offers one direct Pair action; a commissioned install offers the
+        // normal bridge on/off toggle instead.
         _pairItem = new ToolStripMenuItem("Pair with Google Home…");
         _pairItem.Click += OnPairClicked;
 
@@ -225,16 +229,24 @@ public sealed class TrayContext : ApplicationContext
     public event EventHandler? ExitRequested;
 
     /// <summary>
-    /// The welcome window's "Enable bridge &amp; pair" button (S10-7): ticks
-    /// "Enable bridge" (which persists and starts the sidecar through the
-    /// normal path) and opens the pairing window, so onboarding ends in the
-    /// right place instead of on a menu the user has to find.
+    /// The welcome window's primary button and the unpaired tray action both
+    /// use this path: it enables the bridge through the normal persisted
+    /// checkbox flow, then opens the pairing window.
     /// </summary>
     public void StartGuidedPairing()
     {
         if (!_enableBridgeItem.Checked)
         {
             _enableBridgeItem.Checked = true;
+        }
+        else if (_state == BridgeState.Disabled)
+        {
+            // Config can still say enabled after a failed/aborted start. Pair
+            // is an explicit retry request, so do not leave the user looking
+            // at a bridge-off window just because the checkbox was already
+            // persisted true.
+            Log.Info("Tray: pairing requested while the persisted bridge state is enabled but stopped; retrying start.");
+            EnableBridgeChanged?.Invoke(this, true);
         }
 
         ShowOrFocusPairingWindow();
@@ -273,6 +285,15 @@ public sealed class TrayContext : ApplicationContext
 
     /// <summary>Whether Pair with Google Home is currently actionable.</summary>
     public bool PairMenuEnabled => _pairItem.Enabled;
+
+    /// <summary>Whether the contextual Pair with Google Home action is visible.</summary>
+    public bool PairMenuVisible => _pairItem.Available;
+
+    /// <summary>Whether the contextual Enable bridge toggle is visible.</summary>
+    public bool EnableBridgeMenuVisible => _enableBridgeItem.Available;
+
+    /// <summary>Whether Factory reset remains available in the current lifecycle state.</summary>
+    public bool FactoryResetMenuVisible => _factoryResetItem.Available;
 
     /// <summary>Whether the tray currently renders the bridge as enabled.</summary>
     public bool BridgeMenuChecked => _enableBridgeItem.Checked;
@@ -384,6 +405,15 @@ public sealed class TrayContext : ApplicationContext
         bool commissionedNow = _state != BridgeState.Connected && state == BridgeState.Connected;
         bool autoCloseOpenPairingWindow = commissionedNow && PairingWindowOpen;
         _state = state;
+        if (state == BridgeState.Connected)
+        {
+            _commissioned = true;
+        }
+        else if (state == BridgeState.AwaitingPairing)
+        {
+            _commissioned = false;
+        }
+
         _notifyIcon.Icon = _stateIcons[state];
 
         // S10-7: the tooltip says what the icon colour means, so hovering
@@ -455,13 +485,12 @@ public sealed class TrayContext : ApplicationContext
     {
         // "Enable bridge" is left purely user-driven here (not resynced from
         // SetState) so an external state update never fights an in-flight
-        // user click; only the "actionable now" hint is state-derived.
-        // Pair… remains enabled while Connected so an already-commissioned
-        // user can inspect the paired state; it is also enabled whenever an
-        // uncommissioned bridge runs or a pairing code is cached.
-        _pairItem.Enabled =
-            _lastPairingInfo is not null
-                || _state is BridgeState.Running or BridgeState.AwaitingPairing or BridgeState.Connected;
+        // user click. Visibility follows only the authoritative Matter
+        // commissioned report remembered across transient/off states.
+        _enableBridgeItem.Available = _commissioned;
+        _pairItem.Available = !_commissioned;
+        _pairItem.Enabled = !_commissioned;
+        _factoryResetItem.Available = true;
     }
 
     private void OnEnableBridgeCheckedChanged(object? sender, EventArgs e)
@@ -489,9 +518,11 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnPairClicked(object? sender, EventArgs e)
     {
+        StartGuidedPairing();
         PairRequested?.Invoke(this, EventArgs.Empty);
-        ShowOrFocusPairingWindow();
     }
+
+    internal void PerformPairMenuClick() => _pairItem.PerformClick();
 
     /// <summary>
     /// Shows the factory-reset confirmation (BLUEPRINT §2.5 consequences,
@@ -571,6 +602,8 @@ public sealed class TrayContext : ApplicationContext
                 return;
             }
 
+            _commissioned = false;
+            UpdateMenuForState();
             ShowOrFocusPairingWindow();
         }
 
