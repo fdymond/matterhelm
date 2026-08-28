@@ -9,7 +9,7 @@ using MatterHelm.Ui;
 namespace MatterHelm.Demos;
 
 /// <summary>
-/// S2-5 (extended by S4-2 for protocol v2) acceptance evidence: spawns the
+/// S2-5 acceptance evidence (extended through protocol v3): spawns the
 /// stub sidecar (<c>DemoAssets\StubSidecar.js</c>) under the real
 /// <see cref="BridgeHost"/>/<see cref="IpcServer"/>/<see cref="SidecarSupervisor"/>
 /// wiring with the real <see cref="ActionExecutorAdapter"/> and a live
@@ -17,7 +17,7 @@ namespace MatterHelm.Demos;
 /// read-back after the stub's setVolume/setMuted actions, an ok ack per
 /// action id (parsed from the stub's stdout echo), overlay Show calls with
 /// the expected primary strings, the pairing frame surfacing, a state
-/// frame carrying a locally-set sentinel volume reaching the stub, a v2
+/// frame carrying a locally-set sentinel volume reaching the stub, a
 /// <c>custom</c> action round-trip (config-defined <c>launch</c> of
 /// node.exe writing a marker file — asserted on disk — plus its ok ack and
 /// "Google Home → Demo Note" overlay), and that a deliberate v1 frame is
@@ -84,7 +84,7 @@ internal static partial class WiredDemo
             }
         }
 
-        Emit($"S2-5/S4-2 wired demo (protocol v2) — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        Emit($"S2-5/S4-2 wired demo (protocol v3) — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 
         string? node = DemoSupport.ResolveNodeExe();
         string stubPath = Path.Combine(AppContext.BaseDirectory, "DemoAssets", "StubSidecar.js");
@@ -224,7 +224,7 @@ internal static partial class WiredDemo
             foreach ((string name, string id) in SentActions())
             {
                 bool acked = PumpUntil(
-                    () => LogContains($"stub-recv {{\"v\":2,\"type\":\"ack\",\"id\":\"{id}\",\"ok\":true}}"),
+                    () => LogContains($"stub-recv {{\"v\":3,\"type\":\"ack\",\"id\":\"{id}\",\"ok\":true}}"),
                     timeoutMs: 5_000);
                 Check(acked, $"stub received ack ok for {name} (id {id})");
             }
@@ -287,7 +287,7 @@ internal static partial class WiredDemo
             // through the real executor and expect the stub to echo the frame.
             executor.Execute("setVolume", WiredDemoSentinelVolume);
             bool sentinelSeen = PumpUntil(
-                () => LogContains($"stub-recv {{\"v\":2,\"type\":\"state\",\"volume\":{WiredDemoSentinelVolume},"),
+                () => LogContains($"stub-recv {{\"v\":3,\"type\":\"state\",\"volume\":{WiredDemoSentinelVolume},"),
                 timeoutMs: 10_000);
             Check(
                 sentinelSeen,
@@ -295,11 +295,11 @@ internal static partial class WiredDemo
 
             // Version-bump proof (ADR-004 §3): the sentinel frame cues the
             // stub to send one v1 frame; the tray app must reject it (only
-            // v:2 parses now) and close the socket.
+            // v:3 parses now) and close the socket.
             bool v1Rejected = PumpUntil(
-                () => LogContains("\"v\" must be the integer 2"),
+                () => LogContains("\"v\" must be the integer 3"),
                 timeoutMs: 10_000);
-            Check(v1Rejected, "deliberate v1 frame was rejected (\"v\" must be the integer 2)");
+            Check(v1Rejected, "deliberate v1 frame was rejected (\"v\" must be the integer 3)");
             bool socketClosed = PumpUntil(
                 () => LogContains("stub: socket closed"),
                 timeoutMs: 10_000);

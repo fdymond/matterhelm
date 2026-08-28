@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace MatterHelm.Actions;
 
@@ -37,8 +38,8 @@ public sealed record ParsedKeyChord(KeyChordModifiers Modifiers, ChordKey Key)
         + Key.Name;
 }
 
-/// <summary>One synthesized keyboard event of a chord, as plain data (the pure seam the executor tests assert on): a virtual-key press or release plus its extended-key flag. Maps 1:1 onto a keyboard <c>INPUT</c> entry (scan code 0, same technique as <see cref="MediaKeys"/>).</summary>
-public sealed record KeyChordEvent(ushort VirtualKey, bool Extended, bool KeyUp);
+/// <summary>One synthesized keyboard event of a chord, as plain data (the pure seam the executor tests assert on): virtual-key and hardware scan codes, plus extended and release flags. Maps 1:1 onto a keyboard <c>INPUT</c> entry.</summary>
+public sealed record KeyChordEvent(ushort VirtualKey, ushort ScanCode, bool Extended, bool KeyUp);
 
 /// <summary>
 /// The <c>keySequence</c> custom action (S7-1): parsing, validation, and
@@ -63,13 +64,14 @@ public sealed record KeyChordEvent(ushort VirtualKey, bool Extended, bool KeyUp)
 /// extended-key flag, matching their physical scan groups.</para>
 ///
 /// <para><b>Synthesis</b>: modifiers down in canonical order, key down, key
-/// up, modifiers up in reverse — one SendInput batch, VK-code events with scan
-/// code 0 (deliberately the <see cref="MediaKeys"/> technique: deterministic
-/// and keyboard-layout-independent, which per-layout scan-code translation is
-/// not).</para>
+/// up, modifiers up in reverse — one SendInput batch. Every event retains its
+/// VK code and also carries the hardware scan code returned by MapVirtualKey;
+/// KEYEVENTF_SCANCODE remains clear so Windows continues to resolve the VK
+/// under the active layout while low-level hooks can match physical-key data.</para>
 /// </summary>
-public static class KeyChord
+public static partial class KeyChord
 {
+    private const uint MapVkVkToVsc = 0;
     private const ushort VkControl = 0x11;
     private const ushort VkMenu = 0x12;
     private const ushort VkShift = 0x10;
@@ -147,19 +149,34 @@ public static class KeyChord
     /// tests assert on): modifiers down in canonical order, key down, key up,
     /// modifiers up in reverse.
     /// </summary>
-    public static IReadOnlyList<KeyChordEvent> BuildEvents(ParsedKeyChord chord)
+    public static IReadOnlyList<KeyChordEvent> BuildEvents(ParsedKeyChord chord) =>
+        BuildEvents(chord, MapScanCode);
+
+    /// <summary>The deterministic event-construction seam; production supplies MapVirtualKey and tests supply a fixed mapper.</summary>
+    internal static IReadOnlyList<KeyChordEvent> BuildEvents(
+        ParsedKeyChord chord,
+        Func<ushort, ushort> mapScanCode)
     {
+        ArgumentNullException.ThrowIfNull(mapScanCode);
         List<KeyChordEvent> events = [];
         foreach ((KeyChordModifiers modifier, _, ushort virtualKey, bool extended) in ModifierTable)
         {
             if (chord.Modifiers.HasFlag(modifier))
             {
-                events.Add(new KeyChordEvent(virtualKey, extended, KeyUp: false));
+                events.Add(new KeyChordEvent(
+                    virtualKey,
+                    mapScanCode(virtualKey),
+                    extended,
+                    KeyUp: false));
             }
         }
 
-        events.Add(new KeyChordEvent(chord.Key.VirtualKey, chord.Key.Extended, KeyUp: false));
-        events.Add(new KeyChordEvent(chord.Key.VirtualKey, chord.Key.Extended, KeyUp: true));
+        events.Add(new KeyChordEvent(
+            chord.Key.VirtualKey,
+            mapScanCode(chord.Key.VirtualKey),
+            chord.Key.Extended,
+            KeyUp: false));
+        events.Add(events[^1] with { KeyUp = true });
         for (int i = events.Count - 3; i >= 0; i--)
         {
             KeyChordEvent down = events[i];
@@ -169,7 +186,12 @@ public static class KeyChord
         return events;
     }
 
-    /// <summary>Injects the chord via one <c>SendInput</c> batch. Returns false (logged) if injection failed. The thin impure shell over <see cref="BuildEvents"/>.</summary>
+    /// <summary>
+    /// Injects the chord via one <c>SendInput</c> batch. Returns false (logged)
+    /// if injection failed. SendInput cannot cross UIPI from an unelevated
+    /// MatterHelm process into an elevated target and Windows may fail silently;
+    /// users must run both processes at the same integrity level.
+    /// </summary>
     public static bool Press(ParsedKeyChord chord)
     {
         IReadOnlyList<KeyChordEvent> events = BuildEvents(chord);
@@ -178,6 +200,7 @@ public static class KeyChord
         {
             inputs[i].Type = NativeInput.InputKeyboard;
             inputs[i].Union.Keyboard.VirtualKey = events[i].VirtualKey;
+            inputs[i].Union.Keyboard.ScanCode = events[i].ScanCode;
             inputs[i].Union.Keyboard.Flags =
                 (events[i].Extended ? NativeInput.KeyEventFExtendedKey : 0)
                 | (events[i].KeyUp ? NativeInput.KeyEventFKeyUp : 0);
@@ -185,6 +208,9 @@ public static class KeyChord
 
         return NativeInput.Send(inputs, $"key sequence '{chord.Canonical}'");
     }
+
+    private static ushort MapScanCode(ushort virtualKey) =>
+        (ushort)MapVirtualKey(virtualKey, MapVkVkToVsc);
 
     private static Dictionary<string, ChordKey> BuildKeyTable()
     {
@@ -234,4 +260,7 @@ public static class KeyChord
         Add("VolumeDown", 0xAE, extended: true);
         return table;
     }
+
+    [LibraryImport("user32.dll", EntryPoint = "MapVirtualKeyW")]
+    private static partial uint MapVirtualKey(uint code, uint mapType);
 }

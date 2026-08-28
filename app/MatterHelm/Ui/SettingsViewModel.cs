@@ -27,7 +27,7 @@ public enum SettingKind
     /// <summary>One value from <see cref="SettingDescriptor.Choices"/>.</summary>
     Choice,
 
-    /// <summary>An active Windows network adapter, plus Auto and any saved adapter that is no longer detected.</summary>
+    /// <summary>A sensible active Windows network adapter, plus Auto, a Show-all escape hatch, and any saved adapter that is hidden or no longer detected.</summary>
     NetworkAdapterChoice,
 
     /// <summary>The custom-command list editor (ListView + add/edit/remove).</summary>
@@ -150,6 +150,7 @@ public sealed class SettingsViewModel
     private readonly Config _config;
     private readonly Func<string, bool> _pathExists;
     private readonly IReadOnlyList<NetworkAdapterInfo> _networkAdapters;
+    private readonly Lazy<DisplayPowerCapability> _displayPowerCapability;
     private string _baseline;
     private BridgeConfig _baselineConfig;
 
@@ -157,18 +158,25 @@ public sealed class SettingsViewModel
     /// <param name="config">The live config to stage edits against.</param>
     /// <param name="pathExists">Launch-path existence probe; defaults to <see cref="File.Exists(string?)"/>. Injectable for tests.</param>
     public SettingsViewModel(Config config, Func<string, bool>? pathExists = null)
-        : this(config, pathExists, SystemNetworkAdapterProvider.Instance)
+        : this(
+            config,
+            pathExists,
+            SystemNetworkAdapterProvider.Instance,
+            DisplayPowerCapabilityProbe.Instance)
     {
     }
 
     internal SettingsViewModel(
         Config config,
         Func<string, bool>? pathExists,
-        INetworkAdapterProvider networkAdapterProvider)
+        INetworkAdapterProvider networkAdapterProvider,
+        IDisplayPowerCapabilityProbe? displayPowerCapabilityProbe = null)
     {
         _config = config;
         _pathExists = pathExists ?? File.Exists;
         _networkAdapters = networkAdapterProvider.GetAdapters();
+        IDisplayPowerCapabilityProbe probe = displayPowerCapabilityProbe ?? DisplayPowerCapabilityProbe.Instance;
+        _displayPowerCapability = new Lazy<DisplayPowerCapability>(probe.Probe);
         Working = Clone(config.Current);
         _baselineConfig = Clone(config.Current);
         _baseline = Snapshot(Working);
@@ -225,20 +233,64 @@ public sealed class SettingsViewModel
     public static SettingDescriptor Describe(string settingId) =>
         Categories.SelectMany(c => c.Settings).First(s => s.Id == settingId);
 
-    internal IReadOnlyList<(string Value, string Label)> GetMdnsInterfaceChoices()
+    /// <summary>
+    /// Resolves choice labels for this Settings-window instance. The read-only
+    /// display probe is lazy and cached by <see cref="Lazy{T}"/>, so rebuilding
+    /// or filtering the page never enumerates hardware a second time.
+    /// </summary>
+    internal IReadOnlyList<string> GetChoiceLabels(SettingDescriptor setting)
+    {
+        if (setting.Id != "power-off-action")
+        {
+            return setting.ChoiceLabels.Count > 0 ? setting.ChoiceLabels : setting.Choices;
+        }
+
+        string suffix = _displayPowerCapability.Value switch
+        {
+            DisplayPowerCapability.AllDdc => string.Empty,
+            DisplayPowerCapability.NoDdc => " (this PC: will also enter standby)",
+            DisplayPowerCapability.Mixed => " (non-DDC displays stay on)",
+            _ => throw new InvalidOperationException("Unknown display-power capability."),
+        };
+        return
+        [
+            $"Turn off displays{suffix}",
+            $"Pause, then turn off displays{suffix}",
+            "Start screensaver",
+            "Sleep",
+        ];
+    }
+
+    internal IReadOnlyList<(string Value, string Label)> GetMdnsInterfaceChoices(bool showAllAdapters = false)
     {
         var choices = new List<(string Value, string Label)>
         {
             ("", "Auto (recommended)"),
         };
-        choices.AddRange(_networkAdapters.Select(adapter =>
+        NetworkAdapterInfo[] visibleAdapters =
+        [
+            .. _networkAdapters.Where(showAllAdapters
+                ? SystemNetworkAdapterProvider.IsVisibleWhenShowingAll
+                : SystemNetworkAdapterProvider.IsVisibleByDefault),
+        ];
+        choices.AddRange(visibleAdapters.Select(adapter =>
             (adapter.Name, $"{adapter.Name} — {adapter.Ipv4Address ?? "no IPv4"}")));
 
         string? saved = Working.MdnsInterface;
-        if (!string.IsNullOrWhiteSpace(saved)
-            && !_networkAdapters.Any(adapter => adapter.Name == saved))
+        if (string.IsNullOrWhiteSpace(saved)
+            || visibleAdapters.Any(adapter => adapter.Name == saved))
+        {
+            return choices;
+        }
+
+        NetworkAdapterInfo? savedAdapter = _networkAdapters.FirstOrDefault(adapter => adapter.Name == saved);
+        if (savedAdapter is null)
         {
             choices.Add((saved, $"{saved} (not detected)"));
+        }
+        else
+        {
+            choices.Add((saved, $"{saved} — {savedAdapter.Ipv4Address ?? "no IPv4"} (hidden by filter)"));
         }
 
         return choices;
@@ -671,7 +723,7 @@ public sealed class SettingsViewModel
                     Description = "What turning the power device off does on this PC.",
                     Kind = SettingKind.Choice,
                     Choices = ["displaysOff", "pauseAndDisplaysOff", "screensaver", "sleep"],
-                    ChoiceLabels = ["Displays off", "Pause, then displays off", "Start screensaver", "Sleep"],
+                    ChoiceLabels = ["Turn off displays", "Pause, then turn off displays", "Start screensaver", "Sleep"],
                     Get = c => ToWireName(c.PowerOffAction),
                     Set = (c, v) => c.PowerOffAction = FromWireName((string)v!),
                 },
