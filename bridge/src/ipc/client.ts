@@ -56,6 +56,13 @@ export const DEFAULT_BACKOFF: BackoffOptions = { baseMs: 500, capMs: 30_000 };
 const JITTER = 0.25;
 
 /**
+ * Maximum queued WebSocket payload before the peer is treated as unhealthy.
+ * Two MiB absorbs short tray-app stalls while bounding the sidecar's queue far
+ * below the demonstrated 16 MiB growth.
+ */
+const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+
+/**
  * Pure backoff schedule: `min(baseMs * 2^attempt, capMs)` scaled by a uniform
  * jitter factor in [1-JITTER, 1+JITTER]. `random` is injectable for tests.
  */
@@ -94,6 +101,7 @@ export class IpcClient {
   #attempt = 0;
   #established = false;
   #dropWarned = false;
+  #backpressureWarned = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: IpcClientOptions) {
@@ -121,7 +129,26 @@ export class IpcClient {
    */
   send(frame: OutboundFrame): boolean {
     if (this.#state === "connected" && this.#ws !== undefined) {
-      this.#ws.send(JSON.stringify(frame));
+      if (this.#backpressureWarned) {
+        return false;
+      }
+      const payload = JSON.stringify(frame);
+      const frameBytes = Buffer.byteLength(payload);
+      if (this.#ws.bufferedAmount + frameBytes > MAX_BUFFERED_BYTES) {
+        this.#backpressureWarned = true;
+        this.#options.logger.warn(
+          {
+            evt: "ipc.backpressure",
+            bufferedBytes: this.#ws.bufferedAmount,
+            frameBytes,
+            maxBufferedBytes: MAX_BUFFERED_BYTES,
+          },
+          "tray app is not reading IPC frames; closing unhealthy connection",
+        );
+        this.#ws.close(1013, "IPC peer backpressure");
+        return false;
+      }
+      this.#ws.send(payload);
       return true;
     }
     if (!this.#dropWarned) {
@@ -196,6 +223,7 @@ export class IpcClient {
     };
     ws.send(JSON.stringify(hello)); // first frame, before any caller send()
     this.#dropWarned = false; // new episode begins at the next disconnect
+    this.#backpressureWarned = false;
     this.#setState("connected");
     this.#options.logger.info({ evt: "ipc.connected" }, "connected to tray app; hello sent");
   }

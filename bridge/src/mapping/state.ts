@@ -11,7 +11,7 @@
 import type { StateFrame } from "../ipc/protocol.js";
 
 /** Plain descriptor of the Speaker endpoint's attributes to apply. */
-export interface SpeakerAttributeUpdate {
+interface SpeakerAttributeUpdate {
   /** LevelControl `currentLevel` attribute, 0-254. */
   currentLevel: number;
   /** OnOff attribute; see {@link mutedToOnOff} for the polarity. */

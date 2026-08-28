@@ -454,6 +454,7 @@ export class AdvertisementHealthMonitor {
 export class AdvertisementHealthMonitorLifecycle {
   readonly #createMonitor: () => AdvertisementHealthMonitor;
   #monitor: AdvertisementHealthMonitor | undefined;
+  #commissioned: boolean | undefined;
 
   constructor(createMonitor: () => AdvertisementHealthMonitor) {
     this.#createMonitor = createMonitor;
@@ -461,6 +462,8 @@ export class AdvertisementHealthMonitorLifecycle {
 
   /** Stops polling when commissioned; decommissioning starts a fresh dedup state. */
   setCommissioned(commissioned: boolean): void {
+    if (commissioned === this.#commissioned) return;
+    this.#commissioned = commissioned;
     this.#monitor?.close();
     this.#monitor = undefined;
     if (!commissioned) {

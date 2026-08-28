@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const seam = vi.hoisted(() => ({
   commissioned: true,
   commissionedCallbacks: new Array<(commissioned: boolean) => void>(),
+  frameCallbacks: new Array<(frame: unknown) => void>(),
   frames: new Array<unknown>(),
+  loggerErrors: new Array<{ obj: Record<string, unknown>; msg: string }>(),
+  rejectSpeakerState: false,
+  speakerStateCalls: new Array<{ level: number; onOff: boolean }>(),
 }));
 
 vi.mock("./config.js", () => ({
@@ -22,6 +26,10 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./ipc/client.js", () => ({
   IpcClient: class {
+    constructor(options: { onFrame: (frame: unknown) => void }) {
+      seam.frameCallbacks.push(options.onFrame);
+    }
+
     send(frame: unknown): void {
       seam.frames.push(frame);
     }
@@ -39,7 +47,9 @@ vi.mock("./ipc/client.js", () => ({
 vi.mock("./log.js", () => ({
   makeLogger: () => ({
     debug: vi.fn(),
-    error: vi.fn(),
+    error: (obj: Record<string, unknown>, msg: string) => {
+      seam.loggerErrors.push({ obj, msg });
+    },
     info: vi.fn(),
   }),
 }));
@@ -74,7 +84,14 @@ vi.mock("./matter/bridge.js", () => ({
       get pairingCodes(): { qrPayload: string; manualCode: string } | null {
         return seam.commissioned ? null : { qrPayload: "MT:NEW-CODE", manualCode: "1111-222-3333" };
       },
-      setSpeakerState: () => Promise.resolve(),
+      setSpeakerState: (level: number, onOff: boolean) => {
+        seam.speakerStateCalls.push({ level, onOff });
+        if (seam.rejectSpeakerState) {
+          seam.rejectSpeakerState = false;
+          return Promise.reject(new Error("injected speaker state failure"));
+        }
+        return Promise.resolve();
+      },
       start: () => Promise.resolve(),
     }),
 }));
@@ -88,12 +105,20 @@ vi.mock("./timing.js", () => ({
 }));
 
 describe("composition-root commissioning transitions", () => {
-  it("emits uncommissioned matterStatus before fresh pairing codes after controller removal", async () => {
+  beforeAll(async () => {
     const stdinOn = vi.spyOn(process.stdin, "on").mockImplementation(() => process.stdin);
     const stdinResume = vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
     await import("./index.js");
     await vi.waitFor(() => {
       expect(seam.commissionedCallbacks).toHaveLength(1);
+      expect(seam.frameCallbacks).toHaveLength(1);
+    });
+    stdinOn.mockRestore();
+    stdinResume.mockRestore();
+  });
+
+  it("emits uncommissioned matterStatus before fresh pairing codes after controller removal", async () => {
+    await vi.waitFor(() => {
       expect(seam.frames).toContainEqual({
         v: 3,
         type: "matterStatus",
@@ -101,8 +126,6 @@ describe("composition-root commissioning transitions", () => {
         advertisement: "notApplicable",
       });
     });
-    stdinOn.mockRestore();
-    stdinResume.mockRestore();
     seam.frames.length = 0;
 
     seam.commissioned = false;
@@ -122,5 +145,37 @@ describe("composition-root commissioning transitions", () => {
         manualCode: "1111-222-3333",
       },
     ]);
+  });
+
+  it("logs and survives a rejected setSpeakerState call", async () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((code): never => {
+      throw new Error(`unexpected process.exit(${String(code)})`);
+    });
+    seam.loggerErrors.length = 0;
+    seam.speakerStateCalls.length = 0;
+    seam.rejectSpeakerState = true;
+
+    seam.frameCallbacks[0]?.({ v: 3, type: "state", volume: 40, muted: false });
+    await vi.waitFor(() => {
+      expect(seam.loggerErrors).toEqual([
+        {
+          obj: {
+            evt: "matter.speaker-state.error",
+            err: "Error: injected speaker state failure",
+          },
+          msg: "failed to apply tray state to the speaker endpoint",
+        },
+      ]);
+    });
+
+    seam.frameCallbacks[0]?.({ v: 3, type: "state", volume: 50, muted: true });
+    await vi.waitFor(() => {
+      expect(seam.speakerStateCalls).toEqual([
+        { level: 102, onOff: true },
+        { level: 127, onOff: false },
+      ]);
+    });
+    expect(exit).not.toHaveBeenCalled();
+    exit.mockRestore();
   });
 });

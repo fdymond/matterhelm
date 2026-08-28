@@ -199,16 +199,28 @@ export interface BridgeHandle {
  * module doc for the design and its concurrency caveat.
  */
 export class EchoSuppressor {
-  readonly #pending = new Map<string, unknown[]>();
+  readonly #pending = new Map<string, { value: unknown }[]>();
 
-  /** Records that a local write of `value` on `key` is about to commit. */
-  expect(key: string, value: unknown): void {
+  /** Records a local write and returns an idempotent cancellation callback. */
+  expect(key: string, value: unknown): () => void {
+    const expectation = { value };
     const queue = this.#pending.get(key);
     if (queue === undefined) {
-      this.#pending.set(key, [value]);
+      this.#pending.set(key, [expectation]);
     } else {
-      queue.push(value);
+      queue.push(expectation);
     }
+    return () => {
+      const current = this.#pending.get(key);
+      const index = current?.indexOf(expectation) ?? -1;
+      if (current === undefined || index < 0) {
+        return;
+      }
+      current.splice(index, 1);
+      if (current.length === 0) {
+        this.#pending.delete(key);
+      }
+    };
   }
 
   /**
@@ -222,8 +234,11 @@ export class EchoSuppressor {
     if (queue === undefined || queue.length === 0) {
       return false;
     }
-    if (Object.is(queue[0], value)) {
+    if (Object.is(queue[0]?.value, value)) {
       queue.shift();
+      if (queue.length === 0) {
+        this.#pending.delete(key);
+      }
       return true;
     }
     return false;
@@ -250,16 +265,24 @@ export class SerializedSpeakerStateWriter {
   async setState(level0to254: number, onOff: boolean): Promise<void> {
     const pending = this.#tail.then(async () => {
       const patch: { level?: number; onOff?: boolean } = {};
+      const cancelExpectations: (() => void)[] = [];
       if (this.#speaker.getLevel() !== level0to254) {
         patch.level = level0to254;
-        this.#suppressor.expect(SPEAKER_LEVEL, level0to254);
+        cancelExpectations.push(this.#suppressor.expect(SPEAKER_LEVEL, level0to254));
       }
       if (this.#speaker.getOnOff() !== onOff) {
         patch.onOff = onOff;
-        this.#suppressor.expect(SPEAKER_ONOFF, onOff);
+        cancelExpectations.push(this.#suppressor.expect(SPEAKER_ONOFF, onOff));
       }
       if (patch.level !== undefined || patch.onOff !== undefined) {
-        await this.#speaker.setState(patch);
+        try {
+          await this.#speaker.setState(patch);
+        } catch (error) {
+          for (const cancel of cancelExpectations) {
+            cancel();
+          }
+          throw error;
+        }
       }
     });
     this.#tail = pending.catch(() => undefined);
@@ -467,73 +490,79 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     },
   });
 
-  for (const spec of specs) {
-    if (spec.role === "speaker") {
-      const speakerHandle = await node.addSpeaker(spec.info);
-      speaker = speakerHandle;
-      speakerHandle.onOnOffChanged((on) => {
-        if (suppressor.check(SPEAKER_ONOFF, on)) {
-          return;
-        }
-        emit({ kind: "speakerOnOff", on });
-      });
-      speakerHandle.onLevelChanged((level) => {
-        if (level !== null && suppressor.check(SPEAKER_LEVEL, level)) {
-          return;
-        }
-        emit({ kind: "speakerLevel", level });
-      });
-    } else {
-      const id = spec.info.id;
-      switch (spec.role) {
-        case "custom": {
-          const customKey = spec.key;
-          plugs.set(
-            id,
-            await node.addPlug(
-              spec.info,
-              makePlugCommandHandler(
-                (on) => ({ kind: "customCommand", customKey, on }),
-                emit,
-                resetWindowFor(id),
+  try {
+    for (const spec of specs) {
+      if (spec.role === "speaker") {
+        const speakerHandle = await node.addSpeaker(spec.info);
+        speaker = speakerHandle;
+        speakerHandle.onOnOffChanged((on) => {
+          if (suppressor.check(SPEAKER_ONOFF, on)) {
+            return;
+          }
+          emit({ kind: "speakerOnOff", on });
+        });
+        speakerHandle.onLevelChanged((level) => {
+          if (level !== null && suppressor.check(SPEAKER_LEVEL, level)) {
+            return;
+          }
+          emit({ kind: "speakerLevel", level });
+        });
+      } else {
+        const id = spec.info.id;
+        switch (spec.role) {
+          case "custom": {
+            const customKey = spec.key;
+            plugs.set(
+              id,
+              await node.addPlug(
+                spec.info,
+                makePlugCommandHandler(
+                  (on) => ({ kind: "customCommand", customKey, on }),
+                  emit,
+                  resetWindowFor(id),
+                ),
               ),
-            ),
-          );
-          momentaryIds.add(id);
-          break;
-        }
-        case "playPause":
-        case "next":
-        case "previous": {
-          const key = spec.role;
-          plugs.set(
-            id,
-            await node.addPlug(
-              spec.info,
-              makePlugCommandHandler(
-                (on) => ({ kind: "plugCommand", key, on }),
-                emit,
-                resetWindowFor(id),
+            );
+            momentaryIds.add(id);
+            break;
+          }
+          case "playPause":
+          case "next":
+          case "previous": {
+            const key = spec.role;
+            plugs.set(
+              id,
+              await node.addPlug(
+                spec.info,
+                makePlugCommandHandler(
+                  (on) => ({ kind: "plugCommand", key, on }),
+                  emit,
+                  resetWindowFor(id),
+                ),
               ),
-            ),
-          );
-          momentaryIds.add(id);
-          break;
-        }
-        case "power": {
-          // The stateful power toggle: no reset window, every command dispatches.
-          plugs.set(
-            id,
-            await node.addPlug(
-              spec.info,
-              makePlugCommandHandler((on) => ({ kind: "plugCommand", key: "power", on }), emit),
-            ),
-          );
-          break;
+            );
+            momentaryIds.add(id);
+            break;
+          }
+          case "power": {
+            // The stateful power toggle: no reset window, every command dispatches.
+            plugs.set(
+              id,
+              await node.addPlug(
+                spec.info,
+                makePlugCommandHandler((on) => ({ kind: "plugCommand", key: "power", on }), emit),
+              ),
+            );
+            break;
+          }
         }
       }
+      constructed.push({ id: spec.info.id, name: spec.info.name, kind: spec.kind });
     }
-    constructed.push({ id: spec.info.id, name: spec.info.name, kind: spec.kind });
+  } catch (error) {
+    scheduler.clear();
+    await node.close();
+    throw error;
   }
 
   const speakerStateWriter =

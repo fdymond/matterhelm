@@ -185,7 +185,12 @@ async function main(): Promise<void> {
         { evt: "ipc.state", volume: frame.volume, muted: frame.muted, ...attrs },
         "applying tray state to speaker endpoint",
       );
-      void bridgeHandle.setSpeakerState(attrs.currentLevel, attrs.onOff);
+      void bridgeHandle.setSpeakerState(attrs.currentLevel, attrs.onOff).catch((err: unknown) => {
+        logger.error(
+          { evt: "matter.speaker-state.error", err: String(err) },
+          "failed to apply tray state to the speaker endpoint",
+        );
+      });
       return;
     }
     logger.debug(

@@ -109,7 +109,7 @@ export interface TimingLogger {
   info(obj: Record<string, unknown>, msg: string): void;
 }
 
-export interface ActionDispatcherOptions {
+interface ActionDispatcherOptions {
   /** `IpcClient.send` (or a test double): true = written to the socket. */
   send(frame: ActionFrame): boolean;
   logger: TimingLogger;
