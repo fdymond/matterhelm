@@ -12,6 +12,12 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
+    <!-- Coverlet instruments MatterHelm.dll with Cecil, which must resolve every
+       referenced assembly; without the compilation context the WinForms
+       framework reference System.Drawing.Common is unresolvable, coverlet
+       fails the WHOLE module, and app coverage silently reports 0% while the
+       tests still pass (0.4.4 CI regression). -->
+    <PreserveCompilationContext>true</PreserveCompilationContext>
   </PropertyGroup>
 
   <ItemGroup>
