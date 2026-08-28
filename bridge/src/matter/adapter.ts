@@ -462,32 +462,37 @@ export class MatterNode {
         uniqueId: options.uniqueId,
       },
     });
-    if (options.logger !== undefined) {
-      // Session observability (ADR-006 §1): matter.js 0.17.7's node-level
-      // `SessionsBehavior` events, adapted to the plain-data seam.
-      const sessions = server.events.sessions;
-      wireSessionObservability(
-        {
-          opened: (cb) => {
-            sessions.opened.on(cb);
+    try {
+      if (options.logger !== undefined) {
+        // Session observability (ADR-006 §1): matter.js 0.17.7's node-level
+        // `SessionsBehavior` events, adapted to the plain-data seam.
+        const sessions = server.events.sessions;
+        wireSessionObservability(
+          {
+            opened: (cb) => {
+              sessions.opened.on(cb);
+            },
+            closed: (cb) => {
+              sessions.closed.on(cb);
+            },
+            subscriptionAdded: (cb) => {
+              sessions.subscriptionAdded.on(cb);
+            },
+            subscriptionsChanged: (cb) => {
+              sessions.subscriptionsChanged.on(cb);
+            },
           },
-          closed: (cb) => {
-            sessions.closed.on(cb);
-          },
-          subscriptionAdded: (cb) => {
-            sessions.subscriptionAdded.on(cb);
-          },
-          subscriptionsChanged: (cb) => {
-            sessions.subscriptionsChanged.on(cb);
-          },
-        },
-        options.logger,
-      );
+          options.logger,
+        );
+      }
+      const aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator" });
+      await server.add(aggregator);
+      environmentClaimed = true;
+      return new MatterNode(server, aggregator);
+    } catch (error) {
+      await server.close();
+      throw error;
     }
-    const aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator" });
-    await server.add(aggregator);
-    environmentClaimed = true;
-    return new MatterNode(server, aggregator);
   }
 
   /** Adds the Speaker endpoint (OnOff + LevelControl) to the aggregator. */
@@ -506,18 +511,18 @@ export class MatterNode {
    * `onCommand` is invoked for every OnOff **command** the endpoint receives
    * (`true` for On, `false` for Off) — see {@link CommandObservingOnOffServer}
    * for why commands rather than attribute changes, and for the callback's
-   * synchronous-in-transaction contract. Registered before the endpoint joins
-   * the aggregator so no command can slip past it.
+   * synchronous-in-transaction contract. Registration follows a successful
+   * add; nodes are assembled before start, so no controller command can race it.
    */
   async addPlug(info: BridgedDeviceInfo, onCommand?: (on: boolean) => void): Promise<PlugHandle> {
     const endpoint = new Endpoint(PlugEndpointType, {
       id: info.id,
       bridgedDeviceBasicInformation: bridgedBasicInformation(info),
     });
+    await this.#aggregator.add(endpoint);
     if (onCommand !== undefined) {
       plugCommandObservers.set(info.id, onCommand);
     }
-    await this.#aggregator.add(endpoint);
     return new PlugHandle(endpoint);
   }
 

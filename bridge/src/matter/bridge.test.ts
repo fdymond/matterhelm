@@ -91,6 +91,27 @@ describe("EchoSuppressor — value-based FIFO suppression of local writes", () =
     expect(suppressor.check("speaker.level", 100)).toBe(true);
     expect(suppressor.check("speaker.level", 100)).toBe(false);
   });
+
+  it("rolls back rejected speaker expectations so a later genuine change dispatches", async () => {
+    const suppressor = new EchoSuppressor();
+    const writer = new SerializedSpeakerStateWriter(
+      {
+        getLevel: () => 0,
+        getOnOff: () => true,
+        setState: () => Promise.reject(new Error("injected speaker write failure")),
+      },
+      suppressor,
+    );
+    const dispatched: ClusterWrite[] = [];
+
+    await expect(writer.setState(100, true)).rejects.toThrow("injected speaker write failure");
+    if (!suppressor.check("speaker.level", 100)) {
+      const write = endpointEventToClusterWrite({ kind: "speakerLevel", level: 100 });
+      if (write !== null) dispatched.push(write);
+    }
+
+    expect(dispatched).toEqual([{ endpoint: "speaker", cluster: "levelControl", level: 100 }]);
+  });
 });
 
 /**
@@ -337,7 +358,7 @@ describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
     expect(window).toEqual(["noteOn", "noteOn"]);
   });
 
-  it("cancels the pending reset on an Off command and dispatches no action", () => {
+  it("cancels the pending reset on an Off command and dispatches the Off press", () => {
     const { handle, writes, window } = makeMomentary("playPause");
     handle(true);
     handle(false);

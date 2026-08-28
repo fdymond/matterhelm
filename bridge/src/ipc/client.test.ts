@@ -214,6 +214,74 @@ describe("backoffDelayMs", () => {
   });
 });
 
+describe("IpcClient backpressure", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("logs once and closes a connection whose projected queue exceeds 2 MiB", () => {
+    class FakeWebSocket extends EventTarget {
+      static latest: FakeWebSocket | undefined;
+      bufferedAmount = 0;
+      readonly sent: string[] = [];
+      readonly closes: { code?: number; reason?: string }[] = [];
+      readonly url: string;
+
+      constructor(url: string) {
+        super();
+        this.url = url;
+        FakeWebSocket.latest = this;
+      }
+
+      send(payload: string): void {
+        this.sent.push(payload);
+      }
+
+      close(code?: number, reason?: string): void {
+        this.closes.push({
+          ...(code === undefined ? {} : { code }),
+          ...(reason === undefined ? {} : { reason }),
+        });
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { logger, calls } = makeLogger();
+    const c = new IpcClient({
+      url: "ws://127.0.0.1:39531",
+      token: TOKEN,
+      logger,
+      onFrame: () => undefined,
+    });
+
+    c.start();
+    const connectedSocket = FakeWebSocket.latest;
+    if (connectedSocket === undefined) {
+      expect.fail("expected IpcClient to construct a WebSocket");
+    }
+    connectedSocket.dispatchEvent(new Event("open"));
+    connectedSocket.bufferedAmount = 2 * 1024 * 1024;
+
+    expect(c.send(playPause)).toBe(false);
+    expect(c.send(playPause)).toBe(false);
+    expect(connectedSocket.sent).toHaveLength(1); // hello only
+    expect(connectedSocket.closes).toEqual([{ code: 1013, reason: "IPC peer backpressure" }]);
+    expect(calls.warn.filter(({ obj }) => obj.evt === "ipc.backpressure")).toEqual([
+      {
+        obj: {
+          evt: "ipc.backpressure",
+          bufferedBytes: 2 * 1024 * 1024,
+          frameBytes: Buffer.byteLength(JSON.stringify(playPause)),
+          maxBufferedBytes: 2 * 1024 * 1024,
+        },
+        msg: "tray app is not reading IPC frames; closing unhealthy connection",
+      },
+    ]);
+
+    connectedSocket.dispatchEvent(new Event("close"));
+    c.stop();
+  });
+});
+
 describe("IpcClient (integration, real ws mock server)", () => {
   let waiter: Waiter;
   let server: MockTrayServer;

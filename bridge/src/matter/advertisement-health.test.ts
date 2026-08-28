@@ -214,4 +214,31 @@ describe("mDNS advertisement health", () => {
     expect(probe).toHaveBeenCalledTimes(2);
     lifecycle.close();
   });
+
+  it("treats duplicate commissioned state as a no-op", async () => {
+    vi.useFakeTimers();
+    const probe = vi.fn(() => Promise.resolve<"visible">("visible"));
+    const createMonitor = vi.fn(
+      () =>
+        new AdvertisementHealthMonitor({
+          probe,
+          onChange: () => undefined,
+          intervalMs: 1000,
+        }),
+    );
+    const lifecycle = new AdvertisementHealthMonitorLifecycle(createMonitor);
+
+    lifecycle.setCommissioned(false);
+    lifecycle.setCommissioned(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createMonitor).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledOnce();
+
+    lifecycle.setCommissioned(true);
+    lifecycle.setCommissioned(true);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(createMonitor).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledOnce();
+    lifecycle.close();
+  });
 });

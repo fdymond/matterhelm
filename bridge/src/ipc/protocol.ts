@@ -152,7 +152,7 @@ export const SidecarFrameSchema = z.discriminatedUnion("type", [
   PairingFrameSchema,
   MatterStatusFrameSchema,
 ]);
-export type SidecarFrame = z.infer<typeof SidecarFrameSchema>;
+type SidecarFrame = z.infer<typeof SidecarFrameSchema>;
 
 // ---------------------------------------------------------------------------
 // Tray app -> sidecar
@@ -182,7 +182,6 @@ const AckFailSchema = z
   .strict();
 
 export const AckFrameSchema = z.discriminatedUnion("ok", [AckOkSchema, AckFailSchema]);
-export type AckFrame = z.infer<typeof AckFrameSchema>;
 
 /** Reported on connect and on every change (executor observes CoreAudio). */
 export const StateFrameSchema = z.strictObject({
