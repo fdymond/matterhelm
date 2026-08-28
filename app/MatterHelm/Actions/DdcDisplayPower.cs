@@ -15,9 +15,15 @@ internal readonly record struct DdcMonitor(string Id, string Name);
 /// <summary>Outcome of setting VCP power mode on one physical monitor.</summary>
 internal readonly record struct DdcMonitorPowerResult(DdcMonitor Monitor, bool Success, string? Error = null);
 
-/// <summary>Injected boundary around physical-monitor enumeration and VCP writes.</summary>
+/// <summary>Injected boundary around physical-monitor enumeration and VCP operations.</summary>
 internal interface IDdcDisplayPower
 {
+    /// <summary>
+    /// Checks whether each physical monitor exposes the MCCS power-mode VCP
+    /// code. This is read-only: it never changes monitor power state.
+    /// </summary>
+    IReadOnlyList<DdcMonitorPowerResult> ProbePowerSupport();
+
     /// <summary>
     /// Sets <paramref name="mode"/> on all physical monitors, or only on
     /// <paramref name="targets"/> when restoring a previous off transition.
@@ -38,6 +44,17 @@ internal sealed partial class DdcDisplayPower : IDdcDisplayPower
     private const byte PowerModeVcpCode = 0xD6;
     private const int PhysicalMonitorDescriptionSize = 128;
 
+    public IReadOnlyList<DdcMonitorPowerResult> ProbePowerSupport() =>
+        EnumeratePowerOperation(
+            targets: null,
+            handle => GetVCPFeatureAndVCPFeatureReply(
+                handle,
+                PowerModeVcpCode,
+                out _,
+                out _,
+                out _),
+            "GetVCPFeatureAndVCPFeatureReply");
+
     public IReadOnlyList<DdcMonitorPowerResult> SetPower(
         DdcPowerMode mode,
         IReadOnlyCollection<DdcMonitor>? targets = null)
@@ -47,12 +64,23 @@ internal sealed partial class DdcDisplayPower : IDdcDisplayPower
             return [];
         }
 
+        return EnumeratePowerOperation(
+            targets,
+            handle => SetVCPFeature(handle, PowerModeVcpCode, (uint)mode),
+            "SetVCPFeature");
+    }
+
+    private static List<DdcMonitorPowerResult> EnumeratePowerOperation(
+        IReadOnlyCollection<DdcMonitor>? targets,
+        Func<nint, bool> operation,
+        string operationName)
+    {
         var results = new List<DdcMonitorPowerResult>();
         Dictionary<string, DdcMonitor>? remaining = targets?.ToDictionary(target => target.Id);
         int logicalIndex = 0;
         MonitorEnumProc callback = (hMonitor, _, _, _) =>
         {
-            ProcessLogicalMonitor(hMonitor, logicalIndex++, mode, remaining, results);
+            ProcessLogicalMonitor(hMonitor, logicalIndex++, remaining, operation, operationName, results);
             return true;
         };
 
@@ -78,8 +106,9 @@ internal sealed partial class DdcDisplayPower : IDdcDisplayPower
     private static void ProcessLogicalMonitor(
         nint hMonitor,
         int logicalIndex,
-        DdcPowerMode mode,
         Dictionary<string, DdcMonitor>? remaining,
+        Func<nint, bool> operation,
+        string operationName,
         List<DdcMonitorPowerResult> results)
     {
         if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out uint count))
@@ -118,14 +147,14 @@ internal sealed partial class DdcDisplayPower : IDdcDisplayPower
                     continue;
                 }
 
-                if (SetVCPFeature(physical.Handle, PowerModeVcpCode, (uint)mode))
+                if (operation(physical.Handle))
                 {
                     results.Add(new DdcMonitorPowerResult(monitor, Success: true));
                 }
                 else
                 {
                     int error = Marshal.GetLastPInvokeError();
-                    results.Add(Failure(monitor, $"SetVCPFeature failed ({error})."));
+                    results.Add(Failure(monitor, $"{operationName} failed ({error})."));
                 }
             }
         }
@@ -191,4 +220,13 @@ internal sealed partial class DdcDisplayPower : IDdcDisplayPower
     [LibraryImport("dxva2.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetVCPFeature(nint hMonitor, byte vcpCode, uint newValue);
+
+    [LibraryImport("dxva2.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetVCPFeatureAndVCPFeatureReply(
+        nint hMonitor,
+        byte vcpCode,
+        out uint vcpCodeType,
+        out uint currentValue,
+        out uint maximumValue);
 }

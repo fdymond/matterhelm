@@ -4,7 +4,14 @@ using System.Net.Sockets;
 
 namespace MatterHelm;
 
-internal sealed record NetworkAdapterInfo(string Name, string? Ipv4Address);
+internal sealed record NetworkAdapterInfo(
+    string Name,
+    string? Ipv4Address,
+    string Description = "",
+    OperationalStatus OperationalStatus = OperationalStatus.Up,
+    NetworkInterfaceType InterfaceType = NetworkInterfaceType.Ethernet,
+    bool HasIpUnicastAddress = true,
+    bool HasIpv4DefaultGateway = false);
 
 internal interface INetworkAdapterProvider
 {
@@ -13,6 +20,21 @@ internal interface INetworkAdapterProvider
 
 internal sealed class SystemNetworkAdapterProvider : INetworkAdapterProvider
 {
+    // These description markers identify common host-only, VPN, capture, and
+    // virtual-switch adapters; a real IPv4 default gateway overrides the hint.
+    private static readonly string[] VirtualAdapterDescriptionKeywords =
+    [
+        "Hyper-V",
+        "vEthernet",
+        "WSL",
+        "VMware",
+        "VirtualBox",
+        "TAP",
+        "Npcap",
+        "loopback",
+        "Bluetooth Device (Personal Area Network)",
+    ];
+
     internal static SystemNetworkAdapterProvider Instance { get; } = new();
 
     private SystemNetworkAdapterProvider()
@@ -24,8 +46,7 @@ internal sealed class SystemNetworkAdapterProvider : INetworkAdapterProvider
         try
         {
             return NetworkInterface.GetAllNetworkInterfaces()
-                .Where(adapter => IsEligible(adapter.OperationalStatus, adapter.NetworkInterfaceType))
-                .Select(adapter => new NetworkAdapterInfo(adapter.Name, GetIpv4Address(adapter)))
+                .Select(CreateSnapshot)
                 .OrderBy(adapter => adapter.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
@@ -35,21 +56,68 @@ internal sealed class SystemNetworkAdapterProvider : INetworkAdapterProvider
         }
     }
 
-    internal static bool IsEligible(OperationalStatus status, NetworkInterfaceType type) =>
-        status == OperationalStatus.Up && type != NetworkInterfaceType.Loopback;
+    internal static bool IsVisibleByDefault(NetworkAdapterInfo adapter) =>
+        IsUpIpLanAdapter(adapter)
+        && (adapter.HasIpv4DefaultGateway || !DescriptionLooksVirtual(adapter.Description));
+
+    internal static bool IsVisibleWhenShowingAll(NetworkAdapterInfo adapter) =>
+        adapter.OperationalStatus == OperationalStatus.Up
+        && adapter.InterfaceType != NetworkInterfaceType.Loopback;
 
     internal static string? FirstIpv4Address(IEnumerable<IPAddress> addresses) =>
         addresses.FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork)?.ToString();
 
-    private static string? GetIpv4Address(NetworkInterface adapter)
+    private static bool IsUpIpLanAdapter(NetworkAdapterInfo adapter) =>
+        adapter.OperationalStatus == OperationalStatus.Up
+        && IsEthernetOrWireless(adapter.InterfaceType)
+        && adapter.HasIpUnicastAddress;
+
+    private static bool IsEthernetOrWireless(NetworkInterfaceType type) => type is
+        NetworkInterfaceType.Ethernet
+        or NetworkInterfaceType.Ethernet3Megabit
+        or NetworkInterfaceType.FastEthernetT
+        or NetworkInterfaceType.FastEthernetFx
+        or NetworkInterfaceType.GigabitEthernet
+        or NetworkInterfaceType.Wireless80211;
+
+    private static bool DescriptionLooksVirtual(string description) =>
+        VirtualAdapterDescriptionKeywords.Any(keyword =>
+            description.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+
+    private static NetworkAdapterInfo CreateSnapshot(NetworkInterface adapter)
     {
         try
         {
-            return FirstIpv4Address(adapter.GetIPProperties().UnicastAddresses.Select(address => address.Address));
+            IPInterfaceProperties properties = adapter.GetIPProperties();
+            IPAddress[] unicastAddresses =
+            [
+                .. properties.UnicastAddresses
+                    .Select(address => address.Address)
+                    .Where(address => address.AddressFamily is
+                        AddressFamily.InterNetwork or AddressFamily.InterNetworkV6),
+            ];
+            bool hasIpv4DefaultGateway = properties.GatewayAddresses.Any(gateway =>
+                gateway.Address.AddressFamily == AddressFamily.InterNetwork
+                && !gateway.Address.Equals(IPAddress.Any));
+            return new NetworkAdapterInfo(
+                adapter.Name,
+                FirstIpv4Address(unicastAddresses),
+                adapter.Description,
+                adapter.OperationalStatus,
+                adapter.NetworkInterfaceType,
+                unicastAddresses.Length > 0,
+                hasIpv4DefaultGateway);
         }
         catch (NetworkInformationException)
         {
-            return null;
+            return new NetworkAdapterInfo(
+                adapter.Name,
+                null,
+                adapter.Description,
+                adapter.OperationalStatus,
+                adapter.NetworkInterfaceType,
+                HasIpUnicastAddress: false,
+                HasIpv4DefaultGateway: false);
         }
     }
 }

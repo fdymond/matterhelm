@@ -1,5 +1,21 @@
 namespace MatterHelm.Actions;
 
+/// <summary>The display-off implementation that completed an action.</summary>
+public enum DisplayPowerOffPath
+{
+    /// <summary>No display-off path completed.</summary>
+    None,
+
+    /// <summary>At least one monitor was powered off directly through DDC/CI.</summary>
+    Ddc,
+
+    /// <summary>Windows global display blanking was used because no DDC/CI monitor succeeded.</summary>
+    BlankingFallback,
+}
+
+/// <summary>Outcome of a display-off request, including the path needed for truthful UI feedback.</summary>
+public readonly record struct DisplayPowerOffResult(bool Ok, DisplayPowerOffPath Path);
+
 /// <summary>
 /// Single dispatch point mapping protocol action names onto Windows side effects.
 /// Never throws: every failure is logged and reported as <c>false</c> so the caller
@@ -57,8 +73,8 @@ public sealed class ActionExecutor : IDisposable
                     return AppLaunch.Start(request);
                 case "keySequence" when value is ParsedKeyChord chord:
                     return KeyChord.Press(chord);
-                // For now power maps straight to the displays; S2-4 layers the
-                // configurable powerOff behavior (displays off vs. sleep) on top.
+                // These are the display primitives; BridgeHost.RoutePowerAction
+                // selects them or sleep/screensaver from the configured behavior.
                 case "powerOn":
                     return _displayPower.DisplaysOn();
                 case "powerOff":
@@ -87,6 +103,20 @@ public sealed class ActionExecutor : IDisposable
         {
             Log.Error($"ActionExecutor: action '{name}' failed: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <summary>Executes display-off and retains the concrete path in the result.</summary>
+    public DisplayPowerOffResult ExecuteDisplaysOff()
+    {
+        try
+        {
+            return _displayPower.DisplaysOffWithResult();
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"ActionExecutor: action 'powerOff' failed: {ex.Message}");
+            return new DisplayPowerOffResult(false, DisplayPowerOffPath.None);
         }
     }
 

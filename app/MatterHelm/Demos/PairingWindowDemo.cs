@@ -3,13 +3,15 @@ using System.Drawing.Imaging;
 namespace MatterHelm.Demos;
 
 /// <summary>
-/// S2-4 acceptance evidence, extended for the S10-7 onboarding pass: walks
+/// S2-4 acceptance evidence, extended for the S10-23 compact onboarding pass: walks
 /// <see cref="Ui.PairingWindow"/> through all four stages with a sample
 /// commissioning payload, screenshots each next to the exe, and objectively
 /// checks that (a) it opens on "starting" rather than an empty code panel,
 /// (b) delivering a code moves it to "ready to scan" on its own, (c) the QR
 /// really rendered (non-trivial pixel variance, not a blank box), and (d) the
-/// "paired" stage hides the now-unscannable code, and (e) an advertisement
+/// compact ready stage keeps only its essentials visible, long requirements
+/// start collapsed but preserve the IPv6/Console/identity guidance, the
+/// "paired" stage hides the now-unscannable code, and an advertisement
 /// failure hides the misleading code and reports the error. Returns 0
 /// iff every check passes. Invoked via
 /// <c>MatterHelm.exe --demo-pairing-window</c>; not part of the production
@@ -48,14 +50,21 @@ internal static class PairingWindowDemo
         // S10-7: a fresh window must open on "Starting", not on a stale/blank
         // code panel — that empty-QR state was the original complaint.
         DemoSupport.Pump(StagePumpMilliseconds);
-        bool startsOnStarting = window.StatusText.Contains("Starting the bridge", StringComparison.Ordinal);
+        bool startsOnStarting = window.StatusText.Contains("Advertisement starting", StringComparison.Ordinal);
         Capture(window, "pairing-window-demo-starting.png");
 
         // Delivering a code must move the window to "ready to scan" by itself.
         Screen startingScreen = Screen.FromRectangle(window.Bounds);
         window.SetPairingInfo(DemoQrPayload, DemoManualCode);
         DemoSupport.Pump(DemoDisplayMilliseconds);
-        bool codeShowsWaiting = window.StatusText.Contains("Waiting for the Google Home app", StringComparison.Ordinal);
+        bool codeShowsWaiting = window.StatusText.Contains("Waiting for Google Home", StringComparison.Ordinal);
+        bool compactEssentialsPresent = window.QrVisible
+            && window.ManualCodeVisible
+            && window.ManualCodeText == DemoManualCode
+            && window.MatterIdentityText == "VID 0xFFF1 · PID 0x8000 — must match your Google Developer Console integration"
+            && !window.StatusText.Contains('\n');
+        bool requirementsStartCollapsed = window.SetupRequirementsLinkVisible
+            && !window.SetupRequirementsExpanded;
         Rectangle workingArea = startingScreen.WorkingArea;
         Point expectedCenter = new(
             workingArea.Left + ((workingArea.Width - window.Width) / 2),
@@ -80,6 +89,15 @@ internal static class PairingWindowDemo
         using Bitmap qrBitmap = windowBitmap.Clone(qrBounds, windowBitmap.PixelFormat);
         bool hasVariance = HasPixelVariance(qrBitmap, MinDistinctSampledColors);
 
+        window.SetRequirementsExpanded(true);
+        DemoSupport.Pump(StagePumpMilliseconds);
+        bool expandedRequirementsComplete = window.SetupRequirementsExpanded
+            && window.DeveloperConsoleHintText.Contains("Reboot the Nest hub", StringComparison.Ordinal)
+            && window.InstallIdentityHintText.Contains("cloned machine", StringComparison.Ordinal)
+            && window.Ipv6RequirementText == "IPv6 must be enabled on any network interface used by MatterHelm.";
+        Capture(window, "pairing-window-demo-requirements.png");
+        window.SetRequirementsExpanded(false);
+
         // Already-commissioned: matter.js cannot mint a second code, so the
         // window must say so instead of showing a dead QR nobody can scan.
         window.SetStage(Ui.PairingStage.Paired);
@@ -91,19 +109,32 @@ internal static class PairingWindowDemo
         window.SetStage(Ui.PairingStage.DiscoveryError);
         DemoSupport.Pump(StagePumpMilliseconds);
         bool errorHidesCode = !window.QrVisible
-            && window.StatusText.Contains("not available", StringComparison.Ordinal);
+            && window.StatusText.Contains("Advertisement unavailable", StringComparison.Ordinal);
         Capture(window, "pairing-window-demo-discovery-error.png");
 
         Console.WriteLine($"[{Verdict(startsOnStarting)}] Opens on the \"starting\" stage, no blank QR.");
         Console.WriteLine($"[{Verdict(codeShowsWaiting)}] A delivered code moves the window to \"ready to scan\".");
+        Console.WriteLine($"[{Verdict(compactEssentialsPresent)}] Ready stage keeps QR, manual code, identity, and one compact status line visible.");
+        Console.WriteLine($"[{Verdict(requirementsStartCollapsed)}] Setup requirements are collapsed by default.");
+        Console.WriteLine($"[{Verdict(expandedRequirementsComplete)}] Expanded requirements preserve Console, hub reboot, clone, and IPv6 guidance.");
         Console.WriteLine($"[{Verdict(stageChangeCentered)}] A stage change re-centers the resized window on its current screen.");
         Console.WriteLine($"[{Verdict(hasVariance)}] QR image rendered with non-trivial pixel variance.");
         Console.WriteLine($"[{Verdict(pairedHidesCode)}] The \"paired\" stage hides the code and explains why.");
         Console.WriteLine($"[{Verdict(errorHidesCode)}] Advertisement failure hides the code and reports the error.");
         Console.WriteLine($"(screenshot: {outputPath})");
 
+        bool overall = startsOnStarting
+            && codeShowsWaiting
+            && compactEssentialsPresent
+            && requirementsStartCollapsed
+            && expandedRequirementsComplete
+            && stageChangeCentered
+            && hasVariance
+            && pairedHidesCode
+            && errorHidesCode;
+        Console.WriteLine($"OVERALL: {Verdict(overall)}");
         window.Close();
-        return startsOnStarting && codeShowsWaiting && stageChangeCentered && hasVariance && pairedHidesCode && errorHidesCode ? 0 : 1;
+        return overall ? 0 : 1;
     }
 
     private static string Verdict(bool pass) => pass ? "PASS" : "FAIL";

@@ -154,6 +154,14 @@ public sealed class OverlayHud : IDisposable
             return $"{Math.Clamp(volumePercent, 0, 100)} %";
         }
 
+        // S10-25: successful Google Home commands normally show their stable
+        // command identity (S10-19), but a blanking fallback materially changes
+        // the outcome and must retain the producer's warning.
+        if (content.Pill.Contains("standby likely", StringComparison.OrdinalIgnoreCase))
+        {
+            return content.Pill;
+        }
+
         return IsGoogleHomeCommand(content) ? CommandPillIdentity(command) : content.Pill;
     }
 

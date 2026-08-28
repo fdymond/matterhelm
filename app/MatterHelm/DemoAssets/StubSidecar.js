@@ -51,6 +51,21 @@ function sendCustom(key) {
 ws.addEventListener('open', () => {
   log(30, 'stub: connected; sending hello');
   send({ v: 3, type: 'hello', token, protocol: 1 });
+  // The stub models a COMMISSIONED bridge, so it must report matterStatus:
+  // since S10-12 the tray only reaches Connected (green) once a matterStatus
+  // frame arrives — without it the demo would sit on Running (amber) forever.
+  // commissioned=true pairs with advertisement="notApplicable" (protocol
+  // cross-field invariant, BLUEPRINT §2.3).
+  setTimeout(
+    () =>
+      send({
+        v: 3,
+        type: 'matterStatus',
+        commissioned: true,
+        advertisement: 'notApplicable',
+      }),
+    150,
+  );
   setTimeout(() => sendAction('setVolume', 37), 300);
   setTimeout(() => sendAction('setMuted', false), 800);
   setTimeout(() => sendAction('playPause'), 1300);

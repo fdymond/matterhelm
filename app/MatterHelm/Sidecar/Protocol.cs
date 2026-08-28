@@ -172,7 +172,7 @@ public sealed class SidecarParseResult
 /// </summary>
 public static class Protocol
 {
-    /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). 2 since the <c>custom</c> action variant landed (ADR-004 §3); only this exact value parses.</summary>
+    /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). Version 3 adds Matter lifecycle and advertisement health; only this exact value parses.</summary>
     public const int Version = 3;
 
     /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v3 — no breaking field changes.</summary>

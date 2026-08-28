@@ -874,8 +874,12 @@ public sealed partial class SettingsWindow : Form
 
     private ComboBox BuildChoice(SettingDescriptor setting)
     {
-        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(180) };
-        IReadOnlyList<string> labels = setting.ChoiceLabels.Count > 0 ? setting.ChoiceLabels : setting.Choices;
+        var combo = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = S(setting.Id == "power-off-action" ? 390 : 180),
+        };
+        IReadOnlyList<string> labels = _vm.GetChoiceLabels(setting);
         foreach (string label in labels)
         {
             combo.Items.Add(label);
@@ -898,37 +902,72 @@ public sealed partial class SettingsWindow : Form
         return combo;
     }
 
-    private ComboBox BuildNetworkAdapterChoice(SettingDescriptor setting)
+    private FlowLayoutPanel BuildNetworkAdapterChoice(SettingDescriptor setting)
     {
-        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(300) };
+        var panel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty,
+        };
+        var combo = new ComboBox
+        {
+            Name = "mdns-interface-choice",
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = S(300),
+        };
+        var showAll = new CheckBox
+        {
+            Name = "mdns-show-all-adapters",
+            Text = "Show all adapters",
+            AutoSize = true,
+            Margin = SP(8, 3, 0, 0),
+        };
         IReadOnlyList<(string Value, string Label)> choices = [];
+        bool rebuildingChoices = false;
         combo.SelectedIndexChanged += (_, _) =>
         {
-            if (combo.SelectedIndex >= 0)
+            if (!rebuildingChoices && combo.SelectedIndex >= 0)
             {
                 OnEdited(setting, choices[combo.SelectedIndex].Value);
             }
         };
-        _editorRefreshers.Add(() =>
-        {
-            choices = _vm.GetMdnsInterfaceChoices();
-            combo.BeginUpdate();
-            combo.Items.Clear();
-            foreach ((string _, string label) in choices)
-            {
-                combo.Items.Add(label);
-            }
 
-            string value = (string)setting.Get!(_vm.Working)!;
-            combo.SelectedIndex = choices
-                .Select((choice, index) => (choice, index))
-                .Where(pair => pair.choice.Value == value)
-                .Select(pair => pair.index)
-                .DefaultIfEmpty(-1)
-                .First();
-            combo.EndUpdate();
-        });
-        return combo;
+        void RefreshChoices()
+        {
+            choices = _vm.GetMdnsInterfaceChoices(showAll.Checked);
+            rebuildingChoices = true;
+            combo.BeginUpdate();
+            try
+            {
+                combo.Items.Clear();
+                foreach ((string _, string label) in choices)
+                {
+                    combo.Items.Add(label);
+                }
+
+                string value = (string)setting.Get!(_vm.Working)!;
+                combo.SelectedIndex = choices
+                    .Select((choice, index) => (choice, index))
+                    .Where(pair => pair.choice.Value == value)
+                    .Select(pair => pair.index)
+                    .DefaultIfEmpty(-1)
+                    .First();
+            }
+            finally
+            {
+                combo.EndUpdate();
+                rebuildingChoices = false;
+            }
+        }
+
+        showAll.CheckedChanged += (_, _) => RefreshChoices();
+        _editorRefreshers.Add(RefreshChoices);
+        panel.Controls.Add(combo);
+        panel.Controls.Add(showAll);
+        return panel;
     }
 
     private TextBox BuildReadOnly(SettingDescriptor setting)
