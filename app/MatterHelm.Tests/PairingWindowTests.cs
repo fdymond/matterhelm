@@ -8,20 +8,45 @@ public static class PairingWindowTests
     private const string SampleQrPayload = "MT:Y.K90C0R159FZO62N10";
 
     [Fact]
-    public static void ReadyToScanShowsTheConfiguredMatterIdentityAndRecoveryGuidance()
+    public static void ReadyToScanKeepsEssentialsVisibleAndRequirementsCollapsed()
     {
         using var window = new PairingWindow(0xFFF3, 0x801A);
+        window.Show();
 
-        window.SetStage(PairingStage.ReadyToScan);
+        window.SetPairingInfo(SampleQrPayload, "0434-914-6415");
 
         Assert.True(window.IdentityHelpVisible);
-        Assert.Contains("VID 0xFFF3 · PID 0x801A", window.MatterIdentityText, StringComparison.Ordinal);
-        Assert.Contains("must EXACTLY match a Matter integration", window.DeveloperConsoleHintText, StringComparison.Ordinal);
+        Assert.True(window.QrVisible);
+        Assert.True(window.ManualCodeVisible);
+        Assert.Equal("0434-914-6415", window.ManualCodeText);
+        Assert.Equal(
+            "VID 0xFFF3 · PID 0x801A — must match your Google Developer Console integration",
+            window.MatterIdentityText);
+        Assert.Equal("Advertisement active · Waiting for Google Home", window.StatusText);
+        Assert.DoesNotContain('\n', window.StatusText);
+        Assert.True(window.SetupRequirementsLinkVisible);
+        Assert.False(window.SetupRequirementsExpanded);
+    }
+
+    [Fact]
+    public static void ExpandedRequirementsPreserveConsoleHubIdentityCloneAndIpv6Guidance()
+    {
+        using var window = new PairingWindow(0xFFF3, 0x801A);
+        window.Show();
+        window.SetStage(PairingStage.ReadyToScan);
+
+        window.SetRequirementsExpanded(true);
+
+        Assert.True(window.SetupRequirementsExpanded);
+        Assert.Contains("register the VID/PID shown above", window.DeveloperConsoleHintText, StringComparison.Ordinal);
         Assert.Contains("Google Home Developer Console", window.DeveloperConsoleHintText, StringComparison.Ordinal);
         Assert.Contains("Reboot the Nest hub after any Console change", window.DeveloperConsoleHintText, StringComparison.Ordinal);
-        Assert.Contains("unique per-install seed", window.InstallIdentityHintText, StringComparison.Ordinal);
-        Assert.Contains("Each computer needs its own", window.InstallIdentityHintText, StringComparison.Ordinal);
-        Assert.Contains("never copy config.json or the seed between PCs", window.InstallIdentityHintText, StringComparison.Ordinal);
+        Assert.Contains("every install needs a unique seed", window.InstallIdentityHintText, StringComparison.Ordinal);
+        Assert.Contains("Never copy config.json or its seed between PCs", window.InstallIdentityHintText, StringComparison.Ordinal);
+        Assert.Contains("cloned machine must mint a new seed", window.InstallIdentityHintText, StringComparison.Ordinal);
+        Assert.Equal(
+            "IPv6 must be enabled on any network interface used by MatterHelm.",
+            window.Ipv6RequirementText);
     }
 
     [Fact]
@@ -114,7 +139,8 @@ public static class PairingWindowTests
         Assert.Equal(CenteredLocation(screen.WorkingArea, window.Size), window.Location);
         Assert.False(window.QrVisible);
         Assert.True(window.AutoCloseScheduled);
-        Assert.Contains("closes itself in about 4 seconds", window.StatusText, StringComparison.Ordinal);
+        Assert.Contains("Closing in about 4 seconds", window.StatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', window.StatusText);
         Assert.Equal(TimeSpan.FromSeconds(4), scheduledDelay);
 
         Assert.IsType<Action>(scheduledClose)();

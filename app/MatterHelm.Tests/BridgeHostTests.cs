@@ -49,6 +49,35 @@ public static class BridgeHostTests
         }
     }
 
+    public sealed class LifecycleSerialization
+    {
+        [Fact]
+        public async Task RapidOffThenOnRunsInArrivalOrderAndEndsEnabled()
+        {
+            using var stopEntered = new ManualResetEventSlim();
+            using var allowStopToFinish = new ManualResetEventSlim();
+            var transitions = new List<bool>();
+            var queue = new SerialActionQueue(ex => throw new Xunit.Sdk.XunitException(ex.Message));
+
+            Task off = queue.Enqueue(() =>
+            {
+                transitions.Add(false);
+                stopEntered.Set();
+                allowStopToFinish.Wait();
+            });
+            Assert.True(stopEntered.Wait(TimeSpan.FromSeconds(2)));
+            Task on = queue.Enqueue(() => transitions.Add(true));
+
+            Assert.False(on.IsCompleted, "enable must wait for the complete stop operation");
+            allowStopToFinish.Set();
+            await Task.WhenAll(off, on);
+            queue.Complete();
+
+            Assert.Equal([false, true], transitions);
+            Assert.True(transitions[^1]);
+        }
+    }
+
     public sealed class PowerRouting
     {
         [Theory]
@@ -96,6 +125,35 @@ public static class BridgeHostTests
 
             Assert.False(ok);
             Assert.Equal(["playPause", "powerOff"], calls);
+        }
+
+        [Theory]
+        [InlineData(PowerOffAction.DisplaysOff, DisplayPowerOffPath.Ddc, "displays off")]
+        [InlineData(PowerOffAction.DisplaysOff, DisplayPowerOffPath.BlankingFallback, "Displays off — standby likely")]
+        [InlineData(PowerOffAction.PauseAndDisplaysOff, DisplayPowerOffPath.Ddc, "paused + displays off")]
+        [InlineData(PowerOffAction.PauseAndDisplaysOff, DisplayPowerOffPath.BlankingFallback, "Paused + displays off — standby likely")]
+        public void DisplaysOffPillReflectsThePathThatActuallyExecuted(
+            PowerOffAction action,
+            DisplayPowerOffPath path,
+            string expectedPill)
+        {
+            int resultCalls = 0;
+
+            (bool ok, string pill) = BridgeHost.RoutePowerAction(
+                action,
+                on: false,
+                (name, _) => name == "playPause"
+                    ? true
+                    : throw new InvalidOperationException("Generic power-off must not hide the path."),
+                () =>
+                {
+                    resultCalls++;
+                    return new DisplayPowerOffResult(true, path);
+                });
+
+            Assert.True(ok);
+            Assert.Equal(expectedPill, pill);
+            Assert.Equal(1, resultCalls);
         }
 
         [Fact]
@@ -884,6 +942,64 @@ public static class BridgeHostTests
             // The volume executed while the macro is still inside its 3 s
             // delay — its media-key step must not have run yet.
             Assert.DoesNotContain(("mediaStop", (object?)null), _executor.Calls);
+        }
+
+        [Fact]
+        public async Task DisposingCancelsAndDrainsTrackedDelayBearingMacros()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "shutdown-macro",
+                    Name = "Shutdown Macro",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new DelayActionConfig { Ms = 3_000 },
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                        ],
+                    },
+                },
+            ];
+            var host = CreateHost(NodeClientSpec(
+                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"shutdown-macro"}"""));
+            host.SetEnabled(true);
+            await TestSupport.WaitUntilAsync(
+                () => host.RunningMacroCount == 1,
+                TimeSpan.FromSeconds(10),
+                "the delay-bearing macro to be tracked");
+
+            host.Dispose();
+
+            Assert.Equal(0, host.RunningMacroCount);
+            Assert.DoesNotContain(("mediaStop", (object?)null), _executor.Calls);
+            Assert.True(_log.Contains("ERROR", "macro cancelled (shutting down)"));
+        }
+
+        [Fact]
+        public async Task QueuedRapidDisableEnableEndsConnectedWithoutAPortCollision()
+        {
+            _config.Current.BridgeEnabled = true;
+            Assert.True(_config.Save());
+            using var host = CreateHost(NodeClientSpec());
+            host.SetEnabled(true);
+            await TestSupport.WaitUntilAsync(
+                () => host.State == BridgeState.Connected,
+                TimeSpan.FromSeconds(10),
+                "bridge to connect before rapid lifecycle changes");
+
+            Task disabled = host.QueueSetEnabled(false);
+            Task enabled = host.QueueSetEnabled(true);
+            await Task.WhenAll(disabled, enabled);
+            await TestSupport.WaitUntilAsync(
+                () => host.State == BridgeState.Connected,
+                TimeSpan.FromSeconds(10),
+                "bridge to reconnect after queued off/on");
+
+            Assert.True(_config.Current.BridgeEnabled);
+            Assert.False(_log.Contains("ERROR", "cannot listen on port"));
         }
 
         [Fact]

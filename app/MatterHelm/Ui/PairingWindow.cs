@@ -28,10 +28,10 @@ public enum PairingStage
 /// System.Drawing-coupled QRCode-Core renderer, no cloud QR service) plus the
 /// manual pairing code as large, selectable text.
 ///
-/// <para><b>S10-7 onboarding pass.</b> The window is a wizard step, not a
-/// picture: it carries numbered instructions naming the real Home-app path,
-/// and a live status strip driven by <see cref="SetStage"/> so the user can
-/// see the outcome instead of guessing. Four stages:
+/// <para><b>S10-7/S10-23 onboarding pass.</b> The compact window keeps the
+/// scannable essentials and one live status line prominent; longer Home-app,
+/// Console, IPv6, and per-install identity guidance is collapsed under Setup
+/// requirements by default. <see cref="SetStage"/> drives four live stages:
 /// <see cref="PairingStage.Starting"/> (no code yet — QR hidden rather than
 /// showing a meaningless placeholder), <see cref="PairingStage.ReadyToScan"/>,
 /// <see cref="PairingStage.Paired"/>, which hides the code entirely, and
@@ -47,7 +47,8 @@ public enum PairingStage
 /// </summary>
 public sealed class PairingWindow : Form
 {
-    private const int QrDisplaySizeLogical = 300;
+    private const int QrDisplaySizeLogical = 260;
+    private const int ContentWidthLogical = 500;
     private static readonly TimeSpan PairedAutoCloseDelay = TimeSpan.FromSeconds(4);
 
     private readonly PictureBox _qrBox;
@@ -59,7 +60,11 @@ public sealed class PairingWindow : Form
     private readonly Label _matterIdentity;
     private readonly LinkLabel _consoleHint;
     private readonly Label _installIdentityHint;
+    private readonly Label _ipv6Hint;
+    private readonly LinkLabel _requirementsLink;
+    private readonly TableLayoutPanel _requirementsPanel;
     private readonly TableLayoutPanel _layout;
+    private readonly List<Font> _ownedFonts = [];
 
     private readonly Color _statusOkColor;
     private readonly Color _statusWaitingColor;
@@ -67,6 +72,7 @@ public sealed class PairingWindow : Form
     private readonly System.Windows.Forms.Timer _autoCloseTimer;
     private bool _stageInitialized;
     private bool _autoCloseScheduled;
+    private bool _requirementsExpanded;
     private PairingStage _currentStage;
 
     /// <summary>Builds the (initially empty) window chrome; call <see cref="SetPairingInfo"/> to populate it.</summary>
@@ -116,7 +122,7 @@ public sealed class PairingWindow : Form
         _heading = new Label
         {
             AutoSize = true,
-            Font = new Font("Segoe UI", 13.5f, FontStyle.Regular),
+            Font = OwnFont(13.5f, FontStyle.Regular),
             Margin = SP(0, 0, 0, 8),
         };
 
@@ -125,14 +131,12 @@ public sealed class PairingWindow : Form
         // branch — following it, a Matter device can never be added.
         _steps = new Label
         {
-            Text = "1.  Open the Google Home app on your phone.\n"
-                + "2.  Tap  +  →  Add device  →  Matter-enabled device.\n"
-                + "3.  Scan the code below, or enter the digits instead.\n"
-                + "4.  Tap past the \"not certified\" notice, then pick a room.",
+            Text = "Google Home: tap + → Add device → Matter-enabled device, then scan the QR "
+                + "or enter the manual code. Continue past the expected not-certified notice.",
             AutoSize = true,
-            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
-            Font = new Font("Segoe UI", 9.5f),
-            Margin = SP(0, 0, 0, 14),
+            MaximumSize = new Size(S(ContentWidthLogical), 0),
+            Font = OwnFont(8.5f),
+            Margin = SP(0, 0, 0, 7),
         };
 
         _qrBox = new PictureBox
@@ -154,7 +158,7 @@ public sealed class PairingWindow : Form
         {
             Text = "Or enter this code manually",
             AutoSize = true,
-            Font = new Font("Segoe UI", 8.5f),
+            Font = OwnFont(8.5f),
             ForeColor = SystemColors.GrayText,
             Margin = SP(0, 14, 0, 0),
         };
@@ -172,7 +176,7 @@ public sealed class PairingWindow : Form
             // keyboard/programmatic Activate() (rather than a mouse click)
             // selects all its text and can auto-scroll to the caret — at 20pt
             // that scroll clipped the start of the code off-screen.
-            Font = new Font("Segoe UI", 16f, FontStyle.Bold),
+            Font = OwnFont(16f, FontStyle.Bold),
             Width = S(QrDisplaySizeLogical),
             Cursor = Cursors.IBeam,
             Margin = SP(0, 2, 0, 0),
@@ -182,18 +186,17 @@ public sealed class PairingWindow : Form
         _status = new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            Margin = SP(0, 16, 0, 0),
+            MaximumSize = new Size(S(ContentWidthLogical), 0),
+            Font = OwnFont(9.5f, FontStyle.Bold),
+            Margin = SP(0, 0, 0, 12),
         };
 
         _matterIdentity = new Label
         {
-            Text = $"Active Matter identity:  VID {MatterIds.Format(vendorId)} · PID {MatterIds.Format(productId)}",
+            Text = $"VID {MatterIds.Format(vendorId)} · PID {MatterIds.Format(productId)} — must match your Google Developer Console integration",
             AutoSize = true,
-            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
-            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-            Margin = SP(0, 16, 0, 0),
+            Font = OwnFont(8.5f),
+            Margin = SP(0, 12, 0, 0),
         };
 
         // Google rejects an unregistered test identity before connecting and
@@ -202,13 +205,13 @@ public sealed class PairingWindow : Form
         const string developerConsoleName = "Google Home Developer Console";
         _consoleHint = new LinkLabel
         {
-            Text = $"These IDs must EXACTLY match a Matter integration in your {developerConsoleName} project. "
+            Text = $"Console setup: register the VID/PID shown above in a Matter integration in the {developerConsoleName}. "
                 + "Reboot the Nest hub after any Console change.",
             AutoSize = true,
-            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
-            Font = new Font("Segoe UI", 8.5f),
+            MaximumSize = new Size(S(ContentWidthLogical), 0),
+            Font = OwnFont(8.5f),
             LinkArea = new LinkArea(0, 0),
-            Margin = SP(0, 4, 0, 0),
+            Margin = SP(0, 0, 0, 7),
         };
         _consoleHint.Links.Clear();
         _consoleHint.Links.Add(_consoleHint.Text.IndexOf(developerConsoleName, StringComparison.Ordinal), developerConsoleName.Length, "https://console.home.google.com/");
@@ -216,24 +219,56 @@ public sealed class PairingWindow : Form
 
         _installIdentityHint = new Label
         {
-            Text = "This PC's Matter identity is minted from a unique per-install seed. "
-                + "Each computer needs its own; never copy config.json or the seed between PCs.",
+            Text = "Identity: every install needs a unique seed. Never copy config.json or its seed between PCs; "
+                + "a cloned machine must mint a new seed before pairing.",
             AutoSize = true,
-            MaximumSize = new Size(S(QrDisplaySizeLogical + 40), 0),
-            Font = new Font("Segoe UI", 8.5f),
+            MaximumSize = new Size(S(ContentWidthLogical), 0),
+            Font = OwnFont(8.5f),
             ForeColor = SystemColors.GrayText,
-            Margin = SP(0, 8, 0, 0),
+            Margin = SP(0, 0, 0, 0),
         };
 
+        _ipv6Hint = new Label
+        {
+            Text = "IPv6 must be enabled on any network interface used by MatterHelm.",
+            AutoSize = true,
+            MaximumSize = new Size(S(ContentWidthLogical), 0),
+            Font = OwnFont(8.5f, FontStyle.Bold),
+            Margin = SP(0, 0, 0, 7),
+        };
+
+        _requirementsLink = new LinkLabel
+        {
+            Text = "Setup requirements…",
+            AutoSize = true,
+            Font = OwnFont(8.5f),
+            Margin = SP(0, 8, 0, 0),
+        };
+        _requirementsLink.LinkClicked += (_, _) => SetRequirementsExpanded(!_requirementsExpanded);
+
+        _requirementsPanel = new TableLayoutPanel
+        {
+            ColumnCount = 1,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MaximumSize = new Size(S(ContentWidthLogical), 0),
+            Margin = SP(0, 8, 0, 0),
+            Padding = SP(10, 8, 10, 8),
+            BackColor = SystemColors.Control,
+        };
+        _requirementsPanel.Controls.Add(_steps);
+        _requirementsPanel.Controls.Add(_consoleHint);
+        _requirementsPanel.Controls.Add(_ipv6Hint);
+        _requirementsPanel.Controls.Add(_installIdentityHint);
+
         _layout.Controls.Add(_heading);
-        _layout.Controls.Add(_steps);
+        _layout.Controls.Add(_status);
         _layout.Controls.Add(_qrBox);
         _layout.Controls.Add(_codeCaption);
         _layout.Controls.Add(_codeBox);
-        _layout.Controls.Add(_status);
         _layout.Controls.Add(_matterIdentity);
-        _layout.Controls.Add(_consoleHint);
-        _layout.Controls.Add(_installIdentityHint);
+        _layout.Controls.Add(_requirementsLink);
+        _layout.Controls.Add(_requirementsPanel);
         Controls.Add(_layout);
 
         _autoCloseTimer = new System.Windows.Forms.Timer
@@ -268,6 +303,21 @@ public sealed class PairingWindow : Form
 
     /// <summary>The per-install seed warning, exposed for focused UI specification tests.</summary>
     public string InstallIdentityHintText => _installIdentityHint.Text;
+
+    /// <summary>The hard IPv6 prerequisite, exposed for focused UI specification tests.</summary>
+    public string Ipv6RequirementText => _ipv6Hint.Text;
+
+    /// <summary>Whether the long-form setup requirements are currently expanded.</summary>
+    public bool SetupRequirementsExpanded => _requirementsExpanded && _requirementsPanel.Visible;
+
+    /// <summary>Whether the collapsed setup-requirements affordance is present.</summary>
+    public bool SetupRequirementsLinkVisible => _requirementsLink.Visible;
+
+    /// <summary>Whether the manual pairing code is visible in the current stage.</summary>
+    public bool ManualCodeVisible => _codeBox.Visible;
+
+    /// <summary>The current selectable manual pairing code.</summary>
+    public string ManualCodeText => _codeBox.Text;
 
     /// <summary>Whether the Matter identity helper area applies to the current stage.</summary>
     public bool IdentityHelpVisible => _currentStage == PairingStage.ReadyToScan;
@@ -332,35 +382,35 @@ public sealed class PairingWindow : Form
         _currentStage = stage;
         _stageInitialized = true;
         bool showCode = stage == PairingStage.ReadyToScan;
-        _steps.Visible = showCode;
         _qrBox.Visible = showCode;
         _codeCaption.Visible = showCode;
         _codeBox.Visible = showCode;
         _matterIdentity.Visible = showCode;
-        _consoleHint.Visible = showCode;
-        _installIdentityHint.Visible = showCode;
+        _requirementsLink.Visible = showCode;
+        _requirementsPanel.Visible = showCode && _requirementsExpanded;
 
-        _heading.Text = stage == PairingStage.Paired
-            ? "This PC is in Google Home"
-            : "Add this PC to Google Home";
+        _heading.Text = stage switch
+        {
+            PairingStage.ReadyToScan => "Pair with Google Home",
+            PairingStage.Paired => "Paired",
+            PairingStage.DiscoveryError => "Pairing unavailable",
+            _ => "Starting bridge",
+        };
 
         (_status.Text, _status.ForeColor) = stage switch
         {
             PairingStage.Paired => (
-                "Paired — nothing more to do here.\n"
-                    + (showAutoCloseHint ? "This window closes itself in about 4 seconds; you can close it now.\n" : "")
-                    + "To pair it again, or to a different home, use "
-                    + "\"Factory reset bridge…\" in the tray menu first.",
+                "Paired · This PC is in Google Home"
+                    + (showAutoCloseHint ? " · Closing in about 4 seconds" : ""),
                 _statusOkColor),
             PairingStage.ReadyToScan => (
-                "Waiting for the Google Home app… this window updates by itself.",
+                "Advertisement active · Waiting for Google Home",
                 _statusWaitingColor),
             PairingStage.DiscoveryError => (
-                "Bridge is not available for discovery. Restart it and check the log for the specific cause.",
+                "Advertisement unavailable · Restart the bridge and check the log",
                 Color.Firebrick),
             _ => (
-                "Starting the bridge… the code appears here in a few seconds.\n"
-                    + "If it doesn't, tick \"Enable bridge\" in the tray menu.",
+                "Advertisement starting · The pairing code will appear automatically",
                 _statusWaitingColor),
         };
 
@@ -378,6 +428,29 @@ public sealed class PairingWindow : Form
         }
 
         ResumeLayout(true);
+    }
+
+    internal void SetRequirementsExpanded(bool expanded)
+    {
+        if (_requirementsExpanded == expanded)
+        {
+            return;
+        }
+
+        Screen? currentScreen = Visible ? Screen.FromRectangle(Bounds) : null;
+        _requirementsExpanded = expanded;
+        _requirementsLink.Text = expanded ? "Hide setup requirements" : "Setup requirements…";
+        _requirementsPanel.Visible = expanded && _currentStage == PairingStage.ReadyToScan;
+        PerformLayout();
+
+        Size preferredSize = GetPreferredSize(Size.Empty);
+        if (currentScreen is not null)
+        {
+            Rectangle workingArea = currentScreen.WorkingArea;
+            int left = workingArea.Left + ((workingArea.Width - preferredSize.Width) / 2);
+            int top = workingArea.Top + ((workingArea.Height - preferredSize.Height) / 2);
+            SetBounds(left, top, preferredSize.Width, preferredSize.Height, BoundsSpecified.All);
+        }
     }
 
     private void ScheduleAutoClose()
@@ -467,6 +540,13 @@ public sealed class PairingWindow : Form
     /// <summary>Logical (96-dpi) padding → device padding.</summary>
     private Padding SP(int left, int top, int right, int bottom) => new(S(left), S(top), S(right), S(bottom));
 
+    private Font OwnFont(float size, FontStyle style = FontStyle.Regular)
+    {
+        var font = new Font("Segoe UI", size, style);
+        _ownedFonts.Add(font);
+        return font;
+    }
+
     /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
@@ -474,6 +554,10 @@ public sealed class PairingWindow : Form
         {
             _autoCloseTimer.Dispose();
             _qrBox.Image?.Dispose();
+            foreach (Font font in _ownedFonts)
+            {
+                font.Dispose();
+            }
         }
 
         base.Dispose(disposing);

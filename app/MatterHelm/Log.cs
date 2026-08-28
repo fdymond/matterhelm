@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace MatterHelm;
 
 /// <summary>
@@ -22,7 +24,8 @@ public enum LogLevel
 /// <summary>
 /// Minimal rolling daily file logger. Writes one file per calendar day under
 /// <c>%APPDATA%\MatterHelm\logs\app-yyyyMMdd.log</c> and prunes files
-/// older than 7 days on startup. Lines below <see cref="MinimumLevel"/>
+/// older than 7 days on startup and each date rollover. A daily file rolls to
+/// numbered segments at 5 MiB, bounding any one append target. Lines below <see cref="MinimumLevel"/>
 /// (config <c>appLogLevel</c>, applied live — ADR-006 §2) are dropped. Never
 /// throws out of its public methods — logging failures must not take down the
 /// tray app. Full Microsoft.Extensions.Logging migration is deliberately
@@ -31,9 +34,15 @@ public enum LogLevel
 public static class Log
 {
     private const int RetentionDays = 7;
+    private const long DefaultFileSizeLimitBytes = 5 * 1024 * 1024;
     private static readonly Lock _gate = new();
     private static int _minimumLevel = (int)LogLevel.Info;
     private static string? _directory;
+    private static DateOnly? _lastPrunedLocalDate;
+
+    internal static TimeProvider Clock { get; set; } = TimeProvider.System;
+
+    internal static long FileSizeLimitBytes { get; set; } = DefaultFileSizeLimitBytes;
 
     /// <summary>
     /// Minimum level a line must have to be written. Thread-safe; applies to
@@ -56,7 +65,14 @@ public static class Log
     public static string LogDirectory
     {
         get => Volatile.Read(ref _directory) ?? Path.Combine(AppPaths.Root, "logs");
-        set => Volatile.Write(ref _directory, value);
+        set
+        {
+            lock (_gate)
+            {
+                Volatile.Write(ref _directory, value);
+                _lastPrunedLocalDate = null;
+            }
+        }
     }
 
     /// <summary>True iff a line at <paramref name="level"/> would currently be written.</summary>
@@ -84,14 +100,9 @@ public static class Log
             {
                 string dir = LogDirectory;
                 Directory.CreateDirectory(dir);
-                DateTime cutoff = DateTime.UtcNow.AddDays(-RetentionDays);
-                foreach (string path in Directory.EnumerateFiles(dir, "app-*.log"))
-                {
-                    if (File.GetLastWriteTimeUtc(path) < cutoff)
-                    {
-                        File.Delete(path);
-                    }
-                }
+                DateTimeOffset localNow = Clock.GetLocalNow();
+                PruneLocked(dir, Clock.GetUtcNow().UtcDateTime);
+                _lastPrunedLocalDate = DateOnly.FromDateTime(localNow.DateTime);
             }
         }
         catch
@@ -121,18 +132,53 @@ public static class Log
 
         try
         {
-            string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{label}] {message}";
+            DateTimeOffset localNow = Clock.GetLocalNow();
+            string line = $"{localNow:yyyy-MM-dd HH:mm:ss.fff} [{label}] {message}";
             string dir = LogDirectory;
-            string path = Path.Combine(dir, $"app-{DateTime.Now:yyyyMMdd}.log");
             lock (_gate)
             {
                 Directory.CreateDirectory(dir);
+                DateOnly localDate = DateOnly.FromDateTime(localNow.DateTime);
+                if (_lastPrunedLocalDate != localDate)
+                {
+                    PruneLocked(dir, Clock.GetUtcNow().UtcDateTime);
+                    _lastPrunedLocalDate = localDate;
+                }
+
+                int lineBytes = Encoding.UTF8.GetByteCount(line + Environment.NewLine);
+                string path = SelectWritablePath(dir, localNow, lineBytes);
                 File.AppendAllLines(path, [line]);
             }
         }
         catch
         {
             // Logging must never be the reason the app crashes.
+        }
+    }
+
+    private static string SelectWritablePath(string directory, DateTimeOffset localNow, int incomingBytes)
+    {
+        string stem = $"app-{localNow:yyyyMMdd}";
+        for (int segment = 0; ; segment++)
+        {
+            string suffix = segment == 0 ? string.Empty : $"-{segment:000}";
+            string path = Path.Combine(directory, $"{stem}{suffix}.log");
+            if (!File.Exists(path) || new FileInfo(path).Length + incomingBytes <= FileSizeLimitBytes)
+            {
+                return path;
+            }
+        }
+    }
+
+    private static void PruneLocked(string directory, DateTime utcNow)
+    {
+        DateTime cutoff = utcNow.AddDays(-RetentionDays);
+        foreach (string path in Directory.EnumerateFiles(directory, "app-*.log"))
+        {
+            if (File.GetLastWriteTimeUtc(path) < cutoff)
+            {
+                File.Delete(path);
+            }
         }
     }
 }

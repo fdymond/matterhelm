@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.NetworkInformation;
+using MatterHelm.Actions;
 using MatterHelm.Ui;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace MatterHelm.Tests;
 
@@ -19,9 +21,11 @@ public sealed class SettingsViewModelTests : IDisposable
     private readonly string _dir;
     private readonly string _path;
     private readonly TestSupport.LogCapture _log = new();
+    private readonly ITestOutputHelper _output;
 
-    public SettingsViewModelTests()
+    public SettingsViewModelTests(ITestOutputHelper output)
     {
+        _output = output;
         _dir = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _path = Path.Combine(_dir, "config.json");
@@ -44,8 +48,13 @@ public sealed class SettingsViewModelTests : IDisposable
     private SettingsViewModel NewViewModel(
         Config? config = null,
         Func<string, bool>? pathExists = null,
-        INetworkAdapterProvider? networkAdapters = null) =>
-        new(config ?? NewConfig(), pathExists, networkAdapters ?? new StubNetworkAdapterProvider([]));
+        INetworkAdapterProvider? networkAdapters = null,
+        IDisplayPowerCapabilityProbe? displayPowerCapabilityProbe = null) =>
+        new(
+            config ?? NewConfig(),
+            pathExists,
+            networkAdapters ?? new StubNetworkAdapterProvider([]),
+            displayPowerCapabilityProbe ?? new StubDisplayPowerCapabilityProbe(DisplayPowerCapability.AllDdc));
 
     private static CustomCommandConfig MediaKeyCommand(string key, string? name = null) => new()
     {
@@ -803,6 +812,95 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SavedDetectedAdapterHiddenByDefaultRemainsVisibleAndExplainsWhy()
+    {
+        Config config = NewConfig();
+        config.Current.MdnsInterface = "vEthernet (WSL)";
+        SettingsViewModel vm = NewViewModel(
+            config,
+            networkAdapters: new StubNetworkAdapterProvider(
+            [
+                new NetworkAdapterInfo(
+                    "vEthernet (WSL)",
+                    "203.0.113.161",
+                    Description: "Hyper-V Virtual Ethernet Adapter"),
+            ]));
+
+        Assert.Equal(
+            ("vEthernet (WSL)", "vEthernet (WSL) — 203.0.113.161 (hidden by filter)"),
+            vm.GetMdnsInterfaceChoices()[1]);
+        Assert.Equal(
+            ("vEthernet (WSL)", "vEthernet (WSL) — 203.0.113.161"),
+            vm.GetMdnsInterfaceChoices(showAllAdapters: true)[1]);
+        Assert.Equal("vEthernet (WSL)", vm.Working.MdnsInterface);
+    }
+
+    [Fact]
+    public void ShowAllFallbackRestoresThePreviousInclusiveAdapterList()
+    {
+        SettingsViewModel vm = NewViewModel(
+            networkAdapters: new StubNetworkAdapterProvider(
+            [
+                new NetworkAdapterInfo("Ethernet", "192.0.2.20", "Realtek PCIe GbE"),
+                new NetworkAdapterInfo("Work VPN", null, "TAP-Windows Adapter V9", InterfaceType: NetworkInterfaceType.Ppp, HasIpUnicastAddress: false),
+                new NetworkAdapterInfo("Loopback", "127.0.0.1", "Software Loopback Interface", InterfaceType: NetworkInterfaceType.Loopback),
+                new NetworkAdapterInfo("Disconnected", "203.0.113.102", "USB Ethernet", OperationalStatus.Down),
+            ]));
+
+        Assert.Equal(
+            ["Auto (recommended)", "Ethernet — 192.0.2.20"],
+            vm.GetMdnsInterfaceChoices().Select(choice => choice.Label));
+        Assert.Equal(
+            ["Auto (recommended)", "Ethernet — 192.0.2.20", "Work VPN — no IPv4"],
+            vm.GetMdnsInterfaceChoices(showAllAdapters: true).Select(choice => choice.Label));
+    }
+
+    [Fact]
+    public void ShowAllCheckboxIsUncheckedUiOnlyAndRefreshesTheDropdown()
+    {
+        SettingsViewModel vm = NewViewModel(
+            networkAdapters: new StubNetworkAdapterProvider(
+            [
+                new NetworkAdapterInfo("Ethernet", "192.0.2.20", "Realtek PCIe GbE"),
+                new NetworkAdapterInfo("Work VPN", "203.0.113.2", "TAP-Windows Adapter V9"),
+            ]));
+        using var window = new SettingsWindow(vm);
+        var combo = Assert.IsType<ComboBox>(Assert.Single(window.Controls.Find("mdns-interface-choice", searchAllChildren: true)));
+        var showAll = Assert.IsType<CheckBox>(Assert.Single(window.Controls.Find("mdns-show-all-adapters", searchAllChildren: true)));
+
+        Assert.False(showAll.Checked);
+        Assert.DoesNotContain("Work VPN — 203.0.113.2", combo.Items.Cast<string>());
+
+        showAll.Checked = true;
+
+        Assert.Contains("Work VPN — 203.0.113.2", combo.Items.Cast<string>());
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public void NoisyAdapterSetRendersOnlyTheRealLanUntilShowAllIsSelected()
+    {
+        SettingsViewModel vm = NewViewModel(
+            networkAdapters: new StubNetworkAdapterProvider(
+            [
+                new NetworkAdapterInfo("Ethernet", "198.51.100.12", "Realtek PCIe GbE", HasIpv4DefaultGateway: true),
+                new NetworkAdapterInfo("vEthernet (WSL)", "203.0.113.161", "Hyper-V Virtual Ethernet Adapter"),
+                new NetworkAdapterInfo("Work VPN", "203.0.113.2", "TAP-Windows Adapter V9"),
+                new NetworkAdapterInfo("Bluetooth Network Connection", "169.254.2.4", "Bluetooth Device (Personal Area Network)"),
+            ]));
+
+        string filtered = string.Join(" | ", vm.GetMdnsInterfaceChoices().Select(choice => choice.Label));
+        string all = string.Join(" | ", vm.GetMdnsInterfaceChoices(showAllAdapters: true).Select(choice => choice.Label));
+        _output.WriteLine($"Filtered: {filtered}");
+        _output.WriteLine($"Show all: {all}");
+
+        Assert.Equal("Auto (recommended) | Ethernet — 198.51.100.12", filtered);
+        Assert.Equal(
+            "Auto (recommended) | Ethernet — 198.51.100.12 | vEthernet (WSL) — 203.0.113.161 | Work VPN — 203.0.113.2 | Bluetooth Network Connection — 169.254.2.4",
+            all);
+    }
+
+    [Fact]
     public void AdapterListIsEnumeratedOnceForEachSettingsViewModel()
     {
         var adapters = new StubNetworkAdapterProvider([new NetworkAdapterInfo("Ethernet", "192.0.2.20")]);
@@ -833,10 +931,41 @@ public sealed class SettingsViewModelTests : IDisposable
         SettingDescriptor choice = SettingsViewModel.Describe("power-off-action");
 
         Assert.Equal(["displaysOff", "pauseAndDisplaysOff", "screensaver", "sleep"], choice.Choices);
-        Assert.Equal(["Displays off", "Pause, then displays off", "Start screensaver", "Sleep"], choice.ChoiceLabels);
+        Assert.Equal(["Turn off displays", "Pause, then turn off displays", "Start screensaver", "Sleep"], vm.GetChoiceLabels(choice));
         Assert.Equal("pauseAndDisplaysOff", choice.Get!(vm.Working));
         choice.Set!(vm.Working, "screensaver");
         Assert.Equal(PowerOffAction.Screensaver, vm.Working.PowerOffAction);
+    }
+
+    [Theory]
+    [InlineData(
+        (int)DisplayPowerCapability.AllDdc,
+        "Turn off displays",
+        "Pause, then turn off displays")]
+    [InlineData(
+        (int)DisplayPowerCapability.NoDdc,
+        "Turn off displays (this PC: will also enter standby)",
+        "Pause, then turn off displays (this PC: will also enter standby)")]
+    [InlineData(
+        (int)DisplayPowerCapability.Mixed,
+        "Turn off displays (non-DDC displays stay on)",
+        "Pause, then turn off displays (non-DDC displays stay on)")]
+    public void PowerOffActionLabelsDescribeCurrentDdcCapability(
+        int capabilityValue,
+        string displaysOffLabel,
+        string pauseThenDisplaysOffLabel)
+    {
+        var probe = new StubDisplayPowerCapabilityProbe((DisplayPowerCapability)capabilityValue);
+        SettingsViewModel vm = NewViewModel(displayPowerCapabilityProbe: probe);
+        SettingDescriptor choice = SettingsViewModel.Describe("power-off-action");
+
+        IReadOnlyList<string> first = vm.GetChoiceLabels(choice);
+        IReadOnlyList<string> second = vm.GetChoiceLabels(choice);
+
+        Assert.Equal(displaysOffLabel, first[0]);
+        Assert.Equal(pauseThenDisplaysOffLabel, first[1]);
+        Assert.Equal(first, second);
+        Assert.Equal(1, probe.CallCount);
     }
 
     [Fact]
@@ -894,20 +1023,90 @@ public sealed class SettingsViewModelTests : IDisposable
             return adapters;
         }
     }
+
+    private sealed class StubDisplayPowerCapabilityProbe(DisplayPowerCapability capability)
+        : IDisplayPowerCapabilityProbe
+    {
+        internal int CallCount { get; private set; }
+
+        public DisplayPowerCapability Probe()
+        {
+            CallCount++;
+            return capability;
+        }
+    }
 }
 
 public sealed class NetworkAdapterEnumerationTests
 {
     [Theory]
-    [InlineData(OperationalStatus.Up, NetworkInterfaceType.Ethernet, true)]
+    [InlineData("Microsoft Hyper-V Network Adapter")]
+    [InlineData("Hyper-V Virtual Ethernet Adapter")]
+    [InlineData("vEthernet (Default Switch)")]
+    [InlineData("WSL virtual network")]
+    [InlineData("VMware Virtual Ethernet Adapter")]
+    [InlineData("VirtualBox Host-Only Ethernet Adapter")]
+    [InlineData("TAP-Windows Adapter V9")]
+    [InlineData("Npcap Loopback Adapter")]
+    [InlineData("software loopback interface")]
+    [InlineData("Bluetooth Device (Personal Area Network)")]
+    public void VirtualDescriptionKeywordsAreExcludedCaseInsensitively(string description)
+    {
+        Assert.False(SystemNetworkAdapterProvider.IsVisibleByDefault(Adapter(description: description)));
+    }
+
+    [Fact]
+    public void Ipv4DefaultGatewayOutranksAVirtualDescriptionKeyword()
+    {
+        Assert.True(SystemNetworkAdapterProvider.IsVisibleByDefault(
+            Adapter(description: "VMware Ethernet Adapter", hasIpv4DefaultGateway: true)));
+    }
+
+    [Theory]
+    [InlineData(NetworkInterfaceType.Ethernet)]
+    [InlineData(NetworkInterfaceType.Ethernet3Megabit)]
+    [InlineData(NetworkInterfaceType.FastEthernetT)]
+    [InlineData(NetworkInterfaceType.FastEthernetFx)]
+    [InlineData(NetworkInterfaceType.GigabitEthernet)]
+    [InlineData(NetworkInterfaceType.Wireless80211)]
+    public void EthernetFamilyAndWirelessAdaptersAreIncluded(NetworkInterfaceType type)
+    {
+        Assert.True(SystemNetworkAdapterProvider.IsVisibleByDefault(Adapter(type: type)));
+    }
+
+    [Theory]
+    [InlineData(NetworkInterfaceType.Tunnel)]
+    [InlineData(NetworkInterfaceType.Ppp)]
+    [InlineData(NetworkInterfaceType.Loopback)]
+    [InlineData(NetworkInterfaceType.Wwanpp)]
+    public void TunnelPppLoopbackAndExoticTypesAreExcluded(NetworkInterfaceType type)
+    {
+        Assert.False(SystemNetworkAdapterProvider.IsVisibleByDefault(Adapter(type: type)));
+    }
+
+    [Theory]
+    [InlineData(OperationalStatus.Down, true)]
+    [InlineData(OperationalStatus.Up, false)]
+    public void DefaultListRequiresUpStatusAndAnIpUnicastAddress(
+        OperationalStatus status,
+        bool hasIpUnicastAddress)
+    {
+        Assert.False(SystemNetworkAdapterProvider.IsVisibleByDefault(
+            Adapter(status: status, hasIpUnicastAddress: hasIpUnicastAddress)));
+    }
+
+    [Theory]
+    [InlineData(OperationalStatus.Up, NetworkInterfaceType.Tunnel, true)]
+    [InlineData(OperationalStatus.Up, NetworkInterfaceType.Ppp, true)]
     [InlineData(OperationalStatus.Up, NetworkInterfaceType.Loopback, false)]
     [InlineData(OperationalStatus.Down, NetworkInterfaceType.Ethernet, false)]
-    public void OnlyUpNonLoopbackAdaptersAreEligible(
+    public void ShowAllMatchesThePreviousUpNonLoopbackRule(
         OperationalStatus status,
         NetworkInterfaceType type,
         bool expected)
     {
-        Assert.Equal(expected, SystemNetworkAdapterProvider.IsEligible(status, type));
+        Assert.Equal(expected, SystemNetworkAdapterProvider.IsVisibleWhenShowingAll(
+            Adapter(status: status, type: type)));
     }
 
     [Fact]
@@ -922,4 +1121,19 @@ public sealed class NetworkAdapterEnumerationTests
             ]));
         Assert.Null(SystemNetworkAdapterProvider.FirstIpv4Address([IPAddress.Parse("fe80::1")]));
     }
+
+    private static NetworkAdapterInfo Adapter(
+        string description = "Realtek PCIe GbE Family Controller",
+        OperationalStatus status = OperationalStatus.Up,
+        NetworkInterfaceType type = NetworkInterfaceType.Ethernet,
+        bool hasIpUnicastAddress = true,
+        bool hasIpv4DefaultGateway = false) =>
+        new(
+            "Ethernet",
+            "198.51.100.12",
+            description,
+            status,
+            type,
+            hasIpUnicastAddress,
+            hasIpv4DefaultGateway);
 }

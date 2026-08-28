@@ -20,10 +20,10 @@ public static class ProtocolTests
     public sealed class VersionConstants
     {
         [Fact]
-        public void ProtocolVersionIs2AndHandshakeStays1()
+        public void ProtocolVersionIs3AndHandshakeStays1()
         {
-            // ADR-004 §3: the custom action variant is additive, so v bumps to
-            // 2; hello.protocol is the breaking-change counter and stays 1.
+            // Matter lifecycle and advertisement health are additive, so v is
+            // 3; hello.protocol is the breaking-change counter and stays 1.
             Assert.Equal(3, Protocol.Version);
             Assert.Equal(1, Protocol.HandshakeProtocol);
         }

@@ -39,6 +39,8 @@ public static class DiagnosticsTests
         private readonly string _dir;
         private readonly string _originalDirectory;
         private readonly LogLevel _originalMinimum;
+        private readonly TimeProvider _originalClock;
+        private readonly long _originalFileSizeLimitBytes;
 
         public LogLevels()
         {
@@ -46,6 +48,8 @@ public static class DiagnosticsTests
             Directory.CreateDirectory(_dir);
             _originalDirectory = Log.LogDirectory;
             _originalMinimum = Log.MinimumLevel;
+            _originalClock = Log.Clock;
+            _originalFileSizeLimitBytes = Log.FileSizeLimitBytes;
             Log.LogDirectory = _dir;
         }
 
@@ -53,6 +57,8 @@ public static class DiagnosticsTests
         {
             Log.LogDirectory = _originalDirectory;
             Log.MinimumLevel = _originalMinimum;
+            Log.Clock = _originalClock;
+            Log.FileSizeLimitBytes = _originalFileSizeLimitBytes;
             try
             {
                 Directory.Delete(_dir, recursive: true);
@@ -133,6 +139,35 @@ public static class DiagnosticsTests
         {
             Assert.Equal(expected, Log.ParseLevel(wire));
         }
+
+        [Fact]
+        public void DateRolloverPrunesExpiredFilesAndWritesTheNewDay()
+        {
+            var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
+            Log.Clock = clock;
+            Log.Info("day one");
+            string stale = Path.Combine(_dir, "app-20000101.log");
+            File.WriteAllText(stale, "expired");
+            File.SetLastWriteTimeUtc(stale, clock.GetUtcNow().UtcDateTime.AddDays(-30));
+
+            clock.Advance(TimeSpan.FromDays(1));
+            Log.Info("day two");
+
+            Assert.False(File.Exists(stale));
+            Assert.True(File.Exists(Path.Combine(_dir, $"app-{clock.GetLocalNow():yyyyMMdd}.log")));
+        }
+
+        [Fact]
+        public void FullDailyLogRollsToANumberedSegment()
+        {
+            Log.FileSizeLimitBytes = 1;
+
+            Log.Info("first line exceeds the deliberately tiny test cap");
+            Log.Info("second line must use a new segment");
+
+            Assert.Equal(2, Directory.EnumerateFiles(_dir, "app-*.log").Count());
+            Assert.True(File.Exists(Path.Combine(_dir, $"app-{DateTime.Now:yyyyMMdd}-001.log")));
+        }
     }
 
     public sealed class MetricsSnapshots : IDisposable
@@ -208,6 +243,36 @@ public static class DiagnosticsTests
 
             Assert.False(File.Exists(stale), "the 30-day-old snapshot file must be pruned");
             Assert.True(File.Exists(fresh), "recent snapshot files must survive the prune");
+        }
+
+        [Fact]
+        public void DateRolloverPrunesExpiredSnapshotsWithoutRestartingTheListener()
+        {
+            var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
+            using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1), 1024 * 1024, clock);
+            listener.Flush();
+            string stale = Path.Combine(_dir, "metrics-20000101.jsonl");
+            File.WriteAllText(stale, "{}");
+            File.SetLastWriteTimeUtc(stale, clock.GetUtcNow().UtcDateTime.AddDays(-30));
+
+            clock.Advance(TimeSpan.FromDays(1));
+            AppMetrics.ActionsExecutedOk.Add(1);
+            listener.Flush();
+
+            Assert.False(File.Exists(stale));
+            Assert.True(File.Exists(Path.Combine(_dir, $"metrics-{clock.GetLocalNow():yyyyMMdd}.jsonl")));
+        }
+
+        [Fact]
+        public void FullSnapshotFileRollsToANumberedSegment()
+        {
+            var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
+            using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1), 1, clock);
+            listener.Flush();
+            AppMetrics.ActionsExecutedOk.Add(1);
+            listener.Flush();
+
+            Assert.True(File.Exists(Path.Combine(_dir, $"metrics-{clock.GetLocalNow():yyyyMMdd}-001.jsonl")));
         }
     }
 
@@ -444,5 +509,16 @@ public static class DiagnosticsTests
             Assert.DoesNotContain(
                 Path.Combine(@"C:\Users", Environment.UserName), text, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        internal void Advance(TimeSpan amount) => _utcNow += amount;
     }
 }

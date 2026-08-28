@@ -65,6 +65,12 @@ internal static partial class Program
             return;
         }
 
+        if (args.Contains("--resource-probe-sidecar"))
+        {
+            Environment.ExitCode = Diagnostics.ResourceProbe.RunSidecar();
+            return;
+        }
+
         // S2-1 acceptance demo: sidecar crash/auto-restart backoff plus the
         // wrong-token socket close, with objective PASS/FAIL output.
         if (args.Contains("--demo-sidecar-chaos"))
@@ -207,12 +213,12 @@ internal static partial class Program
         host.StateChanged += (_, state) => trayContext.SetState(state);
         host.PairingReceived += (_, pairing) => trayContext.SetPairingInfo(pairing.QrPayload, pairing.ManualCode);
 
-        // Start/stop happen on a worker: SetEnabled blocks for the child's
-        // stop grace, and the UI thread must never wait on that.
-        trayContext.EnableBridgeChanged += (_, enabled) => Task.Run(() => host.SetEnabled(enabled));
+        // Start/stop run on the host's ordered lifecycle queue: SetEnabled
+        // blocks for the child's stop grace, and the UI thread never waits.
+        trayContext.EnableBridgeChanged += (_, enabled) => _ = host.QueueSetEnabled(enabled);
 
         // FactoryReset blocks on the same child-stop grace plus delete
-        // retries (S3-2) — a worker thread, same reasoning as SetEnabled
+        // retries (S3-2) — the lifecycle queue, same reasoning as SetEnabled
         // above. The confirmation dialog already ran (TrayContext); this only
         // fires after the user said yes. Success/failure is already logged
         // and (when enabled) flashed on the overlay inside FactoryReset —
@@ -220,15 +226,14 @@ internal static partial class Program
         // S10-8: the reset leaves the bridge running and uncommissioned, so the
         // tray syncs its "Enable bridge" tick and opens the pairing window for
         // the fresh code once FactoryReset returns (it marshals internally).
-        trayContext.FactoryResetRequested += (_, _) => Task.Run(() =>
-            trayContext.OnFactoryResetCompleted(host.FactoryReset()));
+        trayContext.FactoryResetRequested += (_, _) => _ = host.QueueFactoryReset(trayContext.OnFactoryResetCompleted);
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
         // S9-1/S9-4: preview with the STAGED position/theme/opacity (the
         // settings window passes its unsaved working values), then restore the
         // live-config look once the flash has faded (hold ~2.5 s + fade
         // ~0.3 s) so real commands keep the saved config's rendering until
         // the user saves.
-        var previewRestore = new System.Windows.Forms.Timer { Interval = 3_200 };
+        using var previewRestore = new System.Windows.Forms.Timer { Interval = 3_200 };
         previewRestore.Tick += (_, _) =>
         {
             previewRestore.Stop();
@@ -253,7 +258,7 @@ internal static partial class Program
 
         // Exit is the one sanctioned synchronous stop: the sidecar must be
         // down (stdin tether, then kill) before the process goes away.
-        trayContext.ExitRequested += (_, _) => host.SetEnabled(false);
+        trayContext.ExitRequested += (_, _) => host.Dispose();
 
         // S10-7: first-run onboarding - only for an install that has never
         // paired (no Matter fabric) and has not seen the guide, so upgrades
@@ -267,7 +272,7 @@ internal static partial class Program
 
         if (trayContext.Config.Current.BridgeEnabled)
         {
-            Task.Run(() => host.SetEnabled(true));
+            _ = host.QueueSetEnabled(true);
         }
 
         Application.Run(trayContext);

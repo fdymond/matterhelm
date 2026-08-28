@@ -12,6 +12,8 @@ namespace MatterHelm.Tests;
 /// </summary>
 public static class KeyChordTests
 {
+    private static ushort StubScanCode(ushort virtualKey) => (ushort)(virtualKey + 1);
+
     private static ParsedKeyChord Parse(string sequence)
     {
         Assert.True(KeyChord.TryParse(sequence, out ParsedKeyChord? chord, out string? error), error);
@@ -142,16 +144,16 @@ public static class KeyChordTests
         {
             // The story's evidence case: modifiers down in order, key
             // down/up, modifiers up in reverse — VK codes per the one table.
-            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Ctrl+Shift+V"));
+            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Ctrl+Shift+V"), StubScanCode);
 
             Assert.Equal(
                 [
-                    new KeyChordEvent(0x11, Extended: false, KeyUp: false), // Ctrl down
-                    new KeyChordEvent(0x10, Extended: false, KeyUp: false), // Shift down
-                    new KeyChordEvent(0x56, Extended: false, KeyUp: false), // V down
-                    new KeyChordEvent(0x56, Extended: false, KeyUp: true),  // V up
-                    new KeyChordEvent(0x10, Extended: false, KeyUp: true),  // Shift up
-                    new KeyChordEvent(0x11, Extended: false, KeyUp: true),  // Ctrl up
+                    new KeyChordEvent(0x11, 0x12, Extended: false, KeyUp: false), // Ctrl down
+                    new KeyChordEvent(0x10, 0x11, Extended: false, KeyUp: false), // Shift down
+                    new KeyChordEvent(0x56, 0x57, Extended: false, KeyUp: false), // V down
+                    new KeyChordEvent(0x56, 0x57, Extended: false, KeyUp: true),  // V up
+                    new KeyChordEvent(0x10, 0x11, Extended: false, KeyUp: true),  // Shift up
+                    new KeyChordEvent(0x11, 0x12, Extended: false, KeyUp: true),  // Ctrl up
                 ],
                 events);
         }
@@ -159,7 +161,7 @@ public static class KeyChordTests
         [Fact]
         public void AllFourModifiersPressInCanonicalOrderAndReleaseInReverse()
         {
-            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Ctrl+Alt+Shift+Win+A"));
+            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Ctrl+Alt+Shift+Win+A"), StubScanCode);
 
             Assert.Equal(
                 [0x11, 0x12, 0x10, 0x5B, 0x41, 0x41, 0x5B, 0x10, 0x12, 0x11],
@@ -172,14 +174,14 @@ public static class KeyChordTests
         [Fact]
         public void ExtendedKeysCarryTheExtendedFlagOnBothDownAndUp()
         {
-            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Win+Left"));
+            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Win+Left"), StubScanCode);
 
             Assert.Equal(
                 [
-                    new KeyChordEvent(0x5B, Extended: true, KeyUp: false), // Win down (VK_LWIN is extended)
-                    new KeyChordEvent(0x25, Extended: true, KeyUp: false), // Left down
-                    new KeyChordEvent(0x25, Extended: true, KeyUp: true),  // Left up
-                    new KeyChordEvent(0x5B, Extended: true, KeyUp: true),  // Win up
+                    new KeyChordEvent(0x5B, 0x5C, Extended: true, KeyUp: false), // Win down (VK_LWIN is extended)
+                    new KeyChordEvent(0x25, 0x26, Extended: true, KeyUp: false), // Left down
+                    new KeyChordEvent(0x25, 0x26, Extended: true, KeyUp: true),  // Left up
+                    new KeyChordEvent(0x5B, 0x5C, Extended: true, KeyUp: true),  // Win up
                 ],
                 events);
         }
@@ -187,14 +189,55 @@ public static class KeyChordTests
         [Fact]
         public void ABareKeyBuildsJustItsDownUpPair()
         {
-            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("F5"));
+            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("F5"), StubScanCode);
 
             Assert.Equal(
                 [
-                    new KeyChordEvent(0x74, Extended: false, KeyUp: false),
-                    new KeyChordEvent(0x74, Extended: false, KeyUp: true),
+                    new KeyChordEvent(0x74, 0x75, Extended: false, KeyUp: false),
+                    new KeyChordEvent(0x74, 0x75, Extended: false, KeyUp: true),
                 ],
                 events);
+        }
+
+        [Fact]
+        public void ScanCodeMapperRunsOncePerPressedKeyAndFeedsBothTransitions()
+        {
+            List<ushort> mappedVirtualKeys = [];
+            ushort Map(ushort virtualKey)
+            {
+                mappedVirtualKeys.Add(virtualKey);
+                return virtualKey switch
+                {
+                    0x11 => 0x1D,
+                    0x10 => 0x2A,
+                    0x7C => 0x64,
+                    _ => throw new InvalidOperationException(),
+                };
+            }
+
+            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Ctrl+Shift+F13"), Map);
+
+            Assert.Equal([0x11, 0x10, 0x7C], mappedVirtualKeys.Select(key => (int)key));
+            Assert.Equal([0x1D, 0x2A, 0x64, 0x64, 0x2A, 0x1D], events.Select(entry => (int)entry.ScanCode));
+        }
+
+        [Fact]
+        public void WindowsMapVirtualKeyPopulatesTheNeutralChordScanCodes()
+        {
+            IReadOnlyList<KeyChordEvent> events = KeyChord.BuildEvents(Parse("Ctrl+Shift+F13"));
+
+            Assert.Equal([0x1D, 0x2A, 0x64, 0x64, 0x2A, 0x1D], events.Select(entry => (int)entry.ScanCode));
+            Assert.DoesNotContain(events, entry => entry.ScanCode == 0);
+        }
+
+        [Fact]
+        public void WindowsMapVirtualKeyPopulatesEverySupportedKey()
+        {
+            foreach (ChordKey key in KeyChord.Keys.Values)
+            {
+                var chord = new ParsedKeyChord(KeyChordModifiers.None, key);
+                Assert.DoesNotContain(KeyChord.BuildEvents(chord), entry => entry.ScanCode == 0);
+            }
         }
     }
 }

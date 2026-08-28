@@ -12,6 +12,31 @@ public sealed class DisplayPowerTests
         Assert.Equal(0x04u, (uint)DdcPowerMode.Off);
     }
 
+    [Theory]
+    [InlineData(0, 0, (int)DisplayPowerCapability.NoDdc)]
+    [InlineData(2, 0, (int)DisplayPowerCapability.AllDdc)]
+    [InlineData(1, 1, (int)DisplayPowerCapability.Mixed)]
+    public void CapabilityProbeClassifiesInjectedDdcMatrices(
+        int supported,
+        int unsupported,
+        int expectedValue)
+    {
+        DdcMonitorPowerResult[] results =
+        [
+            .. Enumerable.Range(0, supported)
+                .Select(i => new DdcMonitorPowerResult(new DdcMonitor($"yes-{i}", $"DDC {i}"), true)),
+            .. Enumerable.Range(0, unsupported)
+                .Select(i => new DdcMonitorPowerResult(new DdcMonitor($"no-{i}", $"Non-DDC {i}"), false)),
+        ];
+        var ddc = new FakeDdcDisplayPower([], results);
+
+        DisplayPowerCapability capability = new DisplayPowerCapabilityProbe(ddc).Probe();
+
+        Assert.Equal((DisplayPowerCapability)expectedValue, capability);
+        Assert.Equal(1, ddc.ProbeCalls);
+        Assert.Empty(ddc.Calls);
+    }
+
     [Fact]
     public void AllDdcMonitorsUseHardwareOffAndRestoreOnlyThoseMonitors()
     {
@@ -32,9 +57,11 @@ public sealed class DisplayPowerTests
             () => { wakeCalls++; return true; },
             log.Sink);
 
-        Assert.True(power.DisplaysOff());
+        DisplayPowerOffResult off = power.DisplaysOffWithResult();
         Assert.True(power.DisplaysOn());
 
+        Assert.True(off.Ok);
+        Assert.Equal(DisplayPowerOffPath.Ddc, off.Path);
         Assert.Equal(0, blankCalls);
         Assert.Equal(1, wakeCalls);
         Assert.Empty(executionStateCalls);
@@ -63,9 +90,11 @@ public sealed class DisplayPowerTests
             () => { wakeCalls++; return true; },
             log.Sink);
 
-        Assert.True(power.DisplaysOff());
+        DisplayPowerOffResult off = power.DisplaysOffWithResult();
         Assert.True(power.DisplaysOn());
 
+        Assert.True(off.Ok);
+        Assert.Equal(DisplayPowerOffPath.BlankingFallback, off.Path);
         Assert.Equal(1, blankCalls);
         Assert.Equal(1, wakeCalls);
         Assert.Equal(
@@ -75,6 +104,29 @@ public sealed class DisplayPowerTests
         Assert.True(log.Contains("INFO", "Internal panel=SC_MONITORPOWER fallback"));
         Assert.True(log.Contains("INFO", "SC_MONITORPOWER fallback"));
         Assert.True(log.Contains("INFO", "Modern Standby may still engage"));
+    }
+
+    [Fact]
+    public void BlankingFailureAfterAcquireImmediatelyReleasesTheKeepAwakeHold()
+    {
+        var executionStateCalls = new List<uint>();
+        var log = new TestSupport.LogCapture();
+        using var guard = CreateGuard(executionStateCalls, log);
+        using var power = new DisplayPower(
+            new FakeDdcDisplayPower(),
+            guard,
+            () => false,
+            () => true,
+            log.Sink);
+
+        DisplayPowerOffResult result = power.DisplaysOffWithResult();
+
+        Assert.False(result.Ok);
+        Assert.Equal(DisplayPowerOffPath.None, result.Path);
+        Assert.Equal(
+            [DisplayAwakeGuard.EsContinuous | DisplayAwakeGuard.EsSystemRequired, DisplayAwakeGuard.EsContinuous],
+            executionStateCalls);
+        Assert.True(log.Contains("WARN", "blanking failed after keep-awake acquisition; the hold was released"));
     }
 
     [Fact]
@@ -187,9 +239,33 @@ public sealed class DisplayPowerTests
             },
             log.Sink);
 
-    private sealed class FakeDdcDisplayPower(params DdcMonitorPowerResult[] offResults) : IDdcDisplayPower
+    private sealed class FakeDdcDisplayPower : IDdcDisplayPower
     {
+        private readonly IReadOnlyList<DdcMonitorPowerResult> _offResults;
+        private readonly IReadOnlyList<DdcMonitorPowerResult> _probeResults;
+
+        internal FakeDdcDisplayPower(params DdcMonitorPowerResult[] offResults)
+            : this(offResults, [])
+        {
+        }
+
+        internal FakeDdcDisplayPower(
+            IReadOnlyList<DdcMonitorPowerResult> offResults,
+            IReadOnlyList<DdcMonitorPowerResult> probeResults)
+        {
+            _offResults = offResults;
+            _probeResults = probeResults;
+        }
+
         internal List<(DdcPowerMode Mode, IReadOnlyList<DdcMonitor>? Targets)> Calls { get; } = [];
+
+        internal int ProbeCalls { get; private set; }
+
+        public IReadOnlyList<DdcMonitorPowerResult> ProbePowerSupport()
+        {
+            ProbeCalls++;
+            return _probeResults;
+        }
 
         public IReadOnlyList<DdcMonitorPowerResult> SetPower(
             DdcPowerMode mode,
@@ -198,7 +274,7 @@ public sealed class DisplayPowerTests
             IReadOnlyList<DdcMonitor>? targetSnapshot = targets is null ? null : [.. targets];
             Calls.Add((mode, targetSnapshot));
             return mode == DdcPowerMode.Off
-                ? offResults
+                ? _offResults
                 : targetSnapshot?.Select(target => new DdcMonitorPowerResult(target, Success: true)).ToArray() ?? [];
         }
     }
