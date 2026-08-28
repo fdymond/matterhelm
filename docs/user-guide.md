@@ -41,12 +41,13 @@ Before you install anything, make sure you have:
    Wifi Pro, or Google TV Streamer — on the **same Wi-Fi/LAN** as the PC.
    A phone alone is not enough: Google requires a hub device to act as the
    Matter "border" for locally-commissioned devices like this one.
-3. **IPv6 enabled** on the PC's active network adapter. Matter requires it
-   even though everything stays on your local network — nothing needs to
-   reach the wider internet over IPv6. Check: Settings → Network & internet
-   → your adapter → Edit IP assignment (or run `ipconfig` and confirm the
-   adapter shows a "Link-local IPv6 Address"). It's on by default on nearly
-   all Windows installs; you only need to check this if pairing fails later.
+3. **IPv6 enabled end to end.** Matter requires IPv6 on the network interface
+   MatterHelm uses **and** on the LAN path between the phone/Nest hub and the
+   PC. The router must pass local IPv6 traffic and Neighbor Discovery (ND)
+   between them; IPv6 internet access is not required. On the PC, run
+   `ipconfig` and confirm the selected adapter has a "Link-local IPv6
+   Address". See [IPv6 and Neighbor Discovery](#ipv6-and-neighbor-discovery)
+   if pairing produces only a generic timeout.
 4. The **Google Home app** on your phone, signed into the account that owns
    your home, with Bluetooth and local-network permissions granted to it.
 5. A one-time, **free** Google Home Developer Console registration (below) —
@@ -144,24 +145,22 @@ is never saved, logged, or displayed. Normal public releases require no token.
 ## Enabling the bridge and pairing
 
 > **The setup guide does this for you.** On a fresh install a **Welcome**
-> window opens by itself with these steps and an **Enable bridge & pair**
-> button that performs steps 1–2 below in one click. It appears once; reopen
+> window opens by itself with these steps and a **Start bridge & pair**
+> button that performs the first step below in one click. It appears once; reopen
 > it any time from the tray menu → **Setup guide…**. If you'd rather drive it
 > manually, the steps are:
 
-1. Right-click the tray icon and check **Enable bridge**. The icon briefly
-   shows amber while starting, then turns blue ("running, not paired yet")
-   within a few seconds. If it turns red,
-   see [Troubleshooting](#troubleshooting). Hovering the tray icon always
-   spells out what its colour means.
-2. Click **Pair with Google Home…** in the tray menu. A window opens with a
-   QR code and, below it, an 11-digit manual pairing code (use the manual
-   code if the QR code won't scan, e.g. photographed off a low-quality
-   screen). It also carries the phone-side steps and a live status line, so
-   you can watch it move from "starting" to "waiting for the Google Home
-   app" to paired without touching anything. While it is ready to scan, the
-   window also shows the active VID/PID to compare with your Developer
-   Console integration.
+1. Right-click the tray icon and choose **Pair with Google Home…**. On an
+   unpaired install this is the only bridge-start action: it enables the
+   bridge, saves that choice for future launches, and opens the pairing
+   window. The icon briefly shows amber while starting, then turns blue
+   ("running, not paired yet") within a few seconds. If it turns red, see
+   [Troubleshooting](#troubleshooting).
+2. The condensed pairing window keeps the stage/status, QR code, selectable
+   manual code, one advertisement/pairing status line, and the active VID/PID
+   in view. Open **Setup requirements…** only when you need the phone path,
+   Developer Console and hub-reboot reminder, IPv6 requirement, or
+   per-install identity/cloned-machine notes.
 3. On your phone, open the **Google Home** app → **+ Add** → **Matter-
    enabled device** (wording varies: "New device" → pick your home →
    "Matter device"/scan option).
@@ -222,14 +221,18 @@ The **Power off behavior** setting defines both halves of that toggle:
 For **Displays off**, MatterHelm first sends VESA DDC/CI power mode to every
 physical monitor that accepts it. This switches the display hardware off while
 Windows continues to see an active screen, so screen-off does not trigger S0
-Modern Standby and media players keep running normally. DDC/CI may need to be
-enabled in the monitor or TV's own settings.
+Modern Standby and media players keep running normally: this is a true
+displays-only action. DDC/CI may need to be enabled in the monitor or TV's own
+settings.
 
-If no monitor accepts DDC/CI (common for laptop internal panels), MatterHelm
-falls back to Windows' global display-blanking command and acquires the legacy
-keep-awake hold. On Modern Standby hardware that hold cannot veto the
-screen-off transition, so the PC may still enter Modern Standby and suspend
-media apps. The log identifies this fallback on every transition.
+Laptop internal panels do not support DDC/CI. If no display accepts DDC/CI,
+MatterHelm falls back to Windows' global display-blanking command and acquires
+the legacy keep-awake hold. On a Modern Standby PC that hold cannot veto the
+screen-off transition, so the PC will also enter standby and suspend media
+apps. Choose the explicit **Sleep** action instead on such a machine; it states
+the outcome honestly and asks Windows to sleep directly. The Settings selector
+labels the display-off choices according to the displays detected when the
+window opens, and the log identifies the path used on every transition.
 
 On a mixed setup, such as a DDC/CI television plus a non-DDC laptop panel,
 MatterHelm powers the compatible display off but deliberately leaves the
@@ -265,8 +268,8 @@ Right-clicking the tray icon is the whole control surface:
 
 | Item | What it does |
 |---|---|
-| **Enable bridge** | Starts/stops the Matter sidecar; persists across restarts |
-| **Pair with Google Home…** | The pairing window (QR + manual code + live status) |
+| **Pair with Google Home…** | Shown only while unpaired; implicitly enables/persists the bridge and opens the pairing window |
+| **Enable bridge** | Shown only after commissioning; starts/stops the paired Matter sidecar and persists across restarts |
 | **Factory reset bridge…** | Deletes the pairing data — see [Factory reset](#factory-reset--re-pairing) |
 | **Overlay pop-ups** | Toggles the on-screen command HUD |
 | **Settings…** | The settings window, below |
@@ -275,6 +278,11 @@ Right-clicking the tray icon is the whole control surface:
 | **Check for updates…** | Checks GitHub and offers a verified tray-driven update when a newer release exists |
 | **About** | Version and links |
 | **Exit** | Stops the sidecar and quits |
+
+The bridge-control items change live: commissioning hides **Pair with Google
+Home…** and reveals **Enable bridge**; factory reset reverses that. **Factory
+reset bridge…** and the global Settings, update, overlay, setup-guide, About,
+reload, and Exit actions remain available in either state.
 
 Hovering the icon shows the current state in words:
 
@@ -350,9 +358,10 @@ click **Save** (closing the window with unsaved changes asks first).
   - **mDNS network interface** — keep **Auto (recommended)** unless your PC
     has more than one active adapter (e.g. Wi-Fi *and* Ethernet, or a
     VPN/virtual adapter) and pairing can't find the device. The dropdown lists
-    each active adapter with its IPv4 address (or **no IPv4**) so you can pick
-    the real LAN connection. A saved adapter that was unplugged or renamed is
-    shown as **(not detected)**; choose Auto or a detected adapter to replace it.
+    sensible LAN adapters by default with their IPv4 address (or **no IPv4**);
+    select **Show all adapters** for unusual setups. A saved adapter that was
+    unplugged or renamed is shown as **(not detected)**; choose Auto or a
+    detected adapter to replace it.
   - **Matter storage** — read-only, shows where the pairing data lives (see
     [Factory reset](#factory-reset--re-pairing)).
   - **Config file** / **Config folder** — opens `config.json` or its folder
@@ -371,9 +380,9 @@ click **Save** (closing the window with unsaved changes asks first).
 
 If you need to start pairing over — a new phone, a botched setup, moving
 the PC to a different Google home, or just wanting a clean slate — use
-**Factory reset**, available two places: the tray menu ("Factory reset
-bridge…", right under "Pair with Google Home…") and Settings → Advanced →
-**Factory reset**. Both ask you to confirm first, since this is
+**Factory reset**, available two places: the tray menu (in both paired and
+unpaired states) and Settings → Advanced → **Factory reset**. Both ask you to
+confirm first, since this is
 destructive:
 
 - The bridge stops, then **restarts by itself** so it is immediately
@@ -393,7 +402,7 @@ destructive:
   reset untouched; only the Google pairing itself is wiped.
 
 **The pairing window opens by itself** once the reset finishes. It shows
-"Starting the bridge…" for a few seconds and then swaps itself to the new
+"Advertisement starting" for a few seconds and then swaps itself to the new
 code — wait for the code to appear before you scan. The old code stops
 working the moment you confirm the reset, so a code you photographed or left
 on screen beforehand will fail in the Home app with **"can't find device"**.
@@ -426,12 +435,11 @@ offers you during setup.
    seed** should differ from the first PC's. If the two PCs somehow show the
    same seed — which can only happen if you cloned a disk image or copied
    `config.json` between them — see the note below.
-4. **Enable the bridge** (tray → Enable bridge) and allow the **Windows
-   Firewall** prompt for **Private** networks. This is a fresh prompt on
-   this PC even though you allowed it on the first one.
-5. **Pair**: tray → **Pair with Google Home…**, then in the Home app on your
-   phone → **+ Add** → **Matter-enabled device**, scan the QR. Use the same
-   Google account and the same home as the first PC.
+4. Choose tray → **Pair with Google Home…**. This starts the bridge; allow the
+   **Windows Firewall** prompt for **Private** networks. It is a fresh prompt
+   on this PC even though you allowed it on the first one.
+5. In the Home app on your phone choose **+ Add** → **Matter-enabled device**
+   and scan the QR. Use the same Google account and home as the first PC.
 6. Tap through the "not Matter-certified" screen, pick a **room** (a
    different room from the first PC makes voice targeting easier still),
    and confirm the device names.
@@ -470,15 +478,16 @@ office PC"* vs *"…pause the HTPC"*.
   changes it, since the stall is controller-side re-association policy, not
   a subscription the bridge can nudge.
 - **The pairing window shows no QR code.** It tells you which of the two
-  reasons applies. *"Starting the bridge…"* means there is no code yet —
-  tick **Enable bridge** if you haven't, and give it a few seconds; the
-  code appears on its own. *"Paired — nothing more to do here"* means this
+  reasons applies. *"Advertisement starting"* means there is no code yet —
+  choose **Pair with Google Home…** if you have not already, and give it a
+  few seconds; that action starts the bridge and the code appears on its own.
+  *"Paired"* means this
   PC is already commissioned, and a second code can't be issued for it; to
   pair it again (or to a different home) run
   [Factory reset](#factory-reset--re-pairing) first.
 - **"Can't find device" when re-pairing right after a factory reset.** The
   reset issues a NEW code and invalidates the old one immediately. Wait for
-  the pairing window (which opens by itself) to leave "Starting the bridge…"
+  the pairing window (which opens by itself) to leave "Advertisement starting"
   and show the new code before you scan — scanning the previous code sends
   your phone looking for a device that no longer exists. Also remove the
   now-offline MatterHelm tiles from the Home app before adding them back.
@@ -486,8 +495,8 @@ office PC"* vs *"…pause the HTPC"*.
   **Allow** on the Windows Firewall prompt (see Installing, step 3) for
   **Private networks**. If you dismissed it or picked "Cancel", delete the
   blocked "Node.js"/"MatterHelm" entries under Windows Security → Firewall
-  → Allow an app, then restart the bridge (toggle **Enable bridge** off and
-  on) to re-trigger the prompt.
+  → Allow an app. If paired, toggle **Enable bridge** off and on; if unpaired,
+  relaunch MatterHelm and choose **Pair with Google Home…** to restart it.
 - **Pairing reaches "Connecting…" and then times out.** Discovery can still
   work even when the phone-to-PC unicast PASE handshake is blocked. A common
   cause is the phone being on the router's 2.4 GHz band while the PC is on
@@ -509,9 +518,15 @@ office PC"* vs *"…pause the HTPC"*.
   the active VID/PID registration either wasn't completed, doesn't match
   exactly, or the phone's Google account isn't a member of that project.
   Correct it, then reboot the Nest hub before trying again.
-- **Pairing times out immediately, or matter.js errors mention IPv6.**
-  IPv6 is disabled on your network adapter — re-enable it (adapter
-  Properties → check "Internet Protocol Version 6 (TCP/IPv6)").
+<a id="ipv6-and-neighbor-discovery"></a>
+- **Pairing times out immediately, or matter.js errors mention IPv6.** IPv6
+  is a hard Matter requirement across the local path, not merely a PC
+  checkbox. Re-enable it on the interface MatterHelm uses (adapter Properties
+  → check "Internet Protocol Version 6 (TCP/IPv6)"), confirm `ipconfig` shows
+  a link-local IPv6 address, and ensure the router/VLAN/Wi-Fi path between the
+  phone or Nest hub and the PC passes IPv6 Neighbor Discovery (ND). Broken or
+  isolated IPv6 commonly appears in Google Home as only a generic pairing
+  timeout even when IPv4 works.
 - **Multiple network adapters** (Wi-Fi + Ethernet, a VPN, Hyper-V/VMware
   virtual adapters). The bridge may be advertising itself on the wrong one.
   In Settings → Advanced → **mDNS network interface**, choose the real LAN

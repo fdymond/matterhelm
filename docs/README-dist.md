@@ -27,8 +27,8 @@ account link, no OAuth.
    project → Add integration → Matter → VID `0xFFF1`, PID `0x8000`. Skipping
    this is the usual cause of a hard "not certified" pairing failure.
 3. In the tray menu, enable the bridge (allow the **Private networks**
-   firewall prompt). The icon turns amber while starting, green once the
-   sidecar link is up.
+   firewall prompt). The icon turns amber while starting, then blue when the
+   bridge is running and ready to pair. It turns green only after commissioning.
 4. Choose **Pair with Google Home…** in the tray menu, then in the Home app:
    **+ Add** → **Add device** → **Matter-enabled device** → scan the QR code
    (or type the manual code). The pairing window tells you where it's up to.
@@ -40,4 +40,4 @@ Voice phrases and routine ideas: `docs/routines.md` in the source repository
 
 Settings (device names, custom commands, power-off behavior, overlay) live in
 the tray menu's **Settings…** window. Logs and diagnostics export are under
-**Diagnostics…**.
+**Settings… → Advanced**.

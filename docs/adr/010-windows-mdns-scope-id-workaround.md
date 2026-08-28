@@ -1,6 +1,6 @@
 # ADR-010: Windows mDNS scope-id workaround
 
-- **Status**: proposed
+- **Status**: accepted (shipped in MatterHelm 0.4.2)
 - **Date**: 2026-08-25
 - **Story**: S10-9
 
