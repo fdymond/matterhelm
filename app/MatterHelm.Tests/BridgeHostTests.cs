@@ -65,7 +65,10 @@ public static class BridgeHostTests
                 stopEntered.Set();
                 allowStopToFinish.Wait();
             });
-            Assert.True(stopEntered.Wait(TimeSpan.FromSeconds(2)));
+            // Polling wait: returns the instant the queue worker starts, so a
+            // generous ceiling is free locally and survives a loaded CI runner
+            // under coverage instrumentation (0.4.4: 2 s was too tight there).
+            Assert.True(stopEntered.Wait(TimeSpan.FromSeconds(30)));
             Task on = queue.Enqueue(() => transitions.Add(true));
 
             Assert.False(on.IsCompleted, "enable must wait for the complete stop operation");
