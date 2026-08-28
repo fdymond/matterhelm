@@ -1,5 +1,11 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using System.Text;
+using MatterHelm.Actions;
+using MatterHelm.Sidecar;
 using MatterHelm.Ui;
 
 namespace MatterHelm.Diagnostics;
@@ -23,6 +29,9 @@ internal static partial class ResourceProbe
     private const int OverlayIterations = 500;
     private const int SettingsIterations = 100;
     private const int TrayStateCycles = 50;
+    private const int WizardIterations = 50;
+    private const int BridgeLifecycleCycles = 5;
+    private const int MacroBurstSize = 12;
 
     // Drift budgets (story S6-1): churn may cost a few cached OS objects
     // (font realizations, message-window handles) but nothing proportional
@@ -66,6 +75,22 @@ internal static partial class ResourceProbe
         var config = new Config(
             Path.Combine(tempRoot, "config.json"),
             (level, message) => Emit($"    [{level}] {message}"));
+        config.Current.Commands.Custom =
+        [
+            new CustomCommandConfig
+            {
+                Key = "probe-macro",
+                Name = "Probe macro",
+                Action = new SequenceActionConfig
+                {
+                    Steps =
+                    [
+                        new DelayActionConfig { Ms = 1_000 },
+                        new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                    ],
+                },
+            },
+        ];
 
         using var hud = new OverlayHud();
         var tray = new TrayContext(config); // never disposed: ApplicationContext teardown is the Exit path; the probe process exits instead.
@@ -120,6 +145,50 @@ internal static partial class ResourceProbe
             }
         }
 
+        void WizardChurn(int iterations)
+        {
+            for (int i = 0; i < iterations; i++)
+            {
+                using (var pairing = new PairingWindow())
+                {
+                    pairing.Show();
+                    Pump(1);
+                    pairing.Close();
+                }
+
+                using (var welcome = new WelcomeWindow())
+                {
+                    welcome.Show();
+                    Pump(1);
+                    welcome.Close();
+                }
+            }
+        }
+
+        void BridgeChurn(int cycles)
+        {
+            using var executor = new ProbeExecutor();
+            using var host = new BridgeHost(
+                config,
+                executor,
+                ProbeSidecarSpec(),
+                supervisorOptions: new Sidecar.SupervisorOptions { StopGraceMs = 500 },
+                log: (level, message) => Emit($"    [{level}] {message}"),
+                storageDir: Path.Combine(tempRoot, "matter"));
+            for (int i = 0; i < cycles; i++)
+            {
+                config.Current.IpcPort = GetFreeLoopbackPort();
+                host.SetEnabled(true);
+                long deadline = Environment.TickCount64 + 2_000;
+                while (host.State != BridgeState.Connected && Environment.TickCount64 < deadline)
+                {
+                    Pump(5);
+                }
+
+                host.SetEnabled(false);
+            }
+        }
+
         try
         {
             // Idle composition sample first (task-2 evidence): tray + HUD up,
@@ -133,6 +202,8 @@ internal static partial class ResourceProbe
             OverlayChurn(25);
             SettingsChurn(5);
             TrayChurn(3);
+            WizardChurn(2);
+            BridgeChurn(1);
 
             // Two identical measured blocks. The first block still absorbs
             // one-time commit growth (the GC retains expanded heap segments
@@ -146,7 +217,9 @@ internal static partial class ResourceProbe
                 OverlayChurn(OverlayIterations);
                 SettingsChurn(SettingsIterations);
                 TrayChurn(TrayStateCycles);
-                Emit($"{label}: {OverlayIterations}x overlay Show (alternating widths), {SettingsIterations}x settings open/close, {TrayStateCycles}x tray state cycles");
+                WizardChurn(WizardIterations);
+                BridgeChurn(BridgeLifecycleCycles);
+                Emit($"{label}: {OverlayIterations}x overlay Show, {SettingsIterations}x settings, {TrayStateCycles}x tray states, {WizardIterations}x pairing+welcome recreates, {BridgeLifecycleCycles}x bridge stop/start with {MacroBurstSize} macros/start");
             }
 
             ResourceSample before = Sample();
@@ -180,6 +253,79 @@ internal static partial class ResourceProbe
         File.WriteAllText(resultsPath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
         Console.WriteLine($"(results file: {resultsPath})");
         return allPassed ? 0 : 1;
+    }
+
+    /// <summary>Minimal authenticated client used only by the resource probe's child processes.</summary>
+    internal static int RunSidecar()
+    {
+        try
+        {
+            string port = Environment.GetEnvironmentVariable("HTPC_BRIDGE_IPC_PORT")
+                ?? throw new InvalidOperationException("resource probe sidecar has no IPC port");
+            string token = Environment.GetEnvironmentVariable("HTPC_BRIDGE_IPC_TOKEN")
+                ?? throw new InvalidOperationException("resource probe sidecar has no IPC token");
+            using var socket = new ClientWebSocket();
+            socket.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/"), CancellationToken.None).GetAwaiter().GetResult();
+            Send(socket, $$"""{"v":3,"type":"hello","token":"{{token}}","protocol":1}""");
+            Send(socket, """{"v":3,"type":"matterStatus","commissioned":true,"advertisement":"notApplicable"}""");
+            for (int i = 0; i < MacroBurstSize; i++)
+            {
+                Send(socket, $$"""{"v":3,"type":"action","id":"{{Guid.NewGuid()}}","name":"custom","key":"probe-macro"}""");
+            }
+
+            _ = Console.In.ReadToEnd();
+            return 0;
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    private static void Send(ClientWebSocket socket, string frame)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(frame);
+        socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static SidecarSpec ProbeSidecarSpec()
+    {
+        string executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("resource probe cannot resolve its executable path");
+        string[] args = Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            ? [Environment.GetCommandLineArgs()[0], "--resource-probe-sidecar"]
+            : ["--resource-probe-sidecar"];
+        return new SidecarSpec(executable, args, AppContext.BaseDirectory);
+    }
+
+    private static int GetFreeLoopbackPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private sealed class ProbeExecutor : IActionExecutor
+    {
+        public event EventHandler<VolumeState>? VolumeChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public bool Execute(string name, object? value = null) => true;
+
+        public VolumeState GetVolumeState() => new(50, false);
+
+        public bool ReleaseDisplayKeepAwake() => true;
+
+        public void Dispose()
+        {
+        }
     }
 
     /// <summary>Human-readable delta between two samples.</summary>

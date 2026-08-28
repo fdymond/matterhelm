@@ -23,6 +23,14 @@ public interface IActionExecutor : IDisposable
     /// <summary>Executes one named action (the protocol action names, plus <c>"sleep"</c> for the power mapping). Never throws; <c>false</c> = failure.</summary>
     bool Execute(string name, object? value = null);
 
+    /// <summary>
+    /// Executes display-off while retaining whether DDC/CI or Windows
+    /// blanking actually completed. The default keeps existing test/external
+    /// executors source-compatible but cannot identify their path.
+    /// </summary>
+    DisplayPowerOffResult ExecuteDisplaysOff() =>
+        new(Execute("powerOff"), DisplayPowerOffPath.None);
+
     /// <summary>Clears any display-off keep-awake hold without waking the displays. Never throws.</summary>
     bool ReleaseDisplayKeepAwake();
 
@@ -52,6 +60,9 @@ public sealed class ActionExecutorAdapter : IActionExecutor
     /// <inheritdoc />
     public bool Execute(string name, object? value = null) =>
         name == "sleep" ? DisplayPower.Sleep() : _executor.Execute(name, value);
+
+    /// <inheritdoc />
+    public DisplayPowerOffResult ExecuteDisplaysOff() => _executor.ExecuteDisplaysOff();
 
     /// <inheritdoc />
     public VolumeState GetVolumeState() => _executor.Volume.GetState();
@@ -196,6 +207,60 @@ public static class SidecarLaunchSpec
 /// </summary>
 public sealed record FactoryResetResult(bool Ok, string? Error);
 
+/// <summary>Ordered, non-blocking dispatch for the host's otherwise blocking lifecycle operations.</summary>
+internal sealed class SerialActionQueue
+{
+    private readonly Lock _gate = new();
+    private readonly Action<Exception> _onError;
+    private Task _tail = Task.CompletedTask;
+    private bool _completed;
+
+    internal SerialActionQueue(Action<Exception> onError) => _onError = onError;
+
+    internal Task Enqueue(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_gate)
+        {
+            if (_completed)
+            {
+                return Task.CompletedTask;
+            }
+
+            _tail = _tail.ContinueWith(
+                _ => Execute(action),
+                CancellationToken.None,
+                TaskContinuationOptions.DenyChildAttach,
+                TaskScheduler.Default);
+            return _tail;
+        }
+    }
+
+    internal void Complete()
+    {
+        Task tail;
+        lock (_gate)
+        {
+            _completed = true;
+            tail = _tail;
+        }
+
+        tail.GetAwaiter().GetResult();
+    }
+
+    private void Execute(Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception ex)
+        {
+            _onError(ex);
+        }
+    }
+}
+
 /// <summary>One built-in endpoint's entry in the <c>HTPC_BRIDGE_ENDPOINTS</c> contract: display name + whether the bridge publishes it.</summary>
 internal sealed record SidecarEndpointEntry(string Name, bool Enabled);
 
@@ -278,6 +343,7 @@ public sealed class BridgeHost : IDisposable
     // short of anything a user would call "hung".
     private static readonly TimeSpan FactoryResetDeleteRetryWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan FactoryResetDeleteRetryDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan MacroShutdownWait = TimeSpan.FromSeconds(2);
 
     private readonly Config _config;
     private readonly IActionExecutor _executor;
@@ -290,6 +356,10 @@ public sealed class BridgeHost : IDisposable
     /// <summary>Guards lifecycle (_server/_supervisor/_running/_disposed) and state-derivation fields; events always fire outside it.</summary>
     private readonly Lock _gate = new();
 
+    /// <summary>Serializes each complete stop/start/reset/restart, including listener teardown outside <see cref="_gate"/>.</summary>
+    private readonly Lock _lifecycleGate = new();
+    private readonly SerialActionQueue _lifecycleQueue;
+
     private IpcServer? _server;
     private SidecarSupervisor? _supervisor;
     private bool _running;
@@ -301,6 +371,9 @@ public sealed class BridgeHost : IDisposable
 
     /// <summary>Cancels in-flight background-macro delay waits on dispose (S8-6), so app exit never waits out a macro.</summary>
     private readonly CancellationTokenSource _macroCts = new();
+    private readonly Lock _macroGate = new();
+    private readonly HashSet<Task> _macroTasks = [];
+    private bool _macrosStopping;
 
     // Volume echo dead-band state (guarded by _gate; see the constants above).
     private int? _lastCommandedVolume;
@@ -340,6 +413,7 @@ public sealed class BridgeHost : IDisposable
         _supervisorOptions = supervisorOptions;
         _log = log ?? DefaultLog;
         _storageDir = storageDir ?? Path.Combine(AppPaths.Root, "matter");
+        _lifecycleQueue = new SerialActionQueue(ex => _log("ERROR", $"bridge: lifecycle operation failed: {ex.Message}"));
         _executor.VolumeChanged += OnVolumeChanged;
         _config.Changed += OnConfigChanged;
     }
@@ -358,6 +432,17 @@ public sealed class BridgeHost : IDisposable
             lock (_gate)
             {
                 return _state;
+            }
+        }
+    }
+
+    internal int RunningMacroCount
+    {
+        get
+        {
+            lock (_macroGate)
+            {
+                return _macroTasks.Count;
             }
         }
     }
@@ -401,9 +486,25 @@ public sealed class BridgeHost : IDisposable
     /// </summary>
     public void SetEnabled(bool enabled)
     {
+        lock (_lifecycleGate)
+        {
+            SetEnabledCore(enabled);
+        }
+    }
+
+    /// <summary>Queues an enable/disable request in caller-observed order without blocking the UI thread.</summary>
+    internal Task QueueSetEnabled(bool enabled) => _lifecycleQueue.Enqueue(() => SetEnabled(enabled));
+
+    /// <summary>Queues a factory reset and delivers its result on the queue worker.</summary>
+    internal Task QueueFactoryReset(Action<FactoryResetResult> completed) =>
+        _lifecycleQueue.Enqueue(() => completed(FactoryReset()));
+
+    private void SetEnabledCore(bool enabled)
+    {
         IpcServer? stoppingServer = null;
         SidecarSupervisor? stoppingSupervisor = null;
         bool releaseDisplayKeepAwake = false;
+        bool startFailed = false;
         lock (_gate)
         {
             if (_disposed)
@@ -422,7 +523,7 @@ public sealed class BridgeHost : IDisposable
             {
                 if (!StartLocked())
                 {
-                    return;
+                    startFailed = true;
                 }
             }
             else
@@ -445,28 +546,53 @@ public sealed class BridgeHost : IDisposable
 
         stoppingSupervisor?.Stop();
         stoppingServer?.Dispose();
+        if (startFailed && _config.Current.BridgeEnabled)
+        {
+            _config.Current.BridgeEnabled = false;
+            _ = _config.Save();
+            _log("WARN", "bridge: start failed; persisted it disabled so the tray setting and host state remain consistent.");
+        }
+
         RecomputeState();
     }
 
     /// <summary>Stops the bridge and detaches from the executor. Idempotent.</summary>
     public void Dispose()
     {
-        SetEnabled(false);
-        lock (_gate)
+        _lifecycleQueue.Complete();
+        Task[] macroTasks;
+        lock (_lifecycleGate)
         {
-            if (_disposed)
+            lock (_gate)
             {
-                return;
+                if (_disposed)
+                {
+                    return;
+                }
             }
 
-            _disposed = true;
+            lock (_macroGate)
+            {
+                _macrosStopping = true;
+                macroTasks = [.. _macroTasks];
+            }
+
+            _macroCts.Cancel();
+            SetEnabledCore(false);
+            lock (_gate)
+            {
+                _disposed = true;
+            }
         }
 
-        // Wake any background macro sleeping in a delay step; the CTS itself
-        // is deliberately not disposed — a still-draining macro thread may
-        // touch the token, and WaitDelayStep treats a disposed handle as
-        // cancelled anyway.
-        _macroCts.Cancel();
+        if (macroTasks.Length > 0 && !Task.WaitAll(macroTasks, MacroShutdownWait))
+        {
+            _log(
+                "WARN",
+                $"bridge: {macroTasks.Count(task => !task.IsCompleted)} macro task(s) did not stop within {MacroShutdownWait.TotalSeconds:0.#} s; shutdown continues.");
+        }
+
+        _macroCts.Dispose();
         _config.Changed -= OnConfigChanged;
         _executor.VolumeChanged -= OnVolumeChanged;
         lock (_publishGate)
@@ -506,8 +632,16 @@ public sealed class BridgeHost : IDisposable
     /// </summary>
     public FactoryResetResult FactoryReset()
     {
+        lock (_lifecycleGate)
+        {
+            return FactoryResetCore();
+        }
+    }
+
+    private FactoryResetResult FactoryResetCore()
+    {
         bool restoreEnabled = _config.Current.BridgeEnabled;
-        SetEnabled(false);
+        SetEnabledCore(false);
 
         if (!TryDeleteStorageDirectory(_storageDir, out string? error))
         {
@@ -521,7 +655,7 @@ public sealed class BridgeHost : IDisposable
                 _overlaySink?.Invoke(new OverlayContent("Factory reset failed", error ?? "failed", IsError: true));
             }
 
-            SetEnabled(restoreEnabled);
+            SetEnabledCore(restoreEnabled);
             if (restoreEnabled && State == BridgeState.Disabled)
             {
                 _config.Current.BridgeEnabled = false;
@@ -539,7 +673,7 @@ public sealed class BridgeHost : IDisposable
         // restart agree with what the bridge is actually doing.
         _config.Current.BridgeEnabled = true;
         _config.Save();
-        SetEnabled(true);
+        SetEnabledCore(true);
 
         _log(
             "INFO",
@@ -729,10 +863,18 @@ public sealed class BridgeHost : IDisposable
             }
         }
 
-        _ = Task.Run(RestartAfterConfigChange);
+        _ = _lifecycleQueue.Enqueue(RestartAfterConfigChange);
     }
 
     private void RestartAfterConfigChange()
+    {
+        lock (_lifecycleGate)
+        {
+            RestartAfterConfigChangeCore();
+        }
+    }
+
+    private void RestartAfterConfigChangeCore()
     {
         lock (_gate)
         {
@@ -748,10 +890,10 @@ public sealed class BridgeHost : IDisposable
             _overlaySink?.Invoke(new OverlayContent("Settings saved", "restarting bridge…", IsError: false));
         }
 
-        SetEnabled(false);
+        SetEnabledCore(false);
         if (_config.Current.BridgeEnabled)
         {
-            SetEnabled(true);
+            SetEnabledCore(true);
         }
     }
 
@@ -1097,7 +1239,11 @@ public sealed class BridgeHost : IDisposable
         // currently configured route. Always clear it on Power On, including
         // after the user changed the route to screensaver or sleep.
         bool released = !on || _executor.ReleaseDisplayKeepAwake();
-        (bool ok, string pill) = RoutePowerAction(_config.Current.PowerOffAction, on, _executor.Execute);
+        (bool ok, string pill) = RoutePowerAction(
+            _config.Current.PowerOffAction,
+            on,
+            _executor.Execute,
+            _executor.ExecuteDisplaysOff);
         return (released & ok, pill, null);
     }
 
@@ -1109,25 +1255,48 @@ public sealed class BridgeHost : IDisposable
     internal static (bool Ok, string Pill) RoutePowerAction(
         PowerOffAction action,
         bool on,
-        Func<string, object?, bool> execute) => (on, action) switch
+        Func<string, object?, bool> execute,
+        Func<DisplayPowerOffResult>? executeDisplaysOff = null)
     {
-        (true, PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff) =>
-            (execute("powerOn", null), "displays woken"),
-        (true, PowerOffAction.Screensaver) =>
-            (execute("stopScreenSaver", null), "screensaver dismissed"),
-        (true, PowerOffAction.Sleep) => (true, "no action needed"),
-        (false, PowerOffAction.DisplaysOff) =>
-            (execute("powerOff", null), "displays off"),
-        (false, PowerOffAction.Screensaver) =>
-            (execute("startScreenSaver", null), "screensaver started"),
-        (false, PowerOffAction.Sleep) =>
-            (execute("sleep", null), "sleeping"),
-        // Pause first, then blank (see class doc); non-short-circuit `&` so
-        // the displays still go off even if the pause key injection failed.
-        (false, PowerOffAction.PauseAndDisplaysOff) =>
-            (execute("playPause", null) & execute("powerOff", null), "paused + displays off"),
-        _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
-    };
+        if (on)
+        {
+            return action switch
+            {
+                PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff =>
+                    (execute("powerOn", null), "displays woken"),
+                PowerOffAction.Screensaver =>
+                    (execute("stopScreenSaver", null), "screensaver dismissed"),
+                PowerOffAction.Sleep => (true, "no action needed"),
+                _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
+            };
+        }
+
+        if (action == PowerOffAction.Screensaver)
+        {
+            return (execute("startScreenSaver", null), "screensaver started");
+        }
+
+        if (action == PowerOffAction.Sleep)
+        {
+            return (execute("sleep", null), "sleeping");
+        }
+
+        if (action is not (PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff))
+        {
+            throw new ArgumentOutOfRangeException(nameof(action), action, null);
+        }
+
+        // Pause first, then blank (see class doc). The displays-off delegate
+        // still runs when pause fails so display-off remains the terminal effect.
+        bool paused = action != PowerOffAction.PauseAndDisplaysOff || execute("playPause", null);
+        DisplayPowerOffResult displayResult = executeDisplaysOff?.Invoke()
+            ?? new DisplayPowerOffResult(execute("powerOff", null), DisplayPowerOffPath.None);
+        bool fallback = displayResult.Path == DisplayPowerOffPath.BlankingFallback;
+        string pill = action == PowerOffAction.PauseAndDisplaysOff
+            ? fallback ? "Paused + displays off — standby likely" : "paused + displays off"
+            : fallback ? "Displays off — standby likely" : "displays off";
+        return (paused & displayResult.Ok, pill);
+    }
 
     /// <summary>
     /// Executes a v2 <c>custom</c> action: resolves the wire key against the
@@ -1179,8 +1348,8 @@ public sealed class BridgeHost : IDisposable
                 return ExecuteKeySequence(commandKey, keySequence.Sequence);
             case SystemActionConfig system:
                 return ExecuteSystemCommand(system.Command);
-            case DelayActionConfig delay:
-                return WaitDelayStep(delay.Ms);
+            case DelayActionConfig:
+                return (false, "failed", $"delay is only valid inside a sequence: {commandKey}");
             case SequenceActionConfig sequence when sequence.Steps.Any(step => step is DelayActionConfig):
                 StartBackgroundSequence(commandKey, sequence);
                 return (true, $"running {sequence.Steps.Count} steps", null);
@@ -1213,25 +1382,47 @@ public sealed class BridgeHost : IDisposable
         return (true, $"ran {sequence.Steps.Count} steps", null);
     }
 
-    /// <summary>
-    /// A macro's delay step: a cancellable wait, so app shutdown never hangs
-    /// behind a sleeping macro (<see cref="Dispose"/> cancels <see cref="_macroCts"/>).
-    /// </summary>
-    private (bool Ok, string Pill, string? Error) WaitDelayStep(int ms)
+    /// <summary>Runs a delay-bearing sequence without occupying a pool thread while it waits.</summary>
+    private async Task<(bool Ok, string Pill, string? Error)> RunSequenceStepsAsync(
+        string commandKey,
+        SequenceActionConfig sequence,
+        CancellationToken cancellationToken)
+    {
+        for (int i = 0; i < sequence.Steps.Count; i++)
+        {
+            CustomActionConfig step = sequence.Steps[i];
+            if (step is SequenceActionConfig)
+            {
+                return (false, "failed", $"custom command {commandKey}: step {i + 1} is a nested sequence");
+            }
+
+            (bool stepOk, string stepPill, string? stepError) = step switch
+            {
+                DelayActionConfig delay => await WaitDelayStepAsync(delay.Ms, cancellationToken).ConfigureAwait(false),
+                _ => ExecuteCustomAction(commandKey, step),
+            };
+            if (!stepOk)
+            {
+                return (false, "failed", $"custom command {commandKey}: step {i + 1} of {sequence.Steps.Count} failed: {stepError ?? stepPill}");
+            }
+        }
+
+        return (true, $"ran {sequence.Steps.Count} steps", null);
+    }
+
+    private static async Task<(bool Ok, string Pill, string? Error)> WaitDelayStepAsync(
+        int ms,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (_macroCts.Token.WaitHandle.WaitOne(ms))
-            {
-                return (false, "failed", "macro cancelled (shutting down)");
-            }
+            await Task.Delay(ms, cancellationToken).ConfigureAwait(false);
+            return (true, $"waited {ms} ms", null);
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return (false, "failed", "macro cancelled (shutting down)");
         }
-
-        return (true, $"waited {ms} ms", null);
     }
 
     /// <summary>
@@ -1243,32 +1434,64 @@ public sealed class BridgeHost : IDisposable
     private void StartBackgroundSequence(string commandKey, SequenceActionConfig sequence)
     {
         string name = FindCustomCommand(commandKey)?.Name ?? commandKey;
-        _ = Task.Run(() =>
+        Task task;
+        lock (_macroGate)
         {
-            try
+            if (_macrosStopping)
             {
-                (bool ok, string pill, string? error) = RunSequenceSteps(commandKey, sequence);
-                if (ok)
-                {
-                    _log("INFO", $"bridge: macro '{commandKey}' completed ({pill}).");
-                }
-                else
-                {
-                    _log("ERROR", $"bridge: macro '{commandKey}' failed: {error ?? pill}");
-                }
+                return;
+            }
 
-                if (_config.Current.OverlayEnabled)
-                {
-                    _overlaySink?.Invoke(new OverlayContent($"Google Home → {name}", ok ? pill : "failed", !ok));
-                }
-            }
-            catch (Exception ex)
+            CancellationToken cancellationToken = _macroCts.Token;
+            task = Task.Run(
+                () => RunBackgroundSequenceAsync(commandKey, name, sequence, cancellationToken),
+                CancellationToken.None);
+            _macroTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completed =>
             {
-                // Executor contract is no-throw; this guard keeps a bug from
-                // surfacing as an unobserved task exception.
-                _log("ERROR", $"bridge: macro '{commandKey}' threw: {ex.Message}");
+                lock (_macroGate)
+                {
+                    _macroTasks.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task RunBackgroundSequenceAsync(
+        string commandKey,
+        string name,
+        SequenceActionConfig sequence,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            (bool ok, string pill, string? error) =
+                await RunSequenceStepsAsync(commandKey, sequence, cancellationToken).ConfigureAwait(false);
+            if (ok)
+            {
+                _log("INFO", $"bridge: macro '{commandKey}' completed ({pill}).");
             }
-        });
+            else
+            {
+                _log("ERROR", $"bridge: macro '{commandKey}' failed: {error ?? pill}");
+            }
+
+            if (_config.Current.OverlayEnabled)
+            {
+                _overlaySink?.Invoke(new OverlayContent($"Google Home → {name}", ok ? pill : "failed", !ok));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Executor contract is no-throw; this guard keeps a bug from
+            // surfacing as an unobserved task exception.
+            _log("ERROR", $"bridge: macro '{commandKey}' threw: {ex.Message}");
+        }
     }
 
     /// <summary>

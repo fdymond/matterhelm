@@ -57,6 +57,17 @@ public sealed class OverlayHudTests
     }
 
     [Fact]
+    public void BlankingFallbackPillRetainsTheStandbyWarning()
+    {
+        var content = new OverlayContent(
+            "Google Home → power off (→ displays off)",
+            "Displays off — standby likely",
+            IsError: false);
+
+        Assert.Equal("Displays off — standby likely", OverlayHud.DisplayedPillText(content));
+    }
+
+    [Fact]
     public void LongCommandPillsEllipsizeWithinAWidthThatDoesNotDependOnPrimary()
     {
         var shortCommand = new OverlayContent("Google Home \u2192 Movie Mode", "Executed", IsError: false);

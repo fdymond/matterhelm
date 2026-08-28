@@ -60,7 +60,10 @@ public sealed partial class DisplayPower : IDisposable
     }
 
     /// <summary>Puts all displays into their low-power (off) state.</summary>
-    public bool DisplaysOff()
+    public bool DisplaysOff() => DisplaysOffWithResult().Ok;
+
+    /// <summary>Puts displays off and reports which physical path actually succeeded.</summary>
+    public DisplayPowerOffResult DisplaysOffWithResult()
     {
         lock (_gate)
         {
@@ -80,7 +83,7 @@ public sealed partial class DisplayPower : IDisposable
                         "Display power: mixed DDC/CI support; unsupported displays were left on because global blanking can trigger Modern Standby.");
                 }
 
-                return true;
+                return new DisplayPowerOffResult(true, DisplayPowerOffPath.Ddc);
             }
 
             // SC_MONITORPOWER is global, so use it only when DDC/CI managed no
@@ -91,13 +94,26 @@ public sealed partial class DisplayPower : IDisposable
             {
                 _usedBlankingFallback = false;
                 LogOffTransition(results, usedFallback: false, holdAcquired: false);
-                return false;
+                return new DisplayPowerOffResult(false, DisplayPowerOffPath.None);
             }
 
             bool blanked = _blankDisplays();
             _usedBlankingFallback = blanked;
             LogOffTransition(results, usedFallback: blanked, holdAcquired: true);
-            return blanked;
+            if (!blanked)
+            {
+                bool released = _awakeGuard.Release();
+                _log(
+                    released ? "WARN" : "ERROR",
+                    released
+                        ? "Display power: global blanking failed after keep-awake acquisition; the hold was released."
+                        : "Display power: global blanking failed and the keep-awake hold could not be released; retry display-on or exit the app.");
+                return new DisplayPowerOffResult(false, DisplayPowerOffPath.None);
+            }
+
+            return new DisplayPowerOffResult(
+                true,
+                DisplayPowerOffPath.BlankingFallback);
         }
     }
 

@@ -3,7 +3,7 @@ namespace MatterHelm.Ui;
 /// <summary>
 /// First-run onboarding (S10-7). Before this, a fresh install put an icon in
 /// the tray and said nothing: the user had to guess that the flow is
-/// right-click → Enable bridge → Pair, and that Google needs a one-time
+/// right-click → Pair with Google Home, and that Google needs a one-time
 /// (free) Developer Console registration first — the single most common
 /// reason pairing fails outright.
 ///
@@ -15,6 +15,8 @@ namespace MatterHelm.Ui;
 /// </summary>
 public sealed class WelcomeWindow : Form
 {
+    private readonly List<Font> _ownedFonts = [];
+
     /// <summary>Builds the window. <see cref="StartPairingRequested"/> fires when the user clicks the primary button.</summary>
     public WelcomeWindow(int vendorId = 0xFFF1, int productId = 0x8000)
     {
@@ -45,7 +47,7 @@ public sealed class WelcomeWindow : Form
         {
             Text = "Let's add this PC to Google Home",
             AutoSize = true,
-            Font = new Font("Segoe UI", 14f),
+            Font = OwnFont(14f),
             Margin = SP(0, 0, 0, 6),
         });
 
@@ -71,7 +73,7 @@ public sealed class WelcomeWindow : Form
         {
             Text = "Open the Google Home Developer Console",
             AutoSize = true,
-            Font = new Font("Segoe UI", 9.5f),
+            Font = OwnFont(9.5f),
             Margin = SP(18, 2, 0, 16),
         };
         consoleLink.LinkClicked += (_, _) => OpenUrl("https://console.home.google.com/");
@@ -84,7 +86,7 @@ public sealed class WelcomeWindow : Form
             contentWidth));
 
         layout.Controls.Add(StepBlock(
-            "3.  Turn the bridge on and pair",
+            "3.  Start the bridge and pair",
             "The button below does both: it starts the bridge and opens the pairing "
                 + "code. Windows will ask to allow it on Private networks — say yes, or "
                 + "your hub can't find this PC.",
@@ -110,7 +112,7 @@ public sealed class WelcomeWindow : Form
         };
         var startButton = new Button
         {
-            Text = "Enable bridge && pair",
+            Text = "Start bridge && pair",
             AutoSize = true,
             Padding = SP(10, 3, 10, 3),
         };
@@ -125,7 +127,7 @@ public sealed class WelcomeWindow : Form
                 + "Setup guide. The user guide has the same steps in more detail.",
             AutoSize = true,
             MaximumSize = new Size(contentWidth, 0),
-            Font = new Font("Segoe UI", 8.5f),
+            Font = OwnFont(8.5f),
             ForeColor = SystemColors.GrayText,
             Margin = SP(0, 12, 0, 0),
         });
@@ -158,7 +160,7 @@ public sealed class WelcomeWindow : Form
         {
             Text = heading,
             AutoSize = true,
-            Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+            Font = OwnFont(10f, FontStyle.Bold),
             Margin = SP(0, 0, 0, 2),
         });
         stack.Controls.Add(new Label
@@ -190,4 +192,25 @@ public sealed class WelcomeWindow : Form
 
     /// <summary>Logical (96-dpi) padding → device padding.</summary>
     private Padding SP(int left, int top, int right, int bottom) => new(S(left), S(top), S(right), S(bottom));
+
+    private Font OwnFont(float size, FontStyle style = FontStyle.Regular)
+    {
+        var font = new Font("Segoe UI", size, style);
+        _ownedFonts.Add(font);
+        return font;
+    }
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            foreach (Font font in _ownedFonts)
+            {
+                font.Dispose();
+            }
+        }
+
+        base.Dispose(disposing);
+    }
 }

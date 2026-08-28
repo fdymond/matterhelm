@@ -8,6 +8,159 @@ public static class TrayContextTests
 {
     private const string SampleQrPayload = "MT:Y.K90C0R159FZO62N10";
 
+    [Theory]
+    [InlineData(BridgeState.Disabled)]
+    [InlineData(BridgeState.Running)]
+    [InlineData(BridgeState.AwaitingPairing)]
+    [InlineData(BridgeState.Faulted)]
+    public static void UncommissionedStatesShowPairAndFactoryResetButHideEnable(BridgeState state)
+    {
+        string dir = CreateTempDirectory();
+        try
+        {
+            var config = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            using var tray = new TrayContext(config);
+
+            tray.SetState(state);
+
+            Assert.True(tray.PairMenuVisible);
+            Assert.True(tray.PairMenuEnabled);
+            Assert.False(tray.EnableBridgeMenuVisible);
+            Assert.True(tray.FactoryResetMenuVisible);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(BridgeState.Connected)]
+    [InlineData(BridgeState.Disabled)]
+    [InlineData(BridgeState.Running)]
+    [InlineData(BridgeState.Faulted)]
+    public static void CommissionedStatePersistsAcrossBridgeVariantsAndShowsEnable(BridgeState afterCommissioning)
+    {
+        string dir = CreateTempDirectory();
+        try
+        {
+            var config = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            using var tray = new TrayContext(config);
+            tray.SetState(BridgeState.Connected);
+
+            tray.SetState(afterCommissioning);
+
+            Assert.False(tray.PairMenuVisible);
+            Assert.False(tray.PairMenuEnabled);
+            Assert.True(tray.EnableBridgeMenuVisible);
+            Assert.True(tray.FactoryResetMenuVisible);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public static void PairedDisabledColdStartUsesExistingFabricSignalToShowEnable()
+    {
+        string dir = CreateTempDirectory();
+        try
+        {
+            var config = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            using var tray = new TrayContext(config, commissionedAtStartup: true);
+
+            Assert.Equal(BridgeState.Disabled, tray.State);
+            Assert.True(tray.EnableBridgeMenuVisible);
+            Assert.False(tray.PairMenuVisible);
+            Assert.True(tray.FactoryResetMenuVisible);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public static void PairMenuClickPersistsAndRaisesEnableBeforeOpeningPairing()
+    {
+        string dir = CreateTempDirectory();
+        try
+        {
+            var config = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            using var tray = new TrayContext(config);
+            var events = new List<string>();
+            tray.EnableBridgeChanged += (_, enabled) => events.Add($"enable:{enabled}");
+            tray.PairRequested += (_, _) => events.Add("pair");
+
+            tray.PerformPairMenuClick();
+
+            Assert.True(config.Current.BridgeEnabled);
+            Assert.True(tray.BridgeMenuChecked);
+            Assert.True(tray.PairingWindowOpen);
+            Assert.Equal(["enable:True", "pair"], events);
+
+            var reloaded = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            Assert.True(reloaded.Current.BridgeEnabled);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public static void PairMenuClickRetriesStartWhenPersistedEnabledBridgeIsStopped()
+    {
+        string dir = CreateTempDirectory();
+        try
+        {
+            var config = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            config.Current.BridgeEnabled = true;
+            config.Save();
+            using var tray = new TrayContext(config);
+            var requestedStates = new List<bool>();
+            tray.EnableBridgeChanged += (_, enabled) => requestedStates.Add(enabled);
+
+            tray.SetState(BridgeState.Disabled);
+            tray.PerformPairMenuClick();
+
+            Assert.Equal([true], requestedStates);
+            Assert.True(tray.PairingWindowOpen);
+            Assert.Contains("bridge off", tray.PairingWindowTitle, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public static void CommissioningAndFactoryResetFlipTheContextualMenuLive()
+    {
+        string dir = CreateTempDirectory();
+        try
+        {
+            var config = new Config(Path.Combine(dir, "config.json"), (_, _) => { });
+            using var tray = new TrayContext(config);
+            tray.SetState(BridgeState.AwaitingPairing);
+
+            tray.SetState(BridgeState.Connected);
+            Assert.True(tray.EnableBridgeMenuVisible);
+            Assert.False(tray.PairMenuVisible);
+
+            config.Current.BridgeEnabled = true;
+            tray.OnFactoryResetCompleted(new FactoryResetResult(true, null));
+            Assert.False(tray.EnableBridgeMenuVisible);
+            Assert.True(tray.PairMenuVisible);
+            Assert.True(tray.FactoryResetMenuVisible);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public static void CommissionedWhileReadyShowsPairedSchedulesCloseAndThenCloses()
     {
@@ -69,7 +222,7 @@ public static class TrayContextTests
     }
 
     [Fact]
-    public static void DisableClearsPairingDataRendersBridgeOffAndDisablesPairMenu()
+    public static void DisableClearsPairingDataRendersBridgeOffAndKeepsPairActionable()
     {
         string dir = CreateTempDirectory();
         try
@@ -83,7 +236,8 @@ public static class TrayContextTests
 
             tray.SetState(BridgeState.Disabled);
 
-            Assert.False(tray.PairMenuEnabled);
+            Assert.True(tray.PairMenuEnabled);
+            Assert.True(tray.PairMenuVisible);
             Assert.Equal(PairingStage.Starting, tray.PairingWindowStage);
             Assert.Contains("bridge off", tray.PairingWindowTitle, StringComparison.Ordinal);
 

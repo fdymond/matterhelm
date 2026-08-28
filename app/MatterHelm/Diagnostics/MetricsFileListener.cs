@@ -13,33 +13,56 @@ namespace MatterHelm.Diagnostics;
 /// churn (S6-1): a flush whose counters/histograms are identical to the last
 /// line written to the same file is skipped — an idle day costs one line
 /// (the day's first, so the file always exists), not 1440. Prunes snapshot
-/// files older than 7 days on construction — the same retention approach as
-/// <see cref="Log"/>. The directory is injectable so demos/tests never touch
+/// files older than 7 days on construction and each date rollover, and rolls
+/// a day's snapshots to numbered 5 MiB segments — the same bounded retention
+/// approach as <see cref="Log"/>. The directory is injectable so demos/tests never touch
 /// the real user profile. Writing never throws — metrics must not take down
 /// the tray app.
 /// </summary>
 public sealed class MetricsFileListener : IDisposable
 {
     private const int RetentionDays = 7;
+    private const long FileSizeLimitBytes = 5 * 1024 * 1024;
 
     private readonly Lock _gate = new();
     private readonly string _directory;
     private readonly MeterListener _listener;
     private readonly System.Threading.Timer _timer;
+    private readonly TimeProvider _clock;
+    private readonly long _fileSizeLimitBytes;
     private readonly Dictionary<string, long> _counters = [];
     private readonly Dictionary<string, HistogramState> _histograms = [];
     private readonly Dictionary<string, long> _gauges = [];
     private string? _lastWrittenPayload;
     private string? _lastWrittenPath;
     private long _lastWrittenPrivateBytes;
+    private DateOnly? _lastPrunedLocalDate;
     private bool _disposed;
 
     /// <summary>Starts listening and the snapshot timer.</summary>
     /// <param name="directory">Snapshot directory; defaults to <c>%APPDATA%\MatterHelm\logs</c>. Pass a temp path in tests/demos.</param>
     /// <param name="interval">Snapshot period; defaults to 60 s. Shrinkable for tests.</param>
     public MetricsFileListener(string? directory = null, TimeSpan? interval = null)
+        : this(
+            directory ?? Path.Combine(AppPaths.Root, "logs"),
+            interval ?? TimeSpan.FromSeconds(60),
+            FileSizeLimitBytes,
+            TimeProvider.System)
     {
-        _directory = directory ?? Path.Combine(AppPaths.Root, "logs");
+    }
+
+    internal MetricsFileListener(
+        string directory,
+        TimeSpan interval,
+        long fileSizeLimitBytes,
+        TimeProvider clock)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(fileSizeLimitBytes);
+        _directory = directory;
+        _clock = clock;
+        _fileSizeLimitBytes = fileSizeLimitBytes;
         Prune();
 
         // Touch one instrument so AppMetrics' static initializer has run and
@@ -51,12 +74,11 @@ public sealed class MetricsFileListener : IDisposable
         _listener.SetMeasurementEventCallback<double>(OnDoubleMeasurement);
         _listener.Start();
 
-        TimeSpan period = interval ?? TimeSpan.FromSeconds(60);
-        _timer = new System.Threading.Timer(_ => Flush(), null, period, period);
+        _timer = new System.Threading.Timer(_ => Flush(), null, interval, interval);
     }
 
     /// <summary>The snapshot file the next flush appends to (one file per calendar day, like the app log).</summary>
-    public string CurrentFilePath => Path.Combine(_directory, $"metrics-{DateTime.Now:yyyyMMdd}.jsonl");
+    public string CurrentFilePath => Path.Combine(_directory, $"metrics-{_clock.GetLocalNow():yyyyMMdd}.jsonl");
 
     /// <summary>
     /// Appends one snapshot line now, unless nothing changed: a payload
@@ -85,9 +107,14 @@ public sealed class MetricsFileListener : IDisposable
 
             lock (_gate)
             {
+                DateTimeOffset localNow = _clock.GetLocalNow();
+                PruneIfDateChangedLocked(localNow);
                 string payload = BuildPayloadLocked();
-                string path = CurrentFilePath;
                 long privateBytes = _gauges.GetValueOrDefault("process_private_bytes");
+                string dayStem = $"metrics-{localNow:yyyyMMdd}";
+                bool lastFileIsCurrentDay = _lastWrittenPath is not null
+                    && Path.GetFileName(_lastWrittenPath).StartsWith(dayStem, StringComparison.OrdinalIgnoreCase)
+                    && File.Exists(_lastWrittenPath);
 
                 // The S6-1 idle-churn rule now compares only the activity
                 // part (counters/histograms) — gauges jitter by nature. A
@@ -95,8 +122,7 @@ public sealed class MetricsFileListener : IDisposable
                 // the last written line, so a slow leak leaves a visible
                 // trend instead of hiding behind an idle day's single line.
                 bool coreUnchanged = payload == _lastWrittenPayload
-                    && string.Equals(path, _lastWrittenPath, StringComparison.OrdinalIgnoreCase)
-                    && File.Exists(path);
+                    && lastFileIsCurrentDay;
                 bool memoryDrifted = _lastWrittenPrivateBytes > 0
                     && Math.Abs(privateBytes - _lastWrittenPrivateBytes) * 10 >= _lastWrittenPrivateBytes;
                 if (coreUnchanged && !memoryDrifted)
@@ -112,7 +138,9 @@ public sealed class MetricsFileListener : IDisposable
                 // written line but never participate in the dedupe compare.
                 string line = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{{\"ts\":\"{DateTime.UtcNow:O}\",{payload[1..^1]},{BuildGaugesLocked()}}}");
+                    $"{{\"ts\":\"{_clock.GetUtcNow():O}\",{payload[1..^1]},{BuildGaugesLocked()}}}");
+                int lineBytes = Encoding.UTF8.GetByteCount(line + Environment.NewLine);
+                string path = SelectWritablePath(localNow, lineBytes);
                 File.AppendAllLines(path, [line]);
                 _lastWrittenPayload = payload;
                 _lastWrittenPath = path;
@@ -275,7 +303,8 @@ public sealed class MetricsFileListener : IDisposable
                 return;
             }
 
-            DateTime cutoff = DateTime.UtcNow.AddDays(-RetentionDays);
+            DateTimeOffset localNow = _clock.GetLocalNow();
+            DateTime cutoff = _clock.GetUtcNow().UtcDateTime.AddDays(-RetentionDays);
             foreach (string path in Directory.EnumerateFiles(_directory, "metrics-*.jsonl"))
             {
                 if (File.GetLastWriteTimeUtc(path) < cutoff)
@@ -283,10 +312,37 @@ public sealed class MetricsFileListener : IDisposable
                     File.Delete(path);
                 }
             }
+
+            _lastPrunedLocalDate = DateOnly.FromDateTime(localNow.DateTime);
         }
         catch
         {
             // Best-effort housekeeping, same policy as Log.Initialize.
+        }
+    }
+
+    private void PruneIfDateChangedLocked(DateTimeOffset localNow)
+    {
+        DateOnly localDate = DateOnly.FromDateTime(localNow.DateTime);
+        if (_lastPrunedLocalDate == localDate)
+        {
+            return;
+        }
+
+        Prune();
+    }
+
+    private string SelectWritablePath(DateTimeOffset localNow, int incomingBytes)
+    {
+        string stem = $"metrics-{localNow:yyyyMMdd}";
+        for (int segment = 0; ; segment++)
+        {
+            string suffix = segment == 0 ? string.Empty : $"-{segment:000}";
+            string path = Path.Combine(_directory, $"{stem}{suffix}.jsonl");
+            if (!File.Exists(path) || new FileInfo(path).Length + incomingBytes <= _fileSizeLimitBytes)
+            {
+                return path;
+            }
         }
     }
 
