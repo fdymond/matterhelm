@@ -14,6 +14,13 @@ namespace MatterHelm.Tests;
 /// </summary>
 public static class SidecarSupervisorTests
 {
+    // Child-process readiness/exit waits poll, so a generous ceiling costs
+    // nothing on a fast machine and prevents flakes on loaded CI runners under
+    // coverage instrumentation (0.4.4: a 10 s ceiling timed out on GitHub
+    // Actions while passing locally 5/5). Negative assertions keep their own
+    // fixed waits — raising those would only slow the suite.
+    private static readonly TimeSpan ChildWaitTimeout = TimeSpan.FromSeconds(45);
+
     public sealed class BackoffSchedule
     {
         private static readonly SupervisorOptions _defaults = new();
@@ -119,7 +126,7 @@ public static class SidecarSupervisorTests
                 supervisor.Start();
                 await TestSupport.WaitUntilAsync(
                     () => capture.ContainsMessage("stderr line"),
-                    TimeSpan.FromSeconds(10),
+                    ChildWaitTimeout,
                     "child output to arrive");
 
                 string expectedSha = Convert.ToHexString(
@@ -176,7 +183,7 @@ public static class SidecarSupervisorTests
                             return delays.Count >= 3;
                         }
                     },
-                    TimeSpan.FromSeconds(8),
+                    ChildWaitTimeout,
                     "three scheduled restarts");
                 supervisor.Stop();
             }
@@ -245,7 +252,7 @@ public static class SidecarSupervisorTests
                             return delays.Count >= 3;
                         }
                     },
-                    TimeSpan.FromSeconds(15),
+                    ChildWaitTimeout,
                     "three scheduled restarts");
                 supervisor.Stop();
             }
@@ -286,7 +293,7 @@ public static class SidecarSupervisorTests
                 supervisor.Start();
                 await TestSupport.WaitUntilAsync(
                     () => capture.ContainsMessage("tether-ready"),
-                    TimeSpan.FromSeconds(10),
+                    ChildWaitTimeout,
                     "child to signal readiness");
                 supervisor.Stop(); // Default 3 s grace — the tether must beat it.
             }
@@ -335,7 +342,7 @@ public static class SidecarSupervisorTests
                             return delayCount >= 1;
                         }
                     },
-                    TimeSpan.FromSeconds(8),
+                    ChildWaitTimeout,
                     "a restart to be scheduled");
                 supervisor.Stop();
                 supervisor.Stop(); // Idempotent.
