@@ -28,28 +28,18 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Install bridge deps
-        working-directory: bridge
-        run: npm ci
-
-      - name: Bridge verify (lint + typecheck + tests)
-        working-directory: bridge
-        run: npm run verify
-
       - name: App build (Release, warnings-as-errors)
         run: dotnet build app/MatterHelm/MatterHelm.csproj -c Release
 
       - name: App tests
         run: dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
 
-      # S3-1: build.ps1 produces the single self-contained dist/ folder
-      # (Node SEA sidecar exe + dotnet-publish single-file tray exe; no dev
-      # tools required on the target machine). -SkipTests skips only the
-      # bridge `npm run verify` INSIDE the script — the explicit verify and
-      # app-test gate steps above already ran on this exact commit, so
-      # re-running the suites here would prove nothing twice as slowly.
+      # S3-1: build.ps1 owns bridge dependency installation, verification, and
+      # packaging, then produces the single self-contained dist/ folder (Node
+      # SEA sidecar exe + dotnet-publish single-file tray exe; no dev tools
+      # required on the target machine).
       - name: Build dist
-        run: ./build.ps1 -SkipTests
+        run: ./build.ps1
 
       - name: Zip dist (portable)
         run: Compress-Archive -Path dist/* -DestinationPath matterhelm-${{ github.ref_name }}-win-x64.zip

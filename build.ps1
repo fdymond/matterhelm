@@ -16,7 +16,7 @@ and assembles everything into dist\:
 
 No Node.js or .NET is required on the target machine.
 
-Requires on the BUILD machine: node 22+ / npm on PATH, dotnet SDK on PATH
+Requires on the BUILD machine: Node.js 22.13+ / npm on PATH, dotnet SDK on PATH
 (or at C:\Program Files\dotnet). PowerShell 5.1 compatible.
 
 .PARAMETER Configuration
@@ -73,7 +73,12 @@ function Resolve-Tool {
 
 $nodeExe = Resolve-Tool "node"
 $dotnetExe = Resolve-Tool "dotnet" "C:\Program Files\dotnet\dotnet.exe"
-Write-Host "node:   $nodeExe ($(& $nodeExe --version))"
+$nodeVersionText = (& $nodeExe --version).TrimStart("v")
+$nodeVersion = [Version]$nodeVersionText
+if ($nodeVersion -lt [Version]"22.13.0") {
+    throw "Node.js 22.13+ is required by matter.js; found $nodeVersionText at $nodeExe"
+}
+Write-Host "node:   $nodeExe (v$nodeVersionText)"
 Write-Host "dotnet: $dotnetExe"
 
 # --- 1. Bridge: deps, verify, bundle -------------------------------------

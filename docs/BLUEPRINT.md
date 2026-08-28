@@ -13,9 +13,9 @@ executes the resulting commands itself. No dependency on any other repo or app
   routines.
 - G2: **Self-contained execution** — the app performs every action itself via
   OS facilities (SMTC, media keys, CoreAudio, display power).
-- G3: Visible feedback — a click-through overlay HUD flashes each incoming
-  command (“Google Home → Volume 40 %”) and the executed action; a tray icon
-  reflects bridge state at a glance.
+- G3: Visible feedback — a click-through overlay HUD uses a static MatterHelm
+  header above one command/result or volume pill; a tray icon reflects bridge
+  state at a glance.
 - G4: Reflect real device state (volume %, mute) back into Google Home.
 - G5: Survive restarts (persisted Matter fabric credentials) and run unattended.
 - G6: Lean (budgets restated in **ADR-007** from measurements): idle CPU
@@ -209,22 +209,26 @@ app/MatterHelm/
     DisplayPower.cs        SC_MONITORPOWER off / SendInput jiggle on
   Ui/
     OverlayHud.cs          click-through, non-activating flash pop-ups:
-                           primary line = source + intent ("Google Home → volume 40 %"),
-                           pill = executed action/result; updates in place, fades
+                           static "MatterHelm" header + one command/result pill
+                           (volume actions use a fill bar); updates in place, fades
     PairingWindow.cs       QR code (rendered locally from qrPayload) + manual code
 ```
 
-- **Tray states**: gray = bridge off · green = paired & connected · amber =
-  running, not commissioned (shows "Pair…" menu item) · red = sidecar
-  crashed/restarting or commissionable mDNS advertisement unobservable.
-- **Menu**: Enable bridge · Pair with Google Home… · Overlay pop-ups (toggle,
-  persisted) · Device names… (opens config) · Open config · Reload config ·
-  About · Exit.
+- **Tray states**: gray = bridge off · amber = starting or awaiting lifecycle
+  status · blue = authenticated and awaiting pairing (ADR-011) · green =
+  commissioned and connected · red = repeated sidecar crashes/restarts or an
+  unobservable commissionable mDNS advertisement.
+- **Menu**: the bridge entry is contextual (S10-23): uncommissioned installs show **Pair
+  with Google Home…**, while commissioned installs show the **Enable bridge**
+  toggle. **Factory reset bridge…** remains available in both contexts. The
+  remaining entries are **Overlay pop-ups**, **Settings…**, **Reload config**,
+  **Setup guide…**, **Check for updates…**, **About**, and **Exit**.
 - **Overlay HUD**: same UX bar as a good voice-assistant overlay — a single
   persistent, click-through, non-activating window that updates in place and
-  fades; flashes on every executed/failed command and on pairing events. All
-  text originates as structured input (the parsed command), rendered as the
-  "transcribed input" line, with the action pill beneath/next to it.
+  fades; flashes on every executed/failed command and on pairing events. Its
+  top line is always the static product name **MatterHelm**; the lower row is
+  one command/result or failure pill, with speaker-volume actions rendered as
+  a single volume fill bar.
 - **No admin rights**; single instance; optional Start-with-Windows Run key.
 
 House style: mirrors proven WinForms tray-app patterns (XML doc summaries,
