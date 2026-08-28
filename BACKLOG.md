@@ -132,6 +132,9 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S10-19 ✅ | Overlay single identity pill (command name / volume % / mute); static header retained | shipped in 0.4.3; demo PASS | S | S10-16 | integrator |
 | S10-21 ✅ | mDNS interface adapter dropdown with Auto + "(not detected)" stale state (owner request after second-PC wired mis-pin) | shipped in 0.4.3; 66 focused tests | S | — | integrator |
 | S10-20 🔜 | Advertising robustness: surface dead/misrouted pinned interface via advertisement-health + auto-fallback; two-PC guide wired-setup + per-profile firewall note (second-PC wired timeout still under diagnosis — firewall profile suspected) | open | S | S10-21 | integrator |
+| S10-21..25 ✅ | Adapter dropdown + filtering, onboarding streamlining (contextual menu, condensed pairing window, IPv6 requirement), scan-code key injection, DDC-honest display power | shipped in 0.4.4 | M | — | integrator |
+| S10-26..28 ✅ | Deep review (3 sweeps + adversarial verification) and remediation: bridge backpressure/expectation rollback/transactional construction, app lifecycle serialization/macro hygiene/font disposal/keep-awake release/retention rollover, docs realignment | shipped in 0.4.4; bridge 375, app 689 | L | — | integrator |
+| P-6 🔜 | Pin postject in bridge/package.json + lockfile so SEA release builds stop fetching it ad hoc via npx (deferred from S10-26: needs synchronized lockfile change) | open | S | — | integrator |
 ## Proposed (from agent reports, integrator-triaged)
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the

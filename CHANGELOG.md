@@ -12,6 +12,50 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 Nothing yet.
 
+## [0.4.4] — 2026-08-28
+
+A deep-review release: three read-only sweeps (bridge lifecycle, app
+lifecycle/memory, cross-cutting cleanup) plus adversarial verification of
+every behavioural claim, then remediation of all confirmed findings — on top
+of a batch of onboarding and hardware-honesty work.
+
+### Fixed
+- Sidecar could be terminated by an unhandled rejection: a failed speaker
+  write floated its rejection at the composition root (Node 22 exits on
+  that). Now logged and handled — and the echo-suppression expectation it
+  left behind, which could silently swallow a later genuine volume command,
+  is rolled back (S10-27).
+- IPC sends had no backpressure; an open-but-unreading tray peer could
+  buffer without bound. A 2 MiB ceiling now closes the unhealthy socket and
+  lets the normal reconnect recover (S10-27).
+- Bridge lifecycle operations could race: rapid off/on could fail to bind
+  the listener and leave bridgeEnabled=true persisted while the host stayed
+  disabled. All lifecycle operations are serialized through one queue
+  (S10-28).
+- Matter construction is transactional: partial failures close the partly
+  built node instead of wedging the process-global claim (S10-27).
+- Keyboard chords carry scan codes, so vendor hotkey listeners (e.g. Philips
+  Hue Sync) receive them (S10-24).
+- Display-off no longer holds the machine awake after a failed blanking
+  call; macro delays no longer block thread-pool threads; window fonts are
+  disposed; log/metrics retention prunes on date rollover with size-based
+  rollover (S10-28).
+
+### Changed
+- Onboarding streamlined: contextual tray menu (Pair while unpaired — which
+  starts the bridge itself — Enable bridge once paired) and a condensed
+  pairing window whose long-form setup guidance, including the IPv6
+  requirement, moved into a collapsed section (S10-23).
+- mDNS interface selection is a filtered adapter dropdown with Auto, IPv4
+  annotations, a Show-all escape hatch and visible not-detected/hidden
+  states (S10-21, S10-22).
+- Displays-off states its real behaviour per hardware: DDC-capable monitors
+  power off cleanly, and machines without DDC are labelled as entering
+  standby, with the overlay warning only when the fallback ran (S10-25).
+- Documentation realigned with shipped behaviour; Node floor raised to
+  22.13 (matter.js requirement); duplicate dependency install removed from
+  release CI (S10-26).
+
 ## [0.4.3] — 2026-08-27
 
 ### Fixed
