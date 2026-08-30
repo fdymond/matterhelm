@@ -74,7 +74,7 @@ const MatterLogLevelSchema = z.enum(MATTER_LOG_LEVELS);
 const MatterLogFacilitiesSchema = z.record(z.string().min(1), MatterLogLevelSchema);
 
 /**
- * One built-in entry inside `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2). The tray
+ * One ordinary built-in entry inside `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2). The tray
  * app always sends both fields; each is still individually defaulted here
  * (name -> the "HTPC …" default, enabled -> true) so a hand-written partial
  * env keeps the pre-ADR-004 `HTPC_BRIDGE_DEVICE_NAMES` leniency. Unknown
@@ -85,6 +85,11 @@ const BuiltinEndpointSchema = z.strictObject({
   enabled: z.boolean().optional(),
 });
 
+/** Power adds the reversible/stateful versus irreversible/momentary policy. */
+const PowerEndpointSchema = BuiltinEndpointSchema.extend({
+  momentary: z.boolean().optional().default(false),
+});
+
 /**
  * One custom command entry (ADR-004 §2): names + existence only — the
  * sidecar never learns what a command *does*, and disabled customs are
@@ -93,15 +98,16 @@ const BuiltinEndpointSchema = z.strictObject({
 const CustomEndpointSchema = z.strictObject({
   key: CustomCommandKeySchema,
   name: z.string().min(1),
+  resetAfterActivation: z.boolean().optional().default(false),
 });
 
-/** `HTPC_BRIDGE_ENDPOINTS` shape (ADR-004 §2): built-ins + `custom` list. */
+/** `HTPC_BRIDGE_ENDPOINTS` shape: built-ins, Power policy, and `custom` list. */
 const EndpointsSchema = z.strictObject({
   speaker: BuiltinEndpointSchema.optional(),
   playPause: BuiltinEndpointSchema.optional(),
   next: BuiltinEndpointSchema.optional(),
   previous: BuiltinEndpointSchema.optional(),
-  power: BuiltinEndpointSchema.optional(),
+  power: PowerEndpointSchema.optional(),
   custom: z.array(CustomEndpointSchema).optional(),
 });
 
@@ -133,11 +139,9 @@ export interface Config {
    */
   endpoints: EndpointsConfig;
   /**
-   * `HTPC_BRIDGE_MOMENTARY_RESET_MS` (S7-1) — how long after an `on` write a
-   * momentary endpoint snaps back to `off`, in ms (integer 0–2000; default
-   * {@link DEFAULT_MOMENTARY_RESET_MS}). Both sides of the env contract share
-   * the 0 ms default (immediate since S8-2) — the tray app's `momentaryResetMs` config field must
-   * stay in lockstep.
+   * `HTPC_BRIDGE_MOMENTARY_RESET_MS` — how long after an On activation an
+   * opted-in custom endpoint returns to Off, in ms (integer 0–2000; default
+   * {@link DEFAULT_MOMENTARY_RESET_MS}).
    */
   momentaryResetMs: number;
   /**
@@ -327,7 +331,7 @@ function defaultEndpoints(): EndpointsConfig {
     playPause: { name: DEFAULT_BUILTIN_NAMES.playPause, enabled: true },
     next: { name: DEFAULT_BUILTIN_NAMES.next, enabled: true },
     previous: { name: DEFAULT_BUILTIN_NAMES.previous, enabled: true },
-    power: { name: DEFAULT_BUILTIN_NAMES.power, enabled: true },
+    power: { name: DEFAULT_BUILTIN_NAMES.power, enabled: true, momentary: false },
     custom: [],
   };
 }
@@ -354,7 +358,8 @@ function parseEndpoints(raw: string | undefined): EndpointsConfig {
       .join("; ");
     throw new Error(
       "HTPC_BRIDGE_ENDPOINTS must be the ADR-004 §2 JSON object " +
-        "(built-ins {name, enabled} + custom [{key, name}]): " +
+        "(built-ins {name, enabled}, power also {momentary}, " +
+        "custom [{key, name, resetAfterActivation}]): " +
         issues,
     );
   }
@@ -381,7 +386,10 @@ function parseEndpoints(raw: string | undefined): EndpointsConfig {
     playPause: builtin("playPause"),
     next: builtin("next"),
     previous: builtin("previous"),
-    power: builtin("power"),
+    power: {
+      ...builtin("power"),
+      momentary: result.data.power?.momentary ?? false,
+    },
     custom,
   };
 }

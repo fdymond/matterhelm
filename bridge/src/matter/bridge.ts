@@ -1,19 +1,19 @@
 /**
  * Bridge assembly (docs/BLUEPRINT.md §2.1/§2.2 + ADR-004): ServerNode +
  * Aggregator + the config-derived endpoint set (enabled built-ins, then one
- * momentary plug per custom command), matter events translated into plain
+ * plug per custom command), matter events translated into plain
  * `ClusterWrite` descriptors for the composition root. This module's exported
  * surface (`createBridge`, `BridgeOptions`, `BridgeHandle`) is plain data —
  * matter.js stays behind ./adapter.js, the only module importing `@matter/*`.
  *
- * Trigger source (ADR-008): plug endpoints — the momentary transport buttons,
- * every custom command, and the stateful power switch — dispatch from the
+ * Trigger source (ADR-008): transport, custom, and power plug endpoints
+ * dispatch from the
  * OnOff **command** matter.js received, not from the attribute change it
  * produced. Matter's `onOff` attribute is read-only, so every controller
  * change arrives as a command, while matter.js emits no change event for a
  * command that writes the value already held: observing changes silently
- * dropped repeated identical commands ("turn on HTPC Next" twice inside the
- * reset window, "turn off HTPC Power" when it already reads off). The Speaker
+ * dropped repeated identical commands ("turn on HTPC Next" twice, or "turn
+ * off HTPC Power" when it already reads off). The Speaker
  * endpoint keeps attribute observation — its state is written locally by the
  * tray app and read back, which is what echo suppression below exists for.
  *
@@ -31,22 +31,21 @@
  * updates therefore enqueue only one expectation. A remote write that commits
  * between our read and our write can still pair with the identical expectation,
  * which is harmless because it reports exactly the state the tray already has.
- * Momentary resets need no suppression at all: the
- * reset is a direct attribute write, invokes no command, and so never reaches
- * the command observer (ADR-008) — which is what makes it safe for
- * `mapping/actions.ts` to treat EVERY controller command on a momentary
- * endpoint, Off included, as a press (S8-4).
+ * Opted-in custom and irreversible-Power resets need no suppression: they are
+ * direct attribute writes, invoke no command, and never reach the observer.
  *
- * Momentary auto-reset (§2.2, custom plugs included per ADR-004): a
- * momentary endpoint's On command schedules a write of `off`
+ * Opt-in custom auto-reset (ADR-012): a reset-enabled custom endpoint's On
+ * command schedules a write of `off`
  * {@link BridgeOptions.momentaryResetMs} (default
  * {@link DEFAULT_MOMENTARY_RESET_MS}) later, so voice, app taps, and routines
- * present as one button press in the Home app. Since ADR-008 this window is
- * **presentation only** — dispatch no longer depends on the attribute having
- * been returned to `off` first. A second On command before the reset restarts
- * the window (last press wins) and dispatches again; an Off command from the
- * controller cancels it. Timers are keyed by Matter endpoint id and cleared
- * on {@link BridgeHandle.close}.
+ * present as a button in the Home app. A second On command before the reset
+ * restarts the window (last press wins); controller Off cancels it. Retained
+ * built-ins and default custom commands never schedule a reset. Irreversible Power
+ * Off uses a separate fixed next-tick scheduler to write On before the machine
+ * can suspend; the custom reset delay never affects it. Timers are keyed by
+ * Matter endpoint id and cleared on {@link BridgeHandle.close}. Resets whose
+ * timers already fired are tracked separately: failures are logged with the
+ * endpoint/policy, and close waits for those writes before closing matter.js.
  */
 import type { ClusterWrite } from "../mapping/actions.js";
 
@@ -57,17 +56,19 @@ import type { BridgedDeviceKind, BuiltinEndpointKey, EndpointsConfig } from "./d
 import type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
 export type { PairingCodes } from "./adapter.js";
-export type { BuiltinEndpointKey, EndpointsConfig, MomentaryEndpointKey } from "./devices.js";
+export type { BuiltinEndpointKey, EndpointsConfig } from "./devices.js";
 export type { DiagnosticsLogger, MatterLogLevel } from "./diagnostics.js";
 
 /**
- * §2.2 as amended by S7-1/S8-2: default ms after an On command that momentary
- * endpoints auto-reset to `off` — 0 = the next tick after the command commits
- * (safe post-ADR-008: the window is presentation only). Config-driven via
+ * Default ms after an On command that an opted-in custom endpoint returns to
+ * `off` — 0 = the next tick after the command commits. Config-driven via
  * `HTPC_BRIDGE_MOMENTARY_RESET_MS` (0–2000); this default must equal the tray
  * app's `momentaryResetMs` default — the two sides ship as one product.
  */
 export const DEFAULT_MOMENTARY_RESET_MS = 0;
+
+/** Irreversible Power always resets on the next tick, independent of custom timing. */
+export const POWER_MOMENTARY_RESET_MS = 0;
 
 /** Sanctioned Matter test VID/PID defaults (ADR-002); both configurable. */
 export const DEFAULT_VENDOR_ID = 0xfff1;
@@ -117,7 +118,7 @@ export interface BridgeOptions {
   /** Endpoint set + display names (ADR-004 §2; `config.ts` parses this). */
   endpoints: EndpointsConfig;
   /**
-   * Momentary auto-reset window in ms (S7-1); unset =
+   * Opt-in custom auto-reset window in ms; unset =
    * {@link DEFAULT_MOMENTARY_RESET_MS}. `config.ts` validates the 0–2000
    * range (0 = next-tick reset, S8-2) — this module trusts its caller.
    */
@@ -179,9 +180,9 @@ export interface BridgeHandle {
    */
   setSpeakerState(level0to254: number, onOff: boolean): Promise<void>;
   /**
-   * Writes a momentary endpoint's OnOff back to `false` (§2.2 reset).
+   * Writes a reset-enabled custom endpoint's OnOff back to `false`.
    * `endpointId` is the Matter endpoint id (e.g. `playpause`,
-   * `custom-movie-mode`); an id that names no momentary endpoint throws —
+   * `custom-movie-mode`); an id that names no reset-enabled endpoint throws —
    * that is an internal bug, not an input.
    */
   resetMomentary(endpointId: string): Promise<void>;
@@ -291,9 +292,9 @@ export class SerializedSpeakerStateWriter {
 }
 
 /**
- * Per-endpoint reset timers for the momentary plugs (built-in and custom),
- * keyed by Matter endpoint id. Pure scheduling — the actual `off` write
- * happens in the injected `onReset` callback.
+ * Per-endpoint reset timers keyed by Matter endpoint id. Pure scheduling: the
+ * injected callback owns whether the local target value is Off (custom) or On
+ * (irreversible Power).
  */
 export class MomentaryResetScheduler<K extends string = string> {
   readonly #delayMs: number;
@@ -336,7 +337,7 @@ export class MomentaryResetScheduler<K extends string = string> {
 }
 
 /** The built-in roles carried by an On/Off Plug-in Unit endpoint. */
-export type PlugEndpointKey = Exclude<BuiltinEndpointKey, "speaker">;
+export type PlugEndpointKey = Exclude<BuiltinEndpointKey, "speaker" | "power">;
 
 /**
  * Something observed on one of our endpoints, as plain data. The `kind`
@@ -350,8 +351,10 @@ export type EndpointEvent =
   | { kind: "speakerLevel"; level: number | null }
   /** A built-in plug's OnOff command — `on` is the command, not a new state. */
   | { kind: "plugCommand"; key: PlugEndpointKey; on: boolean }
+  /** Power command plus the app-derived irreversible-action policy. */
+  | { kind: "powerCommand"; on: boolean; momentary: boolean }
   /** A custom command plug's OnOff command (ADR-004). */
-  | { kind: "customCommand"; customKey: string; on: boolean };
+  | { kind: "customCommand"; customKey: string; on: boolean; resetAfterActivation: boolean };
 
 /**
  * Translates an observed endpoint event into the `ClusterWrite` descriptor
@@ -374,22 +377,32 @@ export function endpointEventToClusterWrite(event: EndpointEvent): ClusterWrite 
       return { endpoint: "speaker", cluster: "levelControl", level: event.level };
     }
     case "plugCommand": {
-      // Split so each literal endpoint name matches its own ClusterWrite member.
-      return event.key === "power"
-        ? { endpoint: "power", cluster: "onOff", on: event.on }
-        : { endpoint: event.key, cluster: "onOff", on: event.on };
+      return { endpoint: event.key, cluster: "onOff", on: event.on };
+    }
+    case "powerCommand": {
+      return {
+        endpoint: "power",
+        cluster: "onOff",
+        on: event.on,
+        momentary: event.momentary,
+      };
     }
     case "customCommand": {
-      return { endpoint: "custom", key: event.customKey, cluster: "onOff", on: event.on };
+      return {
+        endpoint: "custom",
+        key: event.customKey,
+        cluster: "onOff",
+        on: event.on,
+        resetAfterActivation: event.resetAfterActivation,
+      };
     }
   }
 }
 
 /**
  * Builds one plug endpoint's OnOff command handler: emit the event the
- * command means, and — for a momentary endpoint — (re)arm or cancel its
- * auto-reset window. `reset` is omitted for the stateful power plug, which
- * has no window.
+ * command means, and — only when reset policy is supplied — (re)arm or cancel
+ * its auto-reset window.
  *
  * Every invocation emits, including a repeat of the command the endpoint just
  * received: that repetition is exactly what the pre-ADR-008 attribute-change
@@ -409,6 +422,30 @@ export function makePlugCommandHandler(
       }
     }
     emit(event(on));
+  };
+}
+
+/**
+ * Builds the Power command handler. Reversible modes only emit retained-state
+ * commands. Irreversible modes emit first, then schedule the local On write:
+ * dispatch gets its best chance to reach the tray before sleep tears down the
+ * process, while the next-tick write remains prompt and cannot retrigger.
+ */
+export function makePowerCommandHandler(
+  momentary: boolean,
+  emit: (event: EndpointEvent) => void,
+  reset?: { noteOn: () => void; noteOff: () => void },
+): (on: boolean) => void {
+  return (on) => {
+    emit({ kind: "powerCommand", on, momentary });
+    if (!momentary || reset === undefined) {
+      return;
+    }
+    if (on) {
+      reset.noteOff();
+    } else {
+      reset.noteOn();
+    }
   };
 }
 
@@ -449,7 +486,7 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
 
   /** Every plug endpoint by Matter endpoint id. */
   const plugs = new Map<string, PlugHandle>();
-  /** The subset that auto-resets — the reset targets. */
+  /** The opted-in custom subset that auto-resets — the reset targets. */
   const momentaryIds = new Set<string>();
 
   const resetMomentary = async (endpointId: string): Promise<void> => {
@@ -463,30 +500,83 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     await plug.setOnOff(false);
   };
 
+  /** Irreversible Power reset is always next-tick; custom timing is unrelated. */
+  const powerResetIds = new Set<string>();
+  const resetPowerToOn = async (endpointId: string): Promise<void> => {
+    const plug = powerResetIds.has(endpointId) ? plugs.get(endpointId) : undefined;
+    if (plug === undefined) {
+      throw new Error(`resetPowerToOn: no momentary Power endpoint ${JSON.stringify(endpointId)}`);
+    }
+    await plug.setOnOff(true);
+  };
+
+  /** Fired reset writes that must settle before matter.js can be closed. */
+  const pendingResets = new Set<Promise<void>>();
+  const trackReset = (
+    endpointId: string,
+    policy: "custom.resetAfterActivation" | "power.momentary",
+    targetOnOff: boolean,
+    reset: () => Promise<void>,
+  ): void => {
+    const pending = reset().catch((error: unknown) => {
+      options.logger?.error(
+        {
+          evt: "matter.reset.error",
+          endpointId,
+          policy,
+          targetOnOff,
+          err: String(error),
+        },
+        "failed to reset Matter endpoint after activation",
+      );
+    });
+    pendingResets.add(pending);
+    void pending.then(() => {
+      pendingResets.delete(pending);
+    });
+  };
+  const settlePendingResets = async (): Promise<void> => {
+    await Promise.all([...pendingResets]);
+  };
+
   const scheduler = new MomentaryResetScheduler<string>(
     options.momentaryResetMs ?? DEFAULT_MOMENTARY_RESET_MS,
     (endpointId) => {
-      // A failed write to our own endpoint is an internal invariant violation;
-      // the floating promise surfaces it as an unhandled rejection (fail loud,
-      // docs/ENGINEERING-STANDARDS.md). close() clears timers first, so this
-      // cannot fire against a closed node.
-      void resetMomentary(endpointId);
+      trackReset(endpointId, "custom.resetAfterActivation", false, () =>
+        resetMomentary(endpointId),
+      );
+    },
+  );
+
+  const powerResetScheduler = new MomentaryResetScheduler<string>(
+    POWER_MOMENTARY_RESET_MS,
+    (endpointId) => {
+      trackReset(endpointId, "power.momentary", true, () => resetPowerToOn(endpointId));
     },
   );
 
   // Config-derived endpoint set: enabled built-ins in §2.2 order, then one
-  // momentary plug per custom command (endpoint numbers follow add order).
+  // plug per custom command (endpoint numbers follow add order).
   const specs = endpointSpecs(options.endpoints, seed);
   const constructed: ConstructedEndpoint[] = [];
   let speaker: SpeakerHandle | undefined;
 
-  /** The momentary endpoints' half of the command handler: their reset window. */
+  /** The opted-in custom half of the command handler: its reset window. */
   const resetWindowFor = (id: string): { noteOn: () => void; noteOff: () => void } => ({
     noteOn: () => {
       scheduler.noteOn(id);
     },
     noteOff: () => {
       scheduler.noteOff(id);
+    },
+  });
+
+  const powerResetWindowFor = (id: string): { noteOn: () => void; noteOff: () => void } => ({
+    noteOn: () => {
+      powerResetScheduler.noteOn(id);
+    },
+    noteOff: () => {
+      powerResetScheduler.noteOff(id);
     },
   });
 
@@ -512,18 +602,26 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
         switch (spec.role) {
           case "custom": {
             const customKey = spec.key;
+            const resetWindow = spec.resetAfterActivation ? resetWindowFor(id) : undefined;
             plugs.set(
               id,
               await node.addPlug(
                 spec.info,
                 makePlugCommandHandler(
-                  (on) => ({ kind: "customCommand", customKey, on }),
+                  (on) => ({
+                    kind: "customCommand",
+                    customKey,
+                    on,
+                    resetAfterActivation: spec.resetAfterActivation,
+                  }),
                   emit,
-                  resetWindowFor(id),
+                  resetWindow,
                 ),
               ),
             );
-            momentaryIds.add(id);
+            if (spec.resetAfterActivation) {
+              momentaryIds.add(id);
+            }
             break;
           }
           case "playPause":
@@ -534,25 +632,23 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
               id,
               await node.addPlug(
                 spec.info,
-                makePlugCommandHandler(
-                  (on) => ({ kind: "plugCommand", key, on }),
-                  emit,
-                  resetWindowFor(id),
-                ),
+                makePlugCommandHandler((on) => ({ kind: "plugCommand", key, on }), emit),
               ),
             );
-            momentaryIds.add(id);
             break;
           }
           case "power": {
-            // The stateful power toggle: no reset window, every command dispatches.
+            const resetWindow = spec.momentary ? powerResetWindowFor(id) : undefined;
             plugs.set(
               id,
               await node.addPlug(
                 spec.info,
-                makePlugCommandHandler((on) => ({ kind: "plugCommand", key: "power", on }), emit),
+                makePowerCommandHandler(spec.momentary, emit, resetWindow),
               ),
             );
+            if (spec.momentary) {
+              powerResetIds.add(id);
+            }
             break;
           }
         }
@@ -561,6 +657,8 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     }
   } catch (error) {
     scheduler.clear();
+    powerResetScheduler.clear();
+    await settlePendingResets();
     await node.close();
     throw error;
   }
@@ -577,6 +675,8 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
       }
       closed = true;
       scheduler.clear();
+      powerResetScheduler.clear();
+      await settlePendingResets();
       await node.close();
     },
     endpoints: constructed,

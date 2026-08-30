@@ -125,50 +125,58 @@ describe("clusterWriteToAction — speaker levelControl (volume)", () => {
   });
 });
 
-describe("clusterWriteToAction — momentary switches (playPause/next/previous)", () => {
-  const momentaryNames = ["playPause", "next", "previous"] as const;
-
-  it.each(momentaryNames)("dispatches %s on the `on` write", (name) => {
-    const write: ClusterWrite = { endpoint: name, cluster: "onOff", on: true };
+describe("clusterWriteToAction — retained-state transport switches", () => {
+  it("maps playPause On to dedicated play", () => {
+    const write: ClusterWrite = { endpoint: "playPause", cluster: "onOff", on: true };
     expect(clusterWriteToAction(write, id)).toEqual({
       v: PROTOCOL_VERSION,
       type: "action",
       id,
-      name,
+      name: "play",
     });
   });
 
-  it.each(momentaryNames)("dispatches %s on the Off command too (S8-4)", (name) => {
-    // Google Home's tile is a toggle over its own (often stale) state model:
-    // a tap can arrive as Off when Google still believes the device is on.
-    // The endpoint is stateless, so any controller command is a press — and
-    // the auto-reset is a local attribute write that never reaches this
-    // mapping (ADR-008), so an Off here is never our own reset echo.
-    const write: ClusterWrite = { endpoint: name, cluster: "onOff", on: false };
+  it("maps playPause Off to dedicated pause", () => {
+    const write: ClusterWrite = { endpoint: "playPause", cluster: "onOff", on: false };
     expect(clusterWriteToAction(write, id)).toEqual({
       v: PROTOCOL_VERSION,
       type: "action",
       id,
-      name,
+      name: "pause",
     });
+  });
+
+  it.each(["next", "previous"] as const)("dispatches %s on both transition directions", (name) => {
+    for (const on of [true, false]) {
+      const write: ClusterWrite = { endpoint: name, cluster: "onOff", on };
+      expect(clusterWriteToAction(write, id)).toEqual({
+        v: PROTOCOL_VERSION,
+        type: "action",
+        id,
+        name,
+      });
+    }
   });
 });
 
-describe("clusterWriteToAction — custom commands (ADR-004 momentary plugs)", () => {
-  it("dispatches a custom action carrying the command's key on the `on` write", () => {
-    const write: ClusterWrite = {
-      endpoint: "custom",
-      key: "movie-mode",
-      cluster: "onOff",
-      on: true,
-    };
-    expect(clusterWriteToAction(write, id)).toEqual({
-      v: PROTOCOL_VERSION,
-      type: "action",
-      id,
-      name: "custom",
-      key: "movie-mode",
-    });
+describe("clusterWriteToAction — custom commands", () => {
+  it("dispatches both edges when reset is disabled", () => {
+    for (const on of [true, false]) {
+      const write: ClusterWrite = {
+        endpoint: "custom",
+        key: "movie-mode",
+        cluster: "onOff",
+        on,
+        resetAfterActivation: false,
+      };
+      expect(clusterWriteToAction(write, id)).toEqual({
+        v: PROTOCOL_VERSION,
+        type: "action",
+        id,
+        name: "custom",
+        key: "movie-mode",
+      });
+    }
   });
 
   it("passes the key through verbatim for a different command", () => {
@@ -177,35 +185,43 @@ describe("clusterWriteToAction — custom commands (ADR-004 momentary plugs)", (
       key: "stop-media",
       cluster: "onOff",
       on: true,
+      resetAfterActivation: false,
     };
     const action = clusterWriteToAction(write, id);
-    if (action.name === "custom") {
+    if (action?.name === "custom") {
       expect(action.key).toBe("stop-media");
     } else {
       expect.fail("expected a custom action frame");
     }
   });
 
-  it("dispatches the custom action on the Off command too (S8-4, like built-in momentaries)", () => {
-    const write: ClusterWrite = {
+  it("dispatches only On when reset is enabled", () => {
+    const onWrite: ClusterWrite = {
       endpoint: "custom",
       key: "movie-mode",
       cluster: "onOff",
-      on: false,
+      on: true,
+      resetAfterActivation: true,
     };
-    expect(clusterWriteToAction(write, id)).toEqual({
+    expect(clusterWriteToAction(onWrite, id)).toEqual({
       v: PROTOCOL_VERSION,
       type: "action",
       id,
       name: "custom",
       key: "movie-mode",
     });
+    expect(clusterWriteToAction({ ...onWrite, on: false }, id)).toBeNull();
   });
 });
 
 describe("clusterWriteToAction — power endpoint", () => {
-  it("maps On (true) to powerOn", () => {
-    const write: ClusterWrite = { endpoint: "power", cluster: "onOff", on: true };
+  it("maps reversible On to powerOn", () => {
+    const write: ClusterWrite = {
+      endpoint: "power",
+      cluster: "onOff",
+      on: true,
+      momentary: false,
+    };
     expect(clusterWriteToAction(write, id)).toEqual({
       v: PROTOCOL_VERSION,
       type: "action",
@@ -214,8 +230,13 @@ describe("clusterWriteToAction — power endpoint", () => {
     });
   });
 
-  it("maps Off (false) to powerOff", () => {
-    const write: ClusterWrite = { endpoint: "power", cluster: "onOff", on: false };
+  it("maps reversible Off to powerOff", () => {
+    const write: ClusterWrite = {
+      endpoint: "power",
+      cluster: "onOff",
+      on: false,
+      momentary: false,
+    };
     expect(clusterWriteToAction(write, id)).toEqual({
       v: PROTOCOL_VERSION,
       type: "action",
@@ -223,13 +244,34 @@ describe("clusterWriteToAction — power endpoint", () => {
       name: "powerOff",
     });
   });
+
+  it("maps irreversible Off once and ignores user On", () => {
+    const offWrite: ClusterWrite = {
+      endpoint: "power",
+      cluster: "onOff",
+      on: false,
+      momentary: true,
+    };
+    expect(clusterWriteToAction(offWrite, id)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "action",
+      id,
+      name: "powerOff",
+    });
+    expect(clusterWriteToAction({ ...offWrite, on: true }, id)).toBeNull();
+  });
 });
 
 describe("clusterWriteToAction — id passthrough", () => {
   it("uses the supplied id verbatim rather than generating one", () => {
     const otherId = "00000000-0000-4000-8000-000000000000";
-    const write: ClusterWrite = { endpoint: "power", cluster: "onOff", on: true };
+    const write: ClusterWrite = {
+      endpoint: "power",
+      cluster: "onOff",
+      on: true,
+      momentary: false,
+    };
     const action = clusterWriteToAction(write, otherId);
-    expect(action.id).toBe(otherId);
+    expect(action?.id).toBe(otherId);
   });
 });

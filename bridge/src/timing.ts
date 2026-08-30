@@ -135,9 +135,10 @@ export function makeActionDispatcher(
   const now = options.now ?? ((): number => performance.now());
   return (write) => {
     const startedAt = now();
-    // Total since S8-4: every observed write is a user action (the momentary
-    // auto-reset never reaches this path — ADR-008).
     const action = clusterWriteToAction(write, options.newId());
+    if (action === null) {
+      return;
+    }
     const sent = options.send(action);
     options.logger.info(
       {

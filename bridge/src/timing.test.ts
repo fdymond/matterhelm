@@ -186,8 +186,8 @@ describe("makeActionDispatcher — {evt:'action.timing'} per cluster write", () 
 
   it("sends the mapped action and logs elapsedMs keyed by the frame's id", () => {
     const { dispatch, sent, events } = makeHarness();
-    dispatch({ endpoint: "power", cluster: "onOff", on: true });
-    expect(sent).toEqual([{ v: 3, type: "action", id: ACTION_ID, name: "powerOn" }]);
+    dispatch({ endpoint: "power", cluster: "onOff", on: true, momentary: false });
+    expect(sent).toEqual([{ v: 4, type: "action", id: ACTION_ID, name: "powerOn" }]);
     expect(events).toEqual([
       { evt: "action.timing", id: ACTION_ID, name: "powerOn", elapsedMs: 1.5 },
     ]);
@@ -201,21 +201,32 @@ describe("makeActionDispatcher — {evt:'action.timing'} per cluster write", () 
 
   it("does not note a dropped send — no ack can ever arrive for it", () => {
     const { dispatch, timings, events } = makeHarness(false);
-    dispatch({ endpoint: "power", cluster: "onOff", on: false });
+    dispatch({ endpoint: "power", cluster: "onOff", on: false, momentary: false });
     expect(timings.size).toBe(0);
     // The action.timing line is still logged: the write DID happen.
     expect(events).toHaveLength(1);
   });
 
-  it("dispatches a momentary Off command like any other write (S8-4: total mapping)", () => {
-    // The auto-reset never reaches the dispatcher (ADR-008: it's a local
-    // attribute write, not a command), so an Off here is a controller tap
-    // and must be sent, timed, and noted like an On.
+  it("dispatches playPause Off as dedicated pause", () => {
     const { dispatch, sent, events, timings } = makeHarness();
     dispatch({ endpoint: "playPause", cluster: "onOff", on: false });
-    expect(sent).toHaveLength(1);
+    expect(sent).toEqual([{ v: 4, type: "action", id: ACTION_ID, name: "pause" }]);
     expect(events).toHaveLength(1);
     expect(timings.size).toBe(1);
+  });
+
+  it("does not send, time, or await an ack for reset-enabled custom Off", () => {
+    const { dispatch, sent, events, timings } = makeHarness();
+    dispatch({
+      endpoint: "custom",
+      key: "movie-mode",
+      cluster: "onOff",
+      on: false,
+      resetAfterActivation: true,
+    });
+    expect(sent).toEqual([]);
+    expect(events).toEqual([]);
+    expect(timings.size).toBe(0);
   });
 });
 

@@ -48,6 +48,17 @@ async function main(): Promise<void> {
 
   const logger = makeLogger(config.logLevel);
 
+  // Install at the composition root, after the one process logger exists and
+  // before any long-lived subsystem starts work. Individual async boundaries
+  // still catch with richer context; this last line of defense keeps one stray
+  // rejection from terminating the supervised sidecar.
+  process.on("unhandledRejection", (reason: unknown) => {
+    logger.error(
+      { evt: "process.unhandled-rejection", err: String(reason) },
+      "unhandled promise rejection; sidecar will continue running",
+    );
+  });
+
   // `client` and the matter bridge each call into the other once running
   // (bridge -> client.send on a cluster write; client -> bridge on an
   // inbound tray frame), but neither construction needs the other's

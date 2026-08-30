@@ -14,13 +14,13 @@ import { WebSocketServer } from "ws";
 import type { WebSocket as ServerSocket, RawData } from "ws";
 
 import { backoffDelayMs, DEFAULT_BACKOFF, IpcClient } from "./client.js";
-import type { IpcClientState, IpcLogger, OutboundFrame } from "./client.js";
+import type { BackoffOptions, IpcClientState, IpcLogger, OutboundFrame } from "./client.js";
 import { parseSidecarFrame } from "./protocol.js";
 import type { TrayFrame } from "./protocol.js";
 
 const TOKEN = "test-session-token";
 const UUID = "123e4567-e89b-12d3-a456-426614174000";
-const STATE_ON_CONNECT = { v: 3, type: "state", volume: 40, muted: false };
+const STATE_ON_CONNECT = { v: 4, type: "state", volume: 40, muted: false };
 
 /** Rejects `promise` after 5 real seconds even under fake timers. */
 function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
@@ -191,10 +191,14 @@ const dropWarns = (calls: { warn: LogCall[] }): LogCall[] =>
   calls.warn.filter((c) => c.obj.evt === "ipc.drop");
 const invalidFrameWarns = (calls: { warn: LogCall[] }): LogCall[] =>
   calls.warn.filter((c) => c.obj.evt === "ipc.invalid-frame");
+const versionMismatchWarns = (calls: { warn: LogCall[] }): LogCall[] =>
+  calls.warn.filter(
+    (c) => c.obj.evt === "ipc.version-mismatch" || c.obj.evt === "ipc.version-mismatch.summary",
+  );
 const count = (states: IpcClientState[], state: IpcClientState): number =>
   states.filter((s) => s === state).length;
 
-const playPause: OutboundFrame = { v: 3, type: "action", id: UUID, name: "playPause" };
+const playPause: OutboundFrame = { v: 4, type: "action", id: UUID, name: "playPause" };
 
 describe("backoffDelayMs", () => {
   it("doubles per attempt from the 500 ms base with neutral jitter", () => {
@@ -299,7 +303,10 @@ describe("IpcClient (integration, real ws mock server)", () => {
     vi.useRealTimers();
   });
 
-  function createClient(port: number): {
+  function createClient(
+    port: number,
+    backoff?: BackoffOptions,
+  ): {
     client: IpcClient;
     calls: { info: LogCall[]; warn: LogCall[] };
     frames: TrayFrame[];
@@ -312,6 +319,7 @@ describe("IpcClient (integration, real ws mock server)", () => {
       url: `ws://127.0.0.1:${String(port)}`,
       token: TOKEN,
       logger,
+      ...(backoff === undefined ? {} : { backoff }),
       onFrame: (frame) => {
         frames.push(frame);
         waiter.notify();
@@ -339,19 +347,19 @@ describe("IpcClient (integration, real ws mock server)", () => {
     c.start();
 
     await waiter.until(() => server.frames.length >= 1, "hello frame");
-    expect(server.frames[0]).toEqual({ v: 3, type: "hello", token: TOKEN, protocol: 1 });
+    expect(server.frames[0]).toEqual({ v: 4, type: "hello", token: TOKEN, protocol: 1 });
 
     await waiter.until(() => frames.length >= 1, "state-on-connect frame");
     expect(frames[0]).toEqual(STATE_ON_CONNECT);
 
-    const action: OutboundFrame = { v: 3, type: "action", id: UUID, name: "setVolume", value: 40 };
+    const action: OutboundFrame = { v: 4, type: "action", id: UUID, name: "setVolume", value: 40 };
     expect(c.send(action)).toBe(true);
     await waiter.until(() => server.frames.length >= 2, "action frame at server");
     expect(server.frames[1]).toEqual(action);
 
-    server.sendRaw(JSON.stringify({ v: 3, type: "ack", id: UUID, ok: true }));
+    server.sendRaw(JSON.stringify({ v: 4, type: "ack", id: UUID, ok: true }));
     await waiter.until(() => frames.length >= 2, "ack frame at client");
-    expect(frames[1]).toEqual({ v: 3, type: "ack", id: UUID, ok: true });
+    expect(frames[1]).toEqual({ v: 4, type: "ack", id: UUID, ok: true });
 
     expect(dropWarns(calls)).toHaveLength(0);
     // Security invariant: the session token is never logged.
@@ -365,9 +373,9 @@ describe("IpcClient (integration, real ws mock server)", () => {
     await waiter.until(() => frames.length >= 1, "state-on-connect frame");
 
     server.sendRaw("this is not json");
-    server.sendRaw(JSON.stringify({ v: 3, type: "state", volume: 400, muted: false }));
+    server.sendRaw(JSON.stringify({ v: 4, type: "state", volume: 400, muted: false }));
     server.sendBinary(Buffer.from([1, 2, 3]));
-    server.sendRaw(JSON.stringify({ v: 3, type: "ack", id: UUID, ok: false, error: "nope" }));
+    server.sendRaw(JSON.stringify({ v: 4, type: "ack", id: UUID, ok: false, error: "nope" }));
 
     await waiter.until(() => frames.length >= 2, "valid ack after garbage");
     expect(frames).toHaveLength(2); // only the valid frames surfaced
@@ -422,6 +430,49 @@ describe("IpcClient (integration, real ws mock server)", () => {
     await vi.advanceTimersByTimeAsync(630);
     await waiter.until(() => server.frames.length >= 5, "fast hello after backoff reset");
     expect(server.frames[4]).toMatchObject({ type: "hello" });
+  });
+
+  it("logs repeated version-rejected handshakes once plus a periodic summary", async () => {
+    const port = await server.listen();
+    server.mode = "reject";
+    const { client: c, calls } = createClient(port, { baseMs: 5, capMs: 5 });
+    c.start();
+
+    await waiter.until(
+      () =>
+        versionMismatchWarns(calls).some(({ obj }) => obj.evt === "ipc.version-mismatch.summary"),
+      "version mismatch summary",
+    );
+    c.stop();
+
+    expect(versionMismatchWarns(calls)).toEqual([
+      {
+        obj: {
+          evt: "ipc.version-mismatch",
+          diagnosis: "tray-sidecar-version-mismatch",
+          rejectedHandshakes: 1,
+          sidecarFrameVersion: 4,
+          handshakeProtocol: 1,
+          closeCode: 1008,
+          closeReason: "auth rejected",
+        },
+        msg: "IPC VERSION MISMATCH: tray rejected this sidecar hello; update tray and sidecar to the same MatterHelm release",
+      },
+      {
+        obj: {
+          evt: "ipc.version-mismatch.summary",
+          diagnosis: "tray-sidecar-version-mismatch",
+          rejectedHandshakes: 10,
+          sidecarFrameVersion: 4,
+          handshakeProtocol: 1,
+          closeCode: 1008,
+          closeReason: "auth rejected",
+        },
+        msg: "IPC VERSION MISMATCH persists; tray keeps rejecting this sidecar hello; update both components to the same MatterHelm release",
+      },
+    ]);
+    expect(calls.info.filter(({ obj }) => obj.evt === "ipc.connected")).toHaveLength(1);
+    expect(calls.info.filter(({ obj }) => obj.evt === "ipc.disconnected")).toEqual([]);
   });
 
   it("peer absent: actions drop with exactly one WARN per outage, then resume after reconnect", async () => {

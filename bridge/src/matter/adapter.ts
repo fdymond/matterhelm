@@ -207,7 +207,7 @@ const plugCommandObservers = new Map<string, (on: boolean) => void>();
  * only change it by invoking `On`/`Off`/`Toggle`, and matter.js emits NO
  * `$Changed` event when a command writes the value the attribute already
  * holds. Observing changes therefore dropped repeated identical commands
- * ("turn on HTPC Next" twice inside the reset window); observing commands
+ * ("turn on HTPC Next" twice while it already reads On); observing commands
  * cannot. `toggle`, `offWithEffect`, `onWithRecallGlobalScene` and
  * `onWithTimedOff` all delegate to `on()`/`off()` in matter.js's default
  * implementation, so these two overrides cover every OnOff command form.
@@ -221,7 +221,7 @@ const plugCommandObservers = new Map<string, (on: boolean) => void>();
  * inside matter.js's command transaction: it must not write matter.js state
  * (scheduling a timer or emitting plain data is fine). Local writes made
  * through {@link PlugHandle.setOnOff} bypass the cluster commands entirely, so
- * the bridge's own momentary resets never reach an observer — no echo
+ * an opted-in custom reset never reaches an observer — no echo
  * suppression is needed on this path.
  */
 class CommandObservingOnOffServer extends OnOffPlugInUnitRequirements.OnOffServer {
@@ -360,8 +360,8 @@ export class SpeakerHandle {
 }
 
 /**
- * Opaque handle for an On/Off Plug-in Unit endpoint (momentary transport
- * buttons and the stateful power switch — BLUEPRINT §2.2). Constructed only
+ * Opaque handle for an On/Off Plug-in Unit endpoint (transport, custom, and
+ * power switches — BLUEPRINT §2.2). Constructed only
  * by {@link MatterNode.addPlug}.
  *
  * Reads and local writes only: controller activity on a plug arrives through
@@ -381,7 +381,7 @@ export class PlugHandle {
   }
 
   /**
-   * Writes the attribute directly (the momentary auto-reset). Writing the
+   * Writes the attribute directly (used by opt-in custom auto-reset). Writing the
    * current value is a no-op, and this path invokes no cluster command, so it
    * never reaches a command observer.
    */
