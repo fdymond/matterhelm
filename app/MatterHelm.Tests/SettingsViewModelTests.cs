@@ -56,10 +56,14 @@ public sealed class SettingsViewModelTests : IDisposable
             networkAdapters ?? new StubNetworkAdapterProvider([]),
             displayPowerCapabilityProbe ?? new StubDisplayPowerCapabilityProbe(DisplayPowerCapability.AllDdc));
 
-    private static CustomCommandConfig MediaKeyCommand(string key, string? name = null) => new()
+    private static CustomCommandConfig MediaKeyCommand(
+        string key,
+        string? name = null,
+        bool resetAfterActivation = false) => new()
     {
         Key = key,
         Name = name ?? key,
+        ResetAfterActivation = resetAfterActivation,
         Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
     };
 
@@ -573,7 +577,7 @@ public sealed class SettingsViewModelTests : IDisposable
         vm.Working.AppLogLevel = "warn";
         // Regression (S5-2 report): CopyInto silently dropped OverlayPosition.
         vm.Working.OverlayPosition = OverlayPosition.TopRight;
-        vm.AddCustomCommand(MediaKeyCommand("demo-cmd", name: "Demo Command"));
+        vm.AddCustomCommand(MediaKeyCommand("demo-cmd", name: "Demo Command", resetAfterActivation: true));
         vm.Apply();
 
         Assert.False(vm.IsDirty);
@@ -592,6 +596,7 @@ public sealed class SettingsViewModelTests : IDisposable
         CustomCommandConfig custom = Assert.Single(reloaded.Current.Commands.Custom);
         Assert.Equal("demo-cmd", custom.Key);
         Assert.Equal("Demo Command", custom.Name);
+        Assert.True(custom.ResetAfterActivation);
         Assert.Equal(MediaKeyName.Stop, Assert.IsType<MediaKeyActionConfig>(custom.Action).KeyName);
     }
 
