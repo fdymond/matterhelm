@@ -26,7 +26,7 @@
 import { z } from "zod";
 
 /** Current per-message revision. Bump additively only — see module doc. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Upper length bound for a custom-command key (ADR-004 §3). */
 export const CUSTOM_KEY_MAX_LENGTH = 64;
@@ -93,11 +93,12 @@ const ActionSetMutedSchema = actionFrameBase
   .extend({ name: z.literal("setMuted"), value: z.boolean() })
   .strict();
 /**
- * A user-defined command endpoint fired; `key` identifies which one. Reset
- * policy stays in endpoint config and does not change this payload.
+ * A user-defined command endpoint fired; `key` identifies which one and `on`
+ * carries the actual retained-switch edge. Reset policy stays in endpoint
+ * config; an opted-in reset's local Off write still emits no frame.
  */
 const ActionCustomSchema = actionFrameBase
-  .extend({ name: z.literal("custom"), key: CustomCommandKeySchema })
+  .extend({ name: z.literal("custom"), key: CustomCommandKeySchema, on: z.boolean() })
   .strict();
 
 export const ActionFrameSchema = z.discriminatedUnion("name", [

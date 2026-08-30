@@ -175,6 +175,7 @@ describe("clusterWriteToAction — custom commands", () => {
         id,
         name: "custom",
         key: "movie-mode",
+        on,
       });
     }
   });
@@ -209,6 +210,7 @@ describe("clusterWriteToAction — custom commands", () => {
       id,
       name: "custom",
       key: "movie-mode",
+      on: true,
     });
     expect(clusterWriteToAction({ ...onWrite, on: false }, id)).toBeNull();
   });

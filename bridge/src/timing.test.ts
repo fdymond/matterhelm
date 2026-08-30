@@ -187,7 +187,7 @@ describe("makeActionDispatcher — {evt:'action.timing'} per cluster write", () 
   it("sends the mapped action and logs elapsedMs keyed by the frame's id", () => {
     const { dispatch, sent, events } = makeHarness();
     dispatch({ endpoint: "power", cluster: "onOff", on: true, momentary: false });
-    expect(sent).toEqual([{ v: 4, type: "action", id: ACTION_ID, name: "powerOn" }]);
+    expect(sent).toEqual([{ v: 5, type: "action", id: ACTION_ID, name: "powerOn" }]);
     expect(events).toEqual([
       { evt: "action.timing", id: ACTION_ID, name: "powerOn", elapsedMs: 1.5 },
     ]);
@@ -210,7 +210,7 @@ describe("makeActionDispatcher — {evt:'action.timing'} per cluster write", () 
   it("dispatches playPause Off as dedicated pause", () => {
     const { dispatch, sent, events, timings } = makeHarness();
     dispatch({ endpoint: "playPause", cluster: "onOff", on: false });
-    expect(sent).toEqual([{ v: 4, type: "action", id: ACTION_ID, name: "pause" }]);
+    expect(sent).toEqual([{ v: 5, type: "action", id: ACTION_ID, name: "pause" }]);
     expect(events).toHaveLength(1);
     expect(timings.size).toBe(1);
   });
