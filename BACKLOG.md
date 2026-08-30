@@ -170,6 +170,24 @@ executor profile (see CLAUDE.md for orchestration mechanics).
   cursor at all. Decide the variant (park-only vs park+blank-system-cursor)
   when picked up; if blanking, add a watchdog/restore-on-exit path and a
   tray-menu escape hatch.
+- **P-9** (owner report + deferral 2026-08-30): play/pause and the dedicated
+  play/pause verbs have no effect on **Kodi**. Diagnosis (high confidence):
+  Kodi does not publish a Windows media session, so the 0.5.x absolute verbs
+  find no session and now fail honestly — which presents as "nothing happens".
+  The plain media key is routed to the shell/foreground target, so Kodi only
+  sees it when focused. Probed from the LAN: no `_xbmc-jsonrpc._tcp` mDNS
+  advertisement, and 192.0.2.106:8080 did not answer, so Kodi's HTTP remote
+  control is currently disabled (or Kodi was not running).
+  Fix when picked up: Kodi's JSON-RPC API is the Kodi-native equivalent of
+  SMTC — `Player.PlayPause` takes an explicit `play: true|false` (absolute,
+  not a toggle) and `Player.GetProperties` (speed 0/1) gives true playback
+  state, both independent of window focus. Requires enabling Settings →
+  Services → Control → "Allow remote control via HTTP" (default port 8080),
+  plus host/credential config, graceful degradation when unreachable, and an
+  ADR — it would be the product's second outbound integration alongside P-7.
+  Quick confirmation available any time: press play on the HTPC and check
+  `%APPDATA%\MatterHelm\logs\app-<date>.log` for the "no media session"
+  warning that the 0.5.x media path emits.
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the
   static `Log` default directory, creating a stray `%APPDATA%\MatterHelm`
