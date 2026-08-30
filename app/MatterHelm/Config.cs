@@ -161,7 +161,8 @@ public sealed class KeySequenceActionConfig : CustomActionConfig
 
 /// <summary>
 /// Custom action moving the pointer to a virtual-desktop preset or explicit
-/// coordinates. Retained-switch ON captures then moves; OFF restores.
+/// coordinates. As a top-level retained switch, ON captures then moves and
+/// OFF restores. Inside a sequence it is a stateless one-shot absolute move.
 /// </summary>
 public sealed class MouseMoveActionConfig : CustomActionConfig
 {
@@ -200,8 +201,10 @@ public sealed class DelayActionConfig : CustomActionConfig
 /// <summary>
 /// Custom action running several actions in order — a macro
 /// (<c>{"type":"sequence","steps":[{action}, …]}</c>, S8-3). Steps are the
-/// other action types (media key, launch, key sequence, delay); nesting a
-/// sequence inside a sequence is rejected on load and in the editor.
+/// other action types (media key, launch, key sequence, system, mouse move,
+/// delay); nesting a sequence inside a sequence is rejected on load and in
+/// the editor. A mouse step is a stateless one-shot move and never participates
+/// in a top-level mouse command's retained capture/restore cycle.
 /// Execution stops at the first failing step. An instant sequence (no delay
 /// steps) runs inline and its ack/nack names the failing step; a
 /// delay-bearing sequence runs on a background macro runner (S8-6) — its ack
@@ -932,12 +935,6 @@ public sealed class Config
 
             case "mouseMove":
             {
-                if (!allowSequence)
-                {
-                    _log("WARN", $"config.json \"{where}\": mouseMove cannot be used inside a sequence because retained On/Off edge semantics belong to the command endpoint; entry dropped.");
-                    return null;
-                }
-
                 MouseTarget? target =
                     action.TryGetProperty("target", out JsonElement targetElement) && targetElement.ValueKind == JsonValueKind.String
                         ? ParseMouseTarget(targetElement.GetString())

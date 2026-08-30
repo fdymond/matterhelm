@@ -9,7 +9,8 @@ namespace MatterHelm.Ui;
 /// (stable identity, ADR-004 §1). The action editor switches between the
 /// media-key combo, the launch path/args rows, the key-sequence row, and the
 /// macro step list (S8-3: an ordered list of steps edited via
-/// <see cref="SequenceStepDialog"/>) with the action-type combo. Validation
+/// <see cref="SequenceStepDialog"/> plus the one-shot mouse picker) with the
+/// action-type combo. Validation
 /// is inline (via
 /// <see cref="SettingsViewModel"/>'s pure rules) and OK stays disabled while
 /// anything is invalid.
@@ -210,12 +211,7 @@ public sealed class CustomCommandDialog : Form
         _systemRow = SubGrid(grid);
         AddRow(_systemRow, "Command", _systemCombo);
 
-        _mouseTargetCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(240) };
-        foreach ((_, string label) in SettingsViewModel.MouseTargetChoices)
-        {
-            _mouseTargetCombo.Items.Add(label);
-        }
-
+        _mouseTargetCombo = CreateMouseTargetCombo(S(240));
         _mouseTargetCombo.SelectedIndex = 0;
         _mouseTargetCombo.SelectedIndexChanged += (_, _) => UpdateMouseCoordinateVisibility();
         _mouseX = CoordinateEditor();
@@ -226,13 +222,15 @@ public sealed class CustomCommandDialog : Form
         AddRow(_mouseRow, "Y", _mouseY);
 
         // S8-3 macro editor: ordered step list + add/edit/remove/reorder.
-        // Steps open SequenceStepDialog (the non-sequence action types plus a
-        // wait); double-click edits.
+        // General steps open SequenceStepDialog; mouse steps use a dedicated
+        // picker that shares the standalone target and coordinate mapping.
         _stepsList = new ListBox { Width = S(300), Height = S(110), IntegralHeight = false };
         _stepsList.SelectedIndexChanged += (_, _) => UpdateStepButtons();
         _stepsList.DoubleClick += (_, _) => EditStep();
         var addStepButton = new Button { Text = "Add…", AutoSize = true };
         addStepButton.Click += (_, _) => AddStep();
+        var addMouseStepButton = new Button { Text = "Add mouse move…", AutoSize = true };
+        addMouseStepButton.Click += (_, _) => AddMouseStep();
         _editStepButton = new Button { Text = "Edit…", AutoSize = true, Enabled = false };
         _editStepButton.Click += (_, _) => EditStep();
         _removeStepButton = new Button { Text = "Remove", AutoSize = true, Enabled = false };
@@ -250,6 +248,7 @@ public sealed class CustomCommandDialog : Form
             Margin = Padding.Empty,
         };
         stepButtons.Controls.Add(addStepButton);
+        stepButtons.Controls.Add(addMouseStepButton);
         stepButtons.Controls.Add(_editStepButton);
         stepButtons.Controls.Add(_removeStepButton);
         stepButtons.Controls.Add(_stepUpButton);
@@ -455,11 +454,35 @@ public sealed class CustomCommandDialog : Form
         }
     }
 
+    private void AddMouseStep()
+    {
+        using var dialog = new MouseMoveStepDialog(existing: null);
+        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.Result is { } step)
+        {
+            _steps.Add(step);
+            RefreshStepsList();
+            _stepsList.SelectedIndex = _steps.Count - 1;
+        }
+    }
+
     private void EditStep()
     {
         int index = _stepsList.SelectedIndex;
         if (index < 0)
         {
+            return;
+        }
+
+        if (_steps[index] is MouseMoveActionConfig mouseMove)
+        {
+            using var mouseDialog = new MouseMoveStepDialog(mouseMove);
+            if (mouseDialog.ShowDialog(this) == DialogResult.OK && mouseDialog.Result is { } mouseStep)
+            {
+                _steps[index] = mouseStep;
+                RefreshStepsList();
+                _stepsList.SelectedIndex = index;
+            }
+
             return;
         }
 
@@ -614,6 +637,17 @@ public sealed class CustomCommandDialog : Form
         ThousandsSeparator = true,
     };
 
+    private static ComboBox CreateMouseTargetCombo(int width)
+    {
+        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width };
+        foreach ((_, string label) in SettingsViewModel.MouseTargetChoices)
+        {
+            combo.Items.Add(label);
+        }
+
+        return combo;
+    }
+
     private void UpdateMouseCoordinateVisibility()
     {
         bool visible = IsMouseMoveAction
@@ -634,6 +668,122 @@ public sealed class CustomCommandDialog : Form
             X = Target == MouseTarget.Custom ? X : null,
             Y = Target == MouseTarget.Custom ? Y : null,
         };
+    }
+
+    /// <summary>Pure sequence-step round-trip through the shared mouse editor mapping.</summary>
+    internal static MouseMoveActionConfig CreateMouseMoveSequenceStep(MouseMoveEditorState state) => state.ToAction();
+
+    private sealed class MouseMoveStepDialog : Form
+    {
+        private readonly ComboBox _targetCombo;
+        private readonly NumericUpDown _x;
+        private readonly NumericUpDown _y;
+
+        internal MouseMoveStepDialog(MouseMoveActionConfig? existing)
+        {
+            Text = existing is null ? "Add mouse move step" : "Edit mouse move step";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowIcon = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+
+            var grid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(StepScale(12)),
+            };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            _targetCombo = CreateMouseTargetCombo(StepScale(240));
+            _x = CoordinateEditor();
+            _y = CoordinateEditor();
+            AddStepRow(grid, "Target", _targetCombo);
+            AddStepRow(grid, "X", _x);
+            AddStepRow(grid, "Y", _y);
+            var semanticsNote = new Label
+            {
+                Text = "Moves once. Add another mouse step if the pointer should move back.",
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText,
+                Margin = new Padding(StepScale(3), StepScale(6), StepScale(3), StepScale(3)),
+            };
+            grid.Controls.Add(semanticsNote);
+            grid.SetColumnSpan(semanticsNote, 2);
+
+            MouseMoveEditorState state = existing is null
+                ? new MouseMoveEditorState(MouseTarget.BottomRight, 0, 0)
+                : MouseMoveEditorState.FromAction(existing);
+            _targetCombo.SelectedIndex = Math.Max(
+                0,
+                SettingsViewModel.MouseTargetChoices.ToList().FindIndex(choice => choice.Target == state.Target));
+            _x.Value = state.X;
+            _y.Value = state.Y;
+            _targetCombo.SelectedIndexChanged += (_, _) => UpdateCoordinateVisibility();
+
+            var buttons = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.RightToLeft,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(StepScale(3), StepScale(8), StepScale(3), StepScale(3)),
+            };
+            var cancelButton = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
+            var okButton = new Button { Text = "OK", AutoSize = true };
+            okButton.Click += (_, _) => SaveAndClose();
+            buttons.Controls.Add(cancelButton);
+            buttons.Controls.Add(okButton);
+            grid.Controls.Add(buttons);
+            grid.SetColumnSpan(buttons, 2);
+
+            Controls.Add(grid);
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+            UpdateCoordinateVisibility();
+        }
+
+        internal MouseMoveActionConfig? Result { get; private set; }
+
+        private void UpdateCoordinateVisibility()
+        {
+            bool custom = SettingsViewModel.MouseTargetChoices[Math.Max(0, _targetCombo.SelectedIndex)].Target
+                == MouseTarget.Custom;
+            _x.Enabled = custom;
+            _y.Enabled = custom;
+        }
+
+        private void SaveAndClose()
+        {
+            Result = CreateMouseMoveSequenceStep(new MouseMoveEditorState(
+                SettingsViewModel.MouseTargetChoices[Math.Max(0, _targetCombo.SelectedIndex)].Target,
+                decimal.ToInt32(_x.Value),
+                decimal.ToInt32(_y.Value)));
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+
+        private void AddStepRow(TableLayoutPanel grid, string label, Control editor)
+        {
+            grid.Controls.Add(new Label
+            {
+                Text = label,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(StepScale(3), StepScale(6), StepScale(8), StepScale(3)),
+            });
+            editor.Margin = new Padding(StepScale(3));
+            grid.Controls.Add(editor);
+        }
+
+        private int StepScale(int logical) => LogicalToDeviceUnits(logical);
     }
 
     /// <summary>Logical (96-dpi) pixels → device pixels; see SettingsWindow's DPI note.</summary>

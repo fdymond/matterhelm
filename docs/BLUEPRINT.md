@@ -134,6 +134,16 @@ mode, then the bridge writes the attribute Off after
 `HTPC_BRIDGE_MOMENTARY_RESET_MS` (0 = next tick). That local attribute write
 does not invoke an OnOff command and therefore does not fire the custom action.
 No timing-based trailing-Off suppression is used (S10-29 was reverted).
+A `sequence` custom action runs its ordered app-local steps once per outer
+activation, with no On/Off edge assigned to an individual step. A `mouseMove`
+step is therefore a stateless one-shot absolute move to the same preset or
+explicit-coordinate targets as the standalone retained mouse command, clamped
+to the virtual desktop. It never reads or writes retained capture state and
+never restores implicitly; returning the pointer requires another explicit
+mouse step. Sequences remain capped at 16 steps and 10 seconds of summed
+delays, cannot nest, and stop at the first failing step. Windows does not permit
+off-screen parking (measured requests `(5000,5000)` and `(-500,-500)` clamped
+to the desktop bounds); corner parking is supported, cursor hiding is not.
 A true Matter "tap button" (Generic Switch) exists but Google grants it
 routine-trigger grammar only — no direct voice target — so On/Off Plug-in Unit
 endpoints remain the controllable transport (research 2026-08).

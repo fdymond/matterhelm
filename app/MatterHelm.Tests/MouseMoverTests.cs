@@ -84,6 +84,26 @@ public sealed class MouseMoverTests
     }
 
     [Fact]
+    public void SequenceMoveDoesNotReadOrChangeAnotherCommandsRetainedRestoreState()
+    {
+        var pointer = new FakePointer(MultiMonitorBounds, new Point(100, 200));
+        var mover = new MouseMover(pointer);
+
+        Assert.True(mover.Move(
+            "park-mouse",
+            new MouseMoveActionConfig { Target = MouseTarget.BottomRight }));
+        int getCallsAfterRetainedOn = pointer.GetCalls;
+
+        Assert.True(mover.MoveOnce(
+            new MouseMoveActionConfig { Target = MouseTarget.Custom, X = -99999, Y = -99999 }));
+        Assert.Equal(new Point(-1920, -200), pointer.Position);
+        Assert.Equal(getCallsAfterRetainedOn, pointer.GetCalls);
+
+        Assert.True(mover.Restore("park-mouse"));
+        Assert.Equal(new Point(100, 200), pointer.Position);
+    }
+
+    [Fact]
     public void OffBeforeOnIsANoOpSuccess()
     {
         var pointer = new FakePointer(MultiMonitorBounds, new Point(7, 9));
@@ -155,12 +175,15 @@ public sealed class MouseMoverTests
 
         internal int SetCalls { get; private set; }
 
+        internal int GetCalls { get; private set; }
+
         internal bool GetResult { get; set; } = true;
 
         internal bool SetResult { get; set; } = true;
 
         public bool TryGetPosition(out Point current)
         {
+            GetCalls++;
             current = Position;
             return GetResult;
         }

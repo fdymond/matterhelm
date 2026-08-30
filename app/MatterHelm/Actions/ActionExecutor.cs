@@ -26,6 +26,7 @@ public sealed class ActionExecutor : IDisposable
     private readonly SystemVolume _systemVolume = new();
     private readonly DisplayPower _displayPower = new();
     private readonly MouseMover _mouseMover = new();
+    private readonly ScreensaverFocusMemory _screensaverFocus = new();
 
     /// <summary>Volume component, exposed so callers can read state and subscribe to change events.</summary>
     public SystemVolume Volume => _systemVolume;
@@ -36,7 +37,8 @@ public sealed class ActionExecutor : IDisposable
     /// <c>int</c> signed percent delta for <c>volumeStep</c>, a
     /// <see cref="LaunchRequest"/> for <c>launch</c>, a
     /// <see cref="ParsedKeyChord"/> for <c>keySequence</c>, and an internal
-    /// mouse-move request for <c>mouseMove</c>. Beyond the protocol names,
+    /// retained mouse-move request for <c>mouseMove</c>, and a stateless
+    /// request for sequence-only <c>mouseMoveOnce</c>. Beyond the protocol names,
     /// <c>play</c>/<c>pause</c> are the dedicated protocol verbs; the
     /// custom-command ops include <c>mediaStop</c>, <c>muteToggle</c>,
     /// <c>volumeStep</c>, <c>launch</c>, and <c>keySequence</c>.
@@ -84,6 +86,8 @@ public sealed class ActionExecutor : IDisposable
                     return request.On
                         ? _mouseMover.Move(request.CommandKey, request.Action)
                         : _mouseMover.Restore(request.CommandKey);
+                case "mouseMoveOnce" when value is MouseMoveOnceRequest request:
+                    return _mouseMover.MoveOnce(request.Action);
                 // These are the display primitives; BridgeHost.RoutePowerAction
                 // selects them or sleep/screensaver from the configured behavior.
                 case "powerOn":
@@ -92,9 +96,9 @@ public sealed class ActionExecutor : IDisposable
                     return _displayPower.DisplaysOff();
                 // S8-5 system commands (the `system` custom-action type).
                 case "startScreenSaver":
-                    return SystemCommands.StartScreenSaver();
+                    return StartScreenSaver(_screensaverFocus, SystemCommands.StartScreenSaver);
                 case "stopScreenSaver":
-                    return SystemCommands.StopScreenSaver();
+                    return StopScreenSaver(_screensaverFocus, SystemCommands.StopScreenSaver);
                 case "lock":
                     return SystemCommands.LockWorkstation();
                 case "closeForeground":
@@ -138,9 +142,40 @@ public sealed class ActionExecutor : IDisposable
     public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
         _mouseMover.Reconcile(activeCommandKeys);
 
+    /// <summary>Invalidates the process-local focus capture at a bridge/app lifecycle boundary.</summary>
+    public void ClearScreensaverFocusCapture() =>
+        _screensaverFocus.Clear("the bridge was disabled or the app is exiting");
+
+    internal static bool StartScreenSaver(ScreensaverFocusMemory focus, Func<bool> start)
+    {
+        _ = focus.Capture();
+        try
+        {
+            bool started = start();
+            if (!started)
+            {
+                focus.Clear("the screensaver did not start");
+            }
+
+            return started;
+        }
+        catch
+        {
+            focus.Clear("the screensaver start failed with an exception");
+            throw;
+        }
+    }
+
+    internal static bool StopScreenSaver(ScreensaverFocusMemory focus, Func<bool> stop)
+    {
+        bool stopped = stop();
+        return stopped && focus.Restore();
+    }
+
     /// <summary>Disposes the volume observer and the display-power window.</summary>
     public void Dispose()
     {
+        ClearScreensaverFocusCapture();
         _systemVolume.Dispose();
         _displayPower.Dispose();
     }

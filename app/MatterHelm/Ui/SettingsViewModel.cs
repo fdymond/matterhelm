@@ -379,8 +379,6 @@ public sealed class SettingsViewModel
     {
         LaunchActionConfig launch => ValidateLaunchPath(launch.Path),
         KeySequenceActionConfig keySequence => ValidateKeySequence(keySequence.Sequence),
-        MouseMoveActionConfig when !allowSequence =>
-            "Move mouse cannot be used inside a sequence because it needs the command endpoint's On/Off edge.",
         MouseMoveActionConfig { Target: MouseTarget.Custom, X: null } => "Custom mouse target needs an X coordinate.",
         MouseMoveActionConfig { Target: MouseTarget.Custom, Y: null } => "Custom mouse target needs a Y coordinate.",
         DelayActionConfig delay when delay.Ms is < DelayActionConfig.MinMs or > DelayActionConfig.MaxMs =>
