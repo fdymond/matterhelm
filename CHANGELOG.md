@@ -8,9 +8,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
-## [Unreleased]
+## [0.5.0] — 2026-08-30
 
-Nothing yet.
+This section is the 0.5.0 release candidate. Version and release date remain
+unset until tagging.
+
+### Upgrade notes from 0.4.x
+
+- Existing custom commands have no `resetAfterActivation` field. In 0.5.0
+  they therefore become **retained switches that execute on either user
+  transition**. For one-shot behavior, edit each affected command in
+  **Settings → Custom devices** and enable **Reset the switch after it runs
+  (momentary button)**; only On then executes and the tile returns to Off.
+- **Play Pause** changes from a momentary toggle to retained state: On requests
+  Play and Off requests Pause. Absolute verbs use the current Windows SMTC
+  session. If no usable session exists, the request fails with a warning;
+  MatterHelm deliberately sends no appcommand fallback because it can invert
+  the requested intent.
+- **Power** now models awake state. Displays-off,
+  pause-plus-displays-off, and screensaver modes are reversible: Off engages,
+  On reverses, and pause-plus-displays-off never resumes playback. Sleep is
+  momentary: Off fires once and the tile promptly returns to On.
+- IPC message revision moves from v3 to v4 for additive `play` and `pause`
+  action variants; handshake protocol remains 1. The matching tray and
+  sidecar ship together, so users take no action. A stale sidecar left running
+  is rejected and logs a version mismatch.
+
+### Added
+
+- Per-custom-command **Reset after activation** opt-in. Retained/both-edge is
+  the default; reset mode executes only On and uses the configured tap-reset
+  delay (default 0 ms / next tick).
+- Dedicated protocol-v4 Play and Pause actions, plus bounded absolute SMTC
+  execution. Measurements found
+  `APPCOMMAND_MEDIA_PLAY` toggles in both Spotify and YouTube, so it is not
+  treated as absolute or used as a fallback.
+- Reversible screensaver Power mode and full Power On handling for reversible
+  display/screensaver modes.
+
+### Changed
+
+- Play/Pause, Next, Previous, reversible Power, and default custom-command
+  endpoints retain their Matter OnOff state. Next/Previous and retained custom
+  commands execute once on either controller transition.
+- Irreversible Power modes (currently sleep) execute only an Off request, then
+  locally reset the tile to On without dispatching another action.
+- First-run bridge control is contextual: unpaired installs show **Pair with
+  Google Home…**, which starts and persists the bridge; commissioned installs
+  show **Enable bridge**.
+- Tray state legend is gray/disabled, amber/starting, blue/awaiting pairing,
+  green/connected, and red/crash-loop or missing advertisement.
+
+### Documentation
+
+- Reconciled the user guide, distribution quick start, architecture blueprint,
+  ADRs, backlog, E2E script, launch gate, routines, and contributor instructions
+  with the shipped 0.5.0 behavior.
+- Current test inventory is 1,111 (391 bridge + 720 app). The documentation
+  sandbox passed the alternate bridge runner 391/391, but standard Vitest
+  startup was blocked by `spawn EPERM` and the app run was not green because
+  loopback `HttpListener` tests fail in this sandbox. Clean standard-command
+  release evidence remains required.
 
 ## [0.4.4] — 2026-08-28
 
