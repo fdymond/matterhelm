@@ -12,7 +12,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S0-1 ✅ | Verify & pin the bridge scaffold: in `bridge/`, `npm install` matter.js (`@matter/main`), zod, pino, tsx + the eslint/prettier/vitest toolchain; make `npm run verify` pass on the placeholder; pin exact versions | `npm run verify` output green in report; lockfile committed; versions listed | S | — | impl (Sonnet) |
 | S0-2 ✅ | CI: GitHub Actions `verify` (bridge) on windows-latest + ubuntu-latest (+ app Release build on windows-latest, pulled forward from Sprint 2 since S0-5 landed) | Green run demonstrated | S | S0-1 | integrator |
 | S0-3 ✅ (pairing + persistence PASS on real hardware; Speaker UX + momentary validation moved to product E2E; hub-reconnect risk logged) | **SPIKE** (re-scoped by ADR-002): with test VID/PID registered in a free Google Home Developer Console project + Nest hub on LAN, commission a minimal matter.js bridge (Speaker + one OnOff endpoint); verify Speaker volume UX (voice % + app slider) | Result documented in `docs/spikes/S0-3-pairing.md` with log evidence: console recipe, hub confirmation, Speaker UX verdict; **needs the human** for console signup + phone/Home-app steps | M | S0-1 | impl (Fable) + human |
-| S0-4 | **SPIKE**: momentary-switch UX — auto-reset 800 ms OnOff endpoint; verify Home-app taps and voice register cleanly; ALSO commission one Generic Switch endpoint and record app/routine surfacing (ADR-002) | Findings + chosen reset interval + Generic Switch verdict in `docs/spikes/S0-4-momentary.md` | S | S0-3 | impl (Fable) + human |
+| S0-4 ⛔ superseded by ADR-012 | Historical spike proposal: 800-ms default-momentary OnOff UX. The reset experiment is no longer applicable; retained switches and opt-in reset shipped. Only the separate Generic Switch hardware research question remains open. | If pursued, record only Generic Switch Home-app/routine surfacing; do not revive the obsolete reset model | S | S0-3 | human |
 | S0-5 ✅ | `app/` scaffold: `HtpcMatterBridge.csproj` (net8.0-windows, WinForms, single-instance Program.cs, Log.cs, empty TrayContext showing an icon), builds with warnings-as-errors | `dotnet build -c Release` 0 warnings; exe shows tray icon; report screenshot/log | S | — | impl (Sonnet) |
 
 ## Sprint 1 — the bridge (`bridge/`)
@@ -21,7 +21,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 |---|---|---|---|---|---|
 | S1-1 ✅ | `ipc/protocol.ts` + zod schemas + exhaustive unit tests (valid/invalid frames, version field, pairing msg) | ≥ 90 % coverage on the module; tests read as a protocol spec | S | S0-1 | impl (Sonnet) |
 | S1-2 ✅ | `mapping/actions.ts` + `mapping/state.ts` pure functions + tests (incl. 0–254 ↔ 0–100 % rounding edges) | ≥ 90 % coverage; edge-case tests | S | S1-1 | impl (Sonnet) |
-| S1-3 ✅ (Home-app endpoint visibility validated at integration; S0-4 interval kept at 800 ms pending spike) | `matter/adapter.ts` + `bridge.ts` + `devices.ts`: Aggregator with Speaker, 3 momentary switches, power toggle; persisted storage in configurable dir | Manual: all endpoints visible in the Home app; storage survives restart (no re-pair) | L | S0-3, S0-4, S1-2 | impl (Fable) |
+| S1-3 ✅ (historical model; reset policy superseded by ADR-012) | `matter/adapter.ts` + `bridge.ts` + `devices.ts`: initial Aggregator with Speaker, 3 then-momentary switches, power toggle; persisted storage | Manual: all endpoints visible in the Home app; storage survives restart | L | S0-3, S0-4, S1-2 | impl (Fable) |
 | S1-4 ✅ | `ipc/client.ts`: WS client, token hello, jittered-backoff reconnect, graceful degradation when peer absent | Integration tests vs mock server: auth-reject closes, actions drop with one WARN when down, reconnect works (fake timers) | M | S1-1 | impl (Fable) |
 | S1-5 ✅ (full bridge ran vs mock tray peer: hello/pairing/state + tether shutdown) | `config.ts` + `index.ts` composition root + pino logging + `pairing` message emission; config incl. `mdnsInterface` (BLUEPRINT §2.1 Windows notes) | `npm start` runs the full bridge against a mock tray-app peer; README quick-start true | S | S1-3, S1-4 | impl (Sonnet) |
 | S1-6 ✅ (violations demonstrably fail; resolver dep required and pinned) | ESLint import-boundary enforcement per ENGINEERING-STANDARDS: `matter/` ↛ `ipc/` (and vice versa), `@matter/*` imports only in `matter/adapter.ts`, `ws`/socket types only behind `ipc/` (via `import-x/no-restricted-paths` or `no-restricted-imports`; add `eslint-import-resolver-typescript` only if needed) | Lint demonstrably fails on a violation (show output), then verify green | S | S1-3, S1-4 | impl (Sonnet) |
@@ -32,9 +32,9 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
 | S2-1 ✅ (pulled forward of S1-5: protocol + env contracts were already fixed; chaos-tested vs stub children) | `Sidecar/`: `SidecarSupervisor` (spawn node/SEA exe, env token, restart backoff, stdin tether, stdout→log) + `IpcServer` (loopback WS, hello/auth, close on invalid frame) + `Protocol.cs` typed records | Protocol unit tests; chaos demo: kill sidecar → auto-restart with backoff logged; wrong token → socket closed | L | S0-5, S1-5 | impl (Fable) |
-| S2-2 ✅ | `Actions/`: `ActionExecutor` + `MediaKeys` (SendInput VK_MEDIA_*) + `SystemVolume` (CoreAudio get/set/observe with change events) + `DisplayPower` | Manual demo: each action works on real media; volume observation fires state updates | M | S0-5 | impl (Fable) |
-| S2-3 ✅ | `Ui/OverlayHud.cs`: persistent click-through non-activating flash window — primary line = incoming command ("Google Home → volume 40 %"), pill = executed action/failure; updates in place, fades; toggleable + persisted | Manual demo incl. rapid-fire updates without flicker; never steals focus or blocks clicks | M | S0-5 | impl (Sonnet) |
-| S2-4 ✅ (pair-to-green + Home-app name checks deferred to hardware E2E) | `Ui/PairingWindow.cs` (QR rendered locally from `qrPayload` + manual code) + tray states (gray/green/amber/red) + full menu + `Config.cs` (device names, port, power mapping, overlay toggle) + Reload | Manual: enable → pair → green; names from config appear in Home app after re-pair; reload applies without restart | M | S2-1 | impl (Sonnet) |
+| S2-2 ✅ (later amended by S10-31) | Initial `ActionExecutor`/media keys/CoreAudio/display power; dedicated Play/Pause now uses SMTC without an intent-inverting appcommand fallback | Manual demo: each action works on real media; volume observation fires state updates | M | S0-5 | impl (Fable) |
+| S2-3 ✅ (historical overlay; superseded by S10-19) | Initial click-through HUD; current UI is static MatterHelm header plus one command/result pill or volume bar | Manual demo incl. rapid-fire updates without flicker; never steals focus or blocks clicks | M | S0-5 | impl (Sonnet) |
+| S2-4 ✅ (historical tray model; blue added by ADR-011, contextual menu by S10-23) | Pairing window + tray/menu/config foundation | Manual pairing and name checks carried to hardware E2E | M | S2-1 | impl (Sonnet) |
 | S2-5 ✅ (mock-sidecar E2E PASS; "Hey Google" hop deferred to hardware E2E) | Wire it: IpcServer actions → executor → overlay flash → ack; state publisher (volume/mute on connect + on change) | **Exit demo evidence**: "Hey Google…" pauses real media; overlay flashes; Home-app slider tracks local volume change | M | S2-1, S2-2, S2-3, S2-4 | impl (Fable) |
 | S2-R ✅ (Opus review: 1 confirmed bug + 2 verified risks, all fixed; COM/threading/security clean) | Adversarial review of Sprint 2 (thread marshalling, supervisor races, P/Invoke correctness, protocol drift vs bridge) | Findings verified + fixed | M | S2-5 | review |
 
@@ -43,14 +43,14 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
 | S3-1 ✅ | Node SEA single-exe (`npm run package`) + `dotnet publish` self-contained app + root `build.ps1` producing one dist folder; ADR if SEA infeasible | Clean-machine run of the packaged dist pairs & controls; sizes reported | L | S2-R | impl (Fable) |
-| S3-2 ✅ (checklist authored + restart-recovery evidence pre-filled; full hardware pass pending the human) | Unpair / factory-reset flow (tray action deletes matter storage) + `docs/user-guide.md` | Scripted E2E checklist executed & logged in `docs/e2e-log.md` | M | S3-1 | impl (Sonnet) |
+| S3-2 🔜 partial (implementation/docs done; hardware acceptance still open) | Unpair / factory-reset flow + user guide | Execute and log the current scripted hardware E2E checklist; authored-only is not complete | M | S3-1 | human |
 | S3-3 ✅ (budget table in CHANGELOG 0.1.0: all G6/ADR-007 budgets met on the packaged dist; audit 0 vulns; tagged v0.1.0) | Perf/budget pass (BLUEPRINT G6) + `npm audit` clean + release 0.1.0 | Budget table meets G6; tagged release | S | S3-2 | impl (Sonnet) |
 
 ## Sprint 4 — settings UI, custom commands, modernization (ADR-004/ADR-005)
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S4-0 ✅ | TFM bump `net10.0-windows` (both csproj) + CI dotnet 10.0.x; PerMonitorV2 confirmed | Build+tests green; `--demo-overlay`/`--demo-wired` re-run PASS (exit 0 both) | S | — | integrator |
+| S4-0 ✅ | TFM bump to .NET 10 Windows (current exact TFM `net10.0-windows10.0.17763.0` in both projects) + CI dotnet 10.0.x; PerMonitorV2 confirmed | Build+tests green; `--demo-overlay`/`--demo-wired` re-run PASS (exit 0 both) | S | — | integrator |
 | S4-1 ✅ | Bridge: `HTPC_BRIDGE_ENDPOINTS` env (ADR-004 shape) → dynamic endpoint construction (disabled built-ins omitted, custom momentary plugs); protocol v2 (`v:2` + `custom` action w/ `key`) in protocol.ts + mapping | verify green; unit tests for endpoint-set derivation + custom action mapping; mock-run shows custom endpoint write → `{name:"custom",key}` frame | M | S4-0 | impl (Fable) |
 | S4-2 ✅ | App: Config `commands` schema + migration from `deviceNames`; Protocol.cs v2 parity; executor custom actions (`mediaKey`, `launch`); supervisor env → ENDPOINTS | dotnet tests incl. migration + v2 parity + custom dispatch; wired demo extended with a custom command round-trip | M | S4-0 | impl (Fable) |
 | S4-3 ✅ (incl. PairingWindow dark-theming + production SetColorMode by integrator) | App: `Ui/SettingsWindow` per ADR-004 (left nav categories, top search filter, staged edits + validation, custom command CRUD editor, dark mode via SetColorMode) | Build 0 warnings; view-model/filter logic unit-tested; screenshot evidence light+dark; all settings round-trip to config.json | L | S4-2 | impl (Fable) |
@@ -80,7 +80,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S7-1 ✅ | keySequence custom actions (grammar, SendInput chords, capture UX) + configurable momentary reset (default 300 ms) | INPUT-array proof; both-side default pinned; 391+322 tests | M | — | impl (Fable) |
+| S7-1 ✅ (historical reset default; S8-2 changed it to 0 and ADR-012 limited it to opted-in custom commands) | keySequence custom actions + configurable reset | INPUT-array proof; both-side default pinned at the time; 391+322 tests | M | — | impl (Fable) |
 | S7-2 ✅ | Rename product to MatterHelm (namespaces/dirs/mutex/meter/docs/CI) + atomic %APPDATA% migration preserving Matter fabric | Identity test files zero-diff; real migration performed at merge (log line verified, fabric present, old root gone) | M | S7-1 | impl (Fable) |
 | S7-3 ✅ (repo renamed to `matterhelm`; npm audit highs fixed; release workflow validates at first v* tag) | OSS-grade project setup: repo → `matterhelm` (private, history kept), LICENSE, CONTRIBUTING, SECURITY, CoC, issue/PR templates, release workflow (changelog+semver tags), branch/PR conventions | Files in place; release workflow dry-run green | M | S7-2 | impl (Sonnet) + integrator |
 
@@ -88,18 +88,18 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S8-1 ✅ | Dispatch plug actions from OnOff **commands** (`OnOffServer.on()/off()` override) instead of attribute-change events: repeated identical commands stop being dropped, the momentary reset becomes cosmetic, one subscription report per press instead of two. Speaker (mute/volume) deliberately unchanged. ADR-008 | Repeat-command tests green; live-node smoke proves two dispatches from two `on` commands with no intervening `off`; no protocol change | M | — | impl (Fable) |
+| S8-1 ✅ | Dispatch plug actions from OnOff **commands** instead of attribute-change events. Reset is not a correctness dependency; ADR-012 later changed endpoint state policy. Speaker remains attribute-driven. | Repeat-command tests green; live-node smoke; no protocol change | M | — | impl (Fable) |
 | S8-2 ✅ | Tap reset delay floor 100→0 ms both sides (0 = next-tick reset; safe post-ADR-008), **default 300→0 ms** (owner request), + user-guide note on Google's per-device Type re-typing (plug tile → Switch) | Both range validators, default pins + tests updated (bridge 328, app 411 green); Settings shows "0 = immediately" | S | S8-1 | integrator |
 | S8-3 ✅ | Command sequences (macros): `sequence` custom-action type running ordered steps (media key/launch/key chord/`delay` 1–5000 ms; ≤16 steps, delays ≤10 s total, no nesting), step-list editor + SequenceStepDialog, stop-at-first-failure with step-numbered nack | Config parse/round-trip + executor-order + validation tests (app 426 green); app-side only, no protocol change | M | — | integrator |
 | S8-6 ✅ | Deep review of Sprint 8 + command-processing hardening: found+fixed macro head-of-line blocking (delays ran on the WebSocket receive loop → froze every later frame and app exit); delay-bearing macros → background runner with cancellable waits (CTS on Dispose), inline ack semantics kept for instant macros | Non-blocking regression test (macro 3 s delay + queued volume frame executes immediately); app 439 + bridge 328 green | S | S8-3 | integrator (review + impl) |
 | S8-5 ✅ | `system` custom-action type + macro step (owner request): startScreenSaver (registry .scr /s), stopScreenSaver (nudge), displaysOff/On, sleep, hibernate, lock, closeForegroundProgram (WM_CLOSE), shutdown, restart — executor verbs + SystemCommands.cs natives; combo in both dialogs | Config parse/round-trip + dispatch + choices-complete tests (app 438 green); no protocol change | S | S8-3 | integrator |
-| S8-4 ✅ | Momentary endpoints dispatch on BOTH OnOff commands (owner hardware report: Google's toggle tile sends `Off` when its state model lags the instant reset → every other tap was dead). `clusterWriteToAction` total; power unchanged. ADR-008 amendment | Mapping/timing tests updated (bridge 328 green + smoke PASS); e2e rows added for tap-tap-tap and "turn off HTPC Next" | S | S8-1 | integrator |
+| S8-4 ✅ (shared momentary policy superseded by ADR-012) | Hardware established that controller Off is a real user transition. Current mapping keeps both-edge behavior for Next/Previous and retained custom commands, but gives Play/Pause distinct edges and reset-enabled custom commands On-only. | Historical mapping/timing evidence retained | S | S8-1 | integrator |
 
 ## Sprint 9 — settings UI polish (owner-directed)
 
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
-| S9-1 ✅ | Settings UI polish + dedicated play/pause (owner-directed): footer takes-effect note + per-row ⟳ markers, WinForms scroll-on-focus jump fixed (NonJumpingPanel), overlay Preview at the STAGED position (restores after flash), Action column fills, MediaKeyName.Play/Pause via WM_APPCOMMAND absolute verbs | Demo screenshots verified (footer, markers, scrolled tail renders); app 444 green | S | — | integrator |
+| S9-1 ✅ (media premise corrected by S10-31) | Settings UI polish + Play/Pause-labelled media actions. Hardware later proved `APPCOMMAND_MEDIA_PLAY` toggles; current absolute verbs use SMTC and fail safely when unavailable. | UI demo evidence; media behavior superseded by S10-31 | S | — | integrator |
 | S9-2 ✅ | Devices & Commands compaction + scroll polish (owner-directed): CommandRow kind merges name+enabled into one row (leading checkbox, untick greys row + disables name box), filler row removed (scrollbar matched to content), WM_MOUSEWHEEL message filter scrolls the hovered page regardless of focus | Demo screenshots verified (5 compact rows, page nearly fits unscrolled); app 445 green | S | S9-1 | integrator |
 | S9-3 ✅ | Nav restructure (owner-directed): "Devices & Commands"→"Devices" with a bold "Google Home devices" SectionHeader + description-free command rows; custom commands→own "Custom devices" section (full-height list); wheel filter fixed by FORWARDING the message to the hovered page (hand-computed AutoScrollPosition silently no-opped) | Screenshots verified both pages; app 445 green | S | S9-2 | integrator |
 | S9-4 ✅ | Overlay theming + transparency (owner-directed): OverlayTheme enum (System default/Dark/Light; System resolves AppsUseLightTheme per flash) + light Palette, OverlayOpacityPercent 30-100 scaling every UpdateLayeredWindow push (fade multiplies through); config parse/save/CopyInto/validation, Settings Overlay rows, preview carries staged theme+opacity via OverlayPreviewRequest | 10 new config tests (wire names, digit guard, range fallback, camelCase round-trip); app 455 green; overlay + settings demos PASS | S | S9-1 | integrator |
@@ -131,9 +131,14 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S10-18 ✅ | Displays-off sleeps Modern Standby PCs despite the keep-awake hold (owner report; kernel events prove MS entry 2 s after acquire): DDC/CI hardware monitor power-off (VCP D6=0x04/0x01) as the primary path — OS never sees screen-off; blanking+hold fallback for non-DDC panels; per-monitor path logging | shipped in 0.4.3; 7 policy-matrix tests | M | S10-13 | integrator |
 | S10-19 ✅ | Overlay single identity pill (command name / volume % / mute); static header retained | shipped in 0.4.3; demo PASS | S | S10-16 | integrator |
 | S10-21 ✅ | mDNS interface adapter dropdown with Auto + "(not detected)" stale state (owner request after second-PC wired mis-pin) | shipped in 0.4.3; 66 focused tests | S | — | integrator |
-| S10-20 🔜 | Advertising robustness: surface dead/misrouted pinned interface via advertisement-health + auto-fallback; two-PC guide wired-setup + per-profile firewall note (second-PC wired timeout still under diagnosis — firewall profile suspected) | open | S | S10-21 | integrator |
+| S10-20 🔜 partial | Advertising robustness: dead/misrouted pins are already surfaced by advertisement health. Remaining work is automatic fallback plus two-PC/per-network-profile firewall guidance. | Auto-fallback proven without hiding a bad explicit pin; current network-profile instructions hardware-checked | S | S10-21 | integrator |
 | S10-21..25 ✅ | Adapter dropdown + filtering, onboarding streamlining (contextual menu, condensed pairing window, IPv6 requirement), scan-code key injection, DDC-honest display power | shipped in 0.4.4 | M | — | integrator |
 | S10-26..28 ✅ | Deep review (3 sweeps + adversarial verification) and remediation: bridge backpressure/expectation rollback/transactional construction, app lifecycle serialization/macro hygiene/font disposal/keep-awake release/retention rollover, docs realignment | shipped in 0.4.4; bridge 375, app 689 | L | — | integrator |
+| S10-29 ✅ reverted | Attempted timing-based trailing-Off suppression | Reverted by owner decision; timing cannot distinguish controller intent from echo | S | S10-28 | integrator |
+| S10-30 ✅ | Retained switch state: Play/Pause distinct edges, Next/Previous both-edge, reversible/momentary Power split; ADR-012 | Protocol/mapping/app parity and behavior tests | M | S10-29 | integrator |
+| S10-31 ✅ | Absolute dedicated Play/Pause through the current SMTC session; no appcommand fallback because it can invert intent; amend ADR-003 | Spotify/YouTube toggle evidence recorded; focused tests | M | S10-30 | integrator |
+| S10-32 ✅ | Custom commands retained/both-edge by default with opt-in reset-after-activation; reset default 0; amend ADR-012 | Config/env/UI/mapping parity and tests | M | S10-30 | integrator |
+| S10-35 ✅ (clean standard-suite + hardware verdict remain release gates, not documentation work) | 0.5.0 documentation truth pass across public docs, blueprint, ADRs, backlog, E2E and launch gates | All 66 audit findings resolved; current test evidence and Windows floor recorded without inventing a green verdict | M | S10-30..32 | docs |
 | P-6 🔜 | Pin postject in bridge/package.json + lockfile so SEA release builds stop fetching it ad hoc via npx (deferred from S10-26: needs synchronized lockfile change) | open | S | — | integrator |
 ## Proposed (from agent reports, integrator-triaged)
 
@@ -145,8 +150,10 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 
 - ~~**P-1**~~ ✅ done (integrator): supervisor takes `extraEnv` (contract vars always win); BridgeHost passes `HTPC_BRIDGE_DEVICE_NAMES` JSON + `HTPC_BRIDGE_MDNS_INTERFACE` from config.
 - **P-4**: tether robustness — when the tray app is hard-killed (not menu Exit), the sidecar was observed surviving ≥4s; index.ts listens for stdin "end"/"close" but a broken pipe may surface as "error". Add "error" handling + an S1-R check. *(S3-3 measurement 2026-08-09: packaged SEA sidecar exited 0.6 s after a tray hard-kill — did not reproduce; keep as a low-priority hardening item.)*
-- **P-2**: additive protocol signal for commissioned/uncommissioned so tray green can mean "fabric joined" rather than "sidecar link up" (needs `v` bump, both sides).
-- **P-3**: "Factory reset bridge" tray action (delete matter storage; BLUEPRINT §2.5) — schedule with S3-2 unpair flow.
+- ~~**P-2**~~ ✅ shipped in protocol v3 as `matterStatus`, including
+  commissionable-advertisement health.
+- ~~**P-3**~~ ✅ Factory reset is shipped in both the tray menu and Settings;
+  it enables/restarts the bridge and opens a fresh pairing window.
 
 ## Icebox (explicitly not now)
 
@@ -154,4 +161,5 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 - Free VID/PID registration to remove the "Uncertified" pairing banner
 - Media Playback cluster support (blocked on Google — watch release notes)
 - Alexa/Apple Home multi-admin validation
-- Additional endpoints: app-launch switches, "movie mode" scene endpoint
+- Native scene endpoints beyond today's custom-command switches. App-launch
+  commands already publish one Matter endpoint per enabled custom command.
