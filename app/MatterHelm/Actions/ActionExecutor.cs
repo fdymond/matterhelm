@@ -35,7 +35,8 @@ public sealed class ActionExecutor : IDisposable
     /// <c>int</c> signed percent delta for <c>volumeStep</c>, a
     /// <see cref="LaunchRequest"/> for <c>launch</c>, and a
     /// <see cref="ParsedKeyChord"/> for <c>keySequence</c>. Beyond the protocol names,
-    /// the custom-command ops (S4-2/S7-1) are <c>mediaStop</c>, <c>muteToggle</c>,
+    /// <c>play</c>/<c>pause</c> are the dedicated protocol verbs; the
+    /// custom-command ops include <c>mediaStop</c>, <c>muteToggle</c>,
     /// <c>volumeStep</c>, <c>launch</c>, and <c>keySequence</c>.
     /// </summary>
     public bool Execute(string name, object? value = null)
@@ -46,6 +47,10 @@ public sealed class ActionExecutor : IDisposable
             {
                 case "playPause":
                     return MediaKeys.PlayPause();
+                case "play":
+                    return MediaKeys.Play();
+                case "pause":
+                    return MediaKeys.Pause();
                 case "next":
                     return MediaKeys.NextTrack();
                 case "previous":

@@ -264,12 +264,15 @@ internal sealed class SerialActionQueue
 /// <summary>One built-in endpoint's entry in the <c>HTPC_BRIDGE_ENDPOINTS</c> contract: display name + whether the bridge publishes it.</summary>
 internal sealed record SidecarEndpointEntry(string Name, bool Enabled);
 
+/// <summary>Power endpoint entry: irreversible actions opt into Off-to-On momentary reset.</summary>
+internal sealed record SidecarPowerEndpointEntry(string Name, bool Enabled, bool Momentary);
+
 /// <summary>One enabled custom endpoint's entry in <c>HTPC_BRIDGE_ENDPOINTS</c>: stable key + display name (never its action — the sidecar must not know what commands do).</summary>
-internal sealed record SidecarCustomEndpointEntry(string Key, string Name);
+internal sealed record SidecarCustomEndpointEntry(string Key, string Name, bool ResetAfterActivation);
 
 /// <summary>
 /// Wire shape of <c>HTPC_BRIDGE_ENDPOINTS</c> (BLUEPRINT §2.3 as amended by
-/// ADR-004 §2), serialized via <see cref="SidecarEnvJsonContext"/>; property
+/// ADR-004/ADR-012), serialized via <see cref="SidecarEnvJsonContext"/>; property
 /// declaration order is the wire order.
 /// </summary>
 internal sealed record SidecarEndpointsEnv(
@@ -277,7 +280,7 @@ internal sealed record SidecarEndpointsEnv(
     SidecarEndpointEntry PlayPause,
     SidecarEndpointEntry Next,
     SidecarEndpointEntry Previous,
-    SidecarEndpointEntry Power,
+    SidecarPowerEndpointEntry Power,
     SidecarCustomEndpointEntry[] Custom);
 
 /// <summary>
@@ -296,11 +299,12 @@ internal sealed record SidecarEndpointsEnv(
 /// advertisement is unobservable; <b>blue</b> (AwaitingPairing) = authenticated
 /// and uncommissioned; <b>amber</b> (Running) = starting or awaiting status.
 ///
-/// power mapping is symmetric: each configured off action has its own inverse
-/// on an On command. <see cref="PowerOffAction.PauseAndDisplaysOff"/> sends
-/// play/pause FIRST, then blanks displays — the pause lands while the player
+/// Reversible power modes are symmetric: each configured off action has its
+/// own inverse on an On command. <see cref="PowerOffAction.PauseAndDisplaysOff"/> sends
+/// dedicated Pause FIRST, then blanks displays — the pause lands while the player
 /// is still visible/audible, and display-off is the terminal effect; both must
-/// succeed for an ok ack.
+/// succeed for an ok ack. On reverses only its display half. Irreversible
+/// modes dispatch only Off and are advertised to the sidecar as momentary.
 ///
 /// Threading: <see cref="SetEnabled"/> and <see cref="FactoryReset"/> are
 /// thread-safe and blocking (child stop grace, plus delete retries for the
@@ -366,6 +370,7 @@ public sealed class BridgeHost : IDisposable
     private bool _clientAuthenticated;
     private MatterStatusFrame? _matterStatus;
     private int _restartsSinceAuth;
+    private PowerOffAction _sessionPowerOffAction;
     private BridgeState _state = BridgeState.Disabled;
     private bool _disposed;
 
@@ -390,7 +395,7 @@ public sealed class BridgeHost : IDisposable
     private BridgeState _notifiedState = BridgeState.Disabled;
 
     /// <summary>Creates the host (nothing starts until <see cref="SetEnabled"/>).</summary>
-    /// <param name="config">Live config; <c>ipcPort</c>/<c>logLevel</c> are read at each enable, <c>overlayEnabled</c>/<c>powerOffAction</c> per action.</param>
+    /// <param name="config">Live config; sidecar-affecting settings are snapshotted at each enable, while <c>overlayEnabled</c> is read per action.</param>
     /// <param name="executor">Action executor seam; production passes <see cref="ActionExecutorAdapter"/>.</param>
     /// <param name="sidecarSpec">What to spawn; production passes <see cref="SidecarLaunchSpec.Default"/>, demos/tests inject a stub.</param>
     /// <param name="overlaySink">Overlay flash sink; production passes <c>OverlayHud.Show</c>. Only invoked while <c>overlayEnabled</c>. Volume-changing actions carry <see cref="OverlayContent.VolumePercent"/> so the HUD renders a fill bar (S4-5).</param>
@@ -413,6 +418,7 @@ public sealed class BridgeHost : IDisposable
         _supervisorOptions = supervisorOptions;
         _log = log ?? DefaultLog;
         _storageDir = storageDir ?? Path.Combine(AppPaths.Root, "matter");
+        _sessionPowerOffAction = config.Current.PowerOffAction;
         _lifecycleQueue = new SerialActionQueue(ex => _log("ERROR", $"bridge: lifecycle operation failed: {ex.Message}"));
         _executor.VolumeChanged += OnVolumeChanged;
         _config.Changed += OnConfigChanged;
@@ -743,13 +749,13 @@ public sealed class BridgeHost : IDisposable
 
     /// <summary>
     /// Non-core env vars for the sidecar child (BLUEPRINT §2.3 as amended by
-    /// ADR-004 §2): the endpoint contract as camelCase JSON — built-ins with
-    /// name + enabled (disabled ones present, the bridge omits the endpoint),
+    /// ADR-004/ADR-012): the endpoint contract as camelCase JSON — built-ins
+    /// with name + enabled (Power also carries its derived momentary policy),
     /// enabled custom commands as key + name (disabled ones omitted; never
     /// their actions — the sidecar must not know what commands do) — and the
     /// optional mDNS interface pin.
     /// </summary>
-    private static Dictionary<string, string> BuildSidecarExtraEnv(BridgeConfig config)
+    internal static Dictionary<string, string> BuildSidecarExtraEnv(BridgeConfig config)
     {
         CommandsConfig commands = config.Commands;
         var extra = new Dictionary<string, string>
@@ -760,13 +766,15 @@ public sealed class BridgeHost : IDisposable
                     PlayPause: new SidecarEndpointEntry(commands.PlayPause.Name, commands.PlayPause.Enabled),
                     Next: new SidecarEndpointEntry(commands.Next.Name, commands.Next.Enabled),
                     Previous: new SidecarEndpointEntry(commands.Previous.Name, commands.Previous.Enabled),
-                    Power: new SidecarEndpointEntry(commands.Power.Name, commands.Power.Enabled),
+                    Power: new SidecarPowerEndpointEntry(
+                        commands.Power.Name,
+                        commands.Power.Enabled,
+                        IsMomentaryPowerAction(config.PowerOffAction)),
                     Custom: [.. commands.Custom
                         .Where(c => c.Enabled)
-                        .Select(c => new SidecarCustomEndpointEntry(c.Key, c.Name))]),
+                        .Select(c => new SidecarCustomEndpointEntry(c.Key, c.Name, c.ResetAfterActivation))]),
                 SidecarEnvJsonContext.Default.SidecarEndpointsEnv),
-            // S7-1: momentary auto-reset window; Config guarantees 0–2000
-            // (the bridge parser is strict and would exit on anything else).
+            // Opt-in custom auto-reset window; Config guarantees 0–2000.
             ["HTPC_BRIDGE_MOMENTARY_RESET_MS"] = config.MomentaryResetMs.ToString(CultureInfo.InvariantCulture),
 
             // S10-4 commissioning identity. The seed is resolved once at
@@ -796,10 +804,12 @@ public sealed class BridgeHost : IDisposable
     /// <summary>Caller must hold <c>_gate</c>. Returns false (fully torn down, still disabled) when the port cannot be bound.</summary>
     private bool StartLocked()
     {
-        int port = _config.Current.IpcPort;
+        BridgeConfig sessionConfig = _config.Current;
+        int port = sessionConfig.IpcPort;
+        _sessionPowerOffAction = sessionConfig.PowerOffAction;
         var supervisor = new SidecarSupervisor(
-            _sidecarSpec, port, _storageDir, _config.Current.LogLevel, _supervisorOptions, _log,
-            BuildSidecarExtraEnv(_config.Current));
+            _sidecarSpec, port, _storageDir, sessionConfig.LogLevel, _supervisorOptions, _log,
+            BuildSidecarExtraEnv(sessionConfig));
         var server = new IpcServer(port, supervisor.IpcToken, log: _log);
         server.ActionReceived += OnActionReceived;
         server.PairingReceived += OnPairingReceived;
@@ -850,7 +860,7 @@ public sealed class BridgeHost : IDisposable
         }
 
         if (!e.NewConfig.BridgeEnabled
-            || !SettingsViewModel.RequiresBridgeRestart(e.OldConfig, e.NewConfig))
+            || !RequiresSidecarRestart(e.OldConfig, e.NewConfig))
         {
             return;
         }
@@ -900,11 +910,23 @@ public sealed class BridgeHost : IDisposable
     private static bool IsDisplayPowerAction(PowerOffAction action) =>
         action is PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff;
 
+    /// <summary>True when the configured action can take the bridge offline before it can retain Off state.</summary>
+    internal static bool IsMomentaryPowerAction(PowerOffAction action) => action switch
+    {
+        PowerOffAction.DisplaysOff or PowerOffAction.PauseAndDisplaysOff or PowerOffAction.Screensaver => false,
+        PowerOffAction.Sleep => true,
+        _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
+    };
+
+    /// <summary>Includes the app-derived Power policy in the existing config restart decision.</summary>
+    internal static bool RequiresSidecarRestart(BridgeConfig before, BridgeConfig after) =>
+        before.PowerOffAction != after.PowerOffAction
+        || SettingsViewModel.RequiresBridgeRestart(before, after);
+
     /// <summary>
-    /// Runs on the IPC receive-loop thread (raised synchronously by
-    /// <see cref="IpcServer"/>), so execute → overlay → ack stays ordered per
-    /// action and ack N is sent before action N+1 is processed. Blocks only
-    /// this pool thread, never the UI.
+    /// Runs on the IPC connection's serial action worker, leaving the receive
+    /// loop free to validate and queue later frames. Execute, overlay, and ack
+    /// remain ordered per action, and ack N precedes action N+1 processing.
     /// </summary>
     private void OnActionReceived(object? sender, ActionFrame frame)
     {
@@ -998,6 +1020,8 @@ public sealed class BridgeHost : IDisposable
         BareActionFrame bare => bare.Name switch
         {
             BareActionName.PlayPause => "playPause",
+            BareActionName.Play => "play",
+            BareActionName.Pause => "pause",
             BareActionName.Next => "next",
             BareActionName.Previous => "previous",
             BareActionName.PowerOn => "powerOn",
@@ -1225,6 +1249,8 @@ public sealed class BridgeHost : IDisposable
         SetVolumeFrame v => (_executor.Execute("setVolume", v.Value), $"volume set to {v.Value} %", null),
         SetMutedFrame m => (_executor.Execute("setMuted", m.Value), m.Value ? "muted" : "unmuted", null),
         BareActionFrame { Name: BareActionName.PlayPause } => (_executor.Execute("playPause"), "play/pause pressed", null),
+        BareActionFrame { Name: BareActionName.Play } => (_executor.Execute("play"), "play", null),
+        BareActionFrame { Name: BareActionName.Pause } => (_executor.Execute("pause"), "pause", null),
         BareActionFrame { Name: BareActionName.Next } => (_executor.Execute("next"), "next track", null),
         BareActionFrame { Name: BareActionName.Previous } => (_executor.Execute("previous"), "previous track", null),
         BareActionFrame { Name: BareActionName.PowerOn } => ExecutePowerAction(on: true),
@@ -1240,7 +1266,7 @@ public sealed class BridgeHost : IDisposable
         // after the user changed the route to screensaver or sleep.
         bool released = !on || _executor.ReleaseDisplayKeepAwake();
         (bool ok, string pill) = RoutePowerAction(
-            _config.Current.PowerOffAction,
+            GetSessionPowerOffAction(),
             on,
             _executor.Execute,
             _executor.ExecuteDisplaysOff);
@@ -1288,7 +1314,7 @@ public sealed class BridgeHost : IDisposable
 
         // Pause first, then blank (see class doc). The displays-off delegate
         // still runs when pause fails so display-off remains the terminal effect.
-        bool paused = action != PowerOffAction.PauseAndDisplaysOff || execute("playPause", null);
+        bool paused = action != PowerOffAction.PauseAndDisplaysOff || execute("pause", null);
         DisplayPowerOffResult displayResult = executeDisplaysOff?.Invoke()
             ?? new DisplayPowerOffResult(execute("powerOff", null), DisplayPowerOffPath.None);
         bool fallback = displayResult.Path == DisplayPowerOffPath.BlankingFallback;
@@ -1586,10 +1612,12 @@ public sealed class BridgeHost : IDisposable
         SetVolumeFrame v => $"volume {v.Value} %",
         SetMutedFrame m => m.Value ? "mute" : "unmute",
         BareActionFrame { Name: BareActionName.PlayPause } => "play/pause",
+        BareActionFrame { Name: BareActionName.Play } => "play",
+        BareActionFrame { Name: BareActionName.Pause } => "pause",
         BareActionFrame { Name: BareActionName.Next } => "next track",
         BareActionFrame { Name: BareActionName.Previous } => "previous track",
         BareActionFrame { Name: BareActionName.PowerOn } => "power on",
-        BareActionFrame { Name: BareActionName.PowerOff } => _config.Current.PowerOffAction switch
+        BareActionFrame { Name: BareActionName.PowerOff } => GetSessionPowerOffAction() switch
         {
             PowerOffAction.DisplaysOff => "power off (→ displays off)",
             PowerOffAction.Screensaver => "power off (→ screensaver)",
@@ -1601,6 +1629,14 @@ public sealed class BridgeHost : IDisposable
         CustomActionFrame custom => FindCustomCommand(custom.Key)?.Name ?? custom.Key,
         _ => frame.GetType().Name,
     };
+
+    private PowerOffAction GetSessionPowerOffAction()
+    {
+        lock (_gate)
+        {
+            return _sessionPowerOffAction;
+        }
+    }
 
     private void RecomputeState()
     {

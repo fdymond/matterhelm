@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Channels;
 using MatterHelm.Diagnostics;
 
 namespace MatterHelm.Sidecar;
@@ -33,6 +34,8 @@ namespace MatterHelm.Sidecar;
 public sealed class IpcServer : IDisposable
 {
     private const int MaxFrameBytes = 64 * 1024;
+    private const int ActionQueueCapacity = 64;
+    private static readonly TimeSpan ClientShutdownWait = TimeSpan.FromSeconds(5);
 
     private readonly HttpListener _listener = new();
     private readonly byte[] _tokenUtf8;
@@ -40,6 +43,8 @@ public sealed class IpcServer : IDisposable
     private readonly Action<string, string> _log;
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly Lock _clientTasksGate = new();
+    private readonly HashSet<Task> _clientTasks = [];
     private Task? _acceptLoop;
     private WebSocket? _authedClient;
     private int _clientSlot; // 0 = free, 1 = held by a connection (Interlocked)
@@ -115,7 +120,7 @@ public sealed class IpcServer : IDisposable
         }
     }
 
-    /// <summary>Stops accepting, closes the client socket, and waits for the accept loop. Idempotent.</summary>
+    /// <summary>Stops accepting, closes the client socket, and drains tracked connection/action work. Idempotent.</summary>
     public async Task StopAsync()
     {
         if (_disposed)
@@ -141,6 +146,27 @@ public sealed class IpcServer : IDisposable
         if (_acceptLoop is not null)
         {
             await _acceptLoop.ConfigureAwait(false);
+        }
+
+        Task[] clientTasks;
+        lock (_clientTasksGate)
+        {
+            clientTasks = [.. _clientTasks];
+        }
+
+        if (clientTasks.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(clientTasks).WaitAsync(ClientShutdownWait).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                int remaining = clientTasks.Count(task => !task.IsCompleted);
+                _log(
+                    "WARN",
+                    $"IPC: {remaining} client/action task(s) did not drain within {ClientShutdownWait.TotalSeconds:0.#} s; shutdown continues.");
+            }
         }
     }
 
@@ -290,12 +316,15 @@ public sealed class IpcServer : IDisposable
             throw;
         }
 
-        _ = Task.Run(() => ServeClientAsync(webSocketContext.WebSocket));
+        TrackClientTask(Task.Run(() => ServeClientAsync(webSocketContext.WebSocket)));
     }
 
     private async Task ServeClientAsync(WebSocket socket)
     {
         bool authenticated = false;
+        CancellationTokenSource? actionCts = null;
+        ChannelWriter<ActionFrame>? actionWriter = null;
+        Task? actionTask = null;
         try
         {
             if (!await AuthenticateAsync(socket).ConfigureAwait(false))
@@ -305,10 +334,20 @@ public sealed class IpcServer : IDisposable
 
             authenticated = true;
             Volatile.Write(ref _authedClient, socket);
+            actionCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            Channel<ActionFrame> actions = Channel.CreateBounded<ActionFrame>(new BoundedChannelOptions(ActionQueueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = true,
+                FullMode = BoundedChannelFullMode.Wait,
+                AllowSynchronousContinuations = false,
+            });
+            actionWriter = actions.Writer;
+            actionTask = Task.Run(() => ProcessActionsAsync(actions.Reader, actionCts.Token));
             AppMetrics.IpcClientConnects.Add(1);
             _log("INFO", "IPC: sidecar connected and authenticated.");
             Raise(() => ClientChanged?.Invoke(this, true));
-            await ReceiveLoopAsync(socket).ConfigureAwait(false);
+            await ReceiveLoopAsync(socket, actionWriter).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -324,6 +363,18 @@ public sealed class IpcServer : IDisposable
         }
         finally
         {
+            actionWriter?.TryComplete();
+            if (actionCts is not null && _cts.IsCancellationRequested)
+            {
+                await actionCts.CancelAsync().ConfigureAwait(false);
+            }
+
+            if (actionTask is not null)
+            {
+                await actionTask.ConfigureAwait(false);
+            }
+
+            actionCts?.Dispose();
             Volatile.Write(ref _authedClient, null);
             Interlocked.Exchange(ref _clientSlot, 0);
             socket.Dispose();
@@ -378,8 +429,9 @@ public sealed class IpcServer : IDisposable
         return false;
     }
 
-    private async Task ReceiveLoopAsync(WebSocket socket)
+    private async Task ReceiveLoopAsync(WebSocket socket, ChannelWriter<ActionFrame> actionWriter)
     {
+        bool saturationLogged = false;
         while (socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
         {
             string? text = await ReceiveTextFrameAsync(socket, _cts.Token).ConfigureAwait(false);
@@ -402,7 +454,19 @@ public sealed class IpcServer : IDisposable
             switch (result.Frame)
             {
                 case ActionFrame action:
-                    Raise(() => ActionReceived?.Invoke(this, action));
+                    if (!actionWriter.TryWrite(action))
+                    {
+                        if (!saturationLogged)
+                        {
+                            saturationLogged = true;
+                            _log(
+                                "WARN",
+                                $"IPC: action queue reached its {ActionQueueCapacity}-frame capacity; applying connection backpressure.");
+                        }
+
+                        await actionWriter.WriteAsync(action, _cts.Token).ConfigureAwait(false);
+                    }
+
                     break;
                 case PairingFrame pairing:
                     Raise(() => PairingReceived?.Invoke(this, pairing));
@@ -414,6 +478,46 @@ public sealed class IpcServer : IDisposable
                     break;
             }
         }
+    }
+
+    private async Task ProcessActionsAsync(ChannelReader<ActionFrame> actions, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await actions.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                while (actions.TryRead(out ActionFrame? action))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Raise(() => ActionReceived?.Invoke(this, action));
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Connection teardown cancels queued work; an action already inside
+            // a subscriber is allowed to finish and is drained by StopAsync.
+        }
+    }
+
+    private void TrackClientTask(Task task)
+    {
+        lock (_clientTasksGate)
+        {
+            _clientTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completed =>
+            {
+                lock (_clientTasksGate)
+                {
+                    _clientTasks.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>Subscriber exceptions must never tear down the receive loop.</summary>

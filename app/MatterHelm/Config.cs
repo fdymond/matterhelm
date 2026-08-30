@@ -177,7 +177,7 @@ public sealed class SequenceActionConfig : CustomActionConfig
 
 /// <summary>
 /// One user-defined command, surfaced to Google Home as an additional
-/// momentary endpoint (ADR-004 §1). <see cref="Key"/> is the stable
+/// switch endpoint (ADR-004 §1). <see cref="Key"/> is the stable
 /// kebab-case slug identity (<see cref="CommandKey"/>) — renaming
 /// <see cref="Name"/> never changes it, so renames need no re-pairing.
 /// </summary>
@@ -192,6 +192,9 @@ public sealed class CustomCommandConfig
     /// <summary>Whether the bridge publishes this endpoint.</summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>Whether an On activation auto-resets the switch to Off without running the command again.</summary>
+    public bool ResetAfterActivation { get; set; }
+
     /// <summary>What firing the endpoint does.</summary>
     public required CustomActionConfig Action { get; set; }
 }
@@ -202,13 +205,13 @@ public sealed class CommandsConfig
     /// <summary>Speaker endpoint (OnOff = mute, LevelControl = volume).</summary>
     public BuiltinCommandConfig Speaker { get; set; } = new() { Name = "HTPC Speaker" };
 
-    /// <summary>Momentary play/pause endpoint.</summary>
+    /// <summary>Stateful play/pause endpoint (On = play, Off = pause).</summary>
     public BuiltinCommandConfig PlayPause { get; set; } = new() { Name = "HTPC Play Pause" };
 
-    /// <summary>Momentary next-track endpoint.</summary>
+    /// <summary>Retained-state next-track endpoint; both transitions fire.</summary>
     public BuiltinCommandConfig Next { get; set; } = new() { Name = "HTPC Next" };
 
-    /// <summary>Momentary previous-track endpoint.</summary>
+    /// <summary>Retained-state previous-track endpoint; both transitions fire.</summary>
     public BuiltinCommandConfig Previous { get; set; } = new() { Name = "HTPC Previous" };
 
     /// <summary>Stateful power endpoint.</summary>
@@ -295,12 +298,9 @@ public sealed class BridgeConfig
     public PowerOffAction PowerOffAction { get; set; } = PowerOffAction.PauseAndDisplaysOff;
 
     /// <summary>
-    /// How long after an "on" tap a momentary Google Home switch snaps back
-    /// to "off", in milliseconds (S7-1; integer 0–2000, 0 = next-tick reset
-    /// per S8-2 — safe since ADR-008 dispatches on the command). Threaded to the
-    /// sidecar via <c>HTPC_BRIDGE_MOMENTARY_RESET_MS</c>; the default must
-    /// equal the bridge's <c>DEFAULT_MOMENTARY_RESET_MS</c> (0 = immediate
-    /// since S8-2 — the reset is presentation-only per ADR-008).
+    /// How long after an On activation an opted-in custom command returns its
+    /// Google Home switch to Off (integer 0–2000; 0 = next tick). Threaded to
+    /// the sidecar via <c>HTPC_BRIDGE_MOMENTARY_RESET_MS</c>.
     /// </summary>
     public int MomentaryResetMs { get; set; }
 
@@ -775,6 +775,18 @@ public sealed class Config
             else
             {
                 _log("WARN", $"config.json \"{where}.enabled\" must be a boolean; using default {command.Enabled}.");
+            }
+        }
+
+        if (entry.TryGetProperty("resetAfterActivation", out JsonElement resetAfterActivation))
+        {
+            if (resetAfterActivation.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                command.ResetAfterActivation = resetAfterActivation.GetBoolean();
+            }
+            else
+            {
+                _log("WARN", $"config.json \"{where}.resetAfterActivation\" must be a boolean; using default {command.ResetAfterActivation}.");
             }
         }
 

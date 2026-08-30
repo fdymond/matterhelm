@@ -735,7 +735,7 @@ public sealed class SettingsViewModel
                     // with the bridge's env validation).
                     Id = "momentary-reset-ms",
                     Label = "Tap reset delay (ms)",
-                    Description = "How quickly a tapped command's switch snaps back to off in Google Home. 0 = immediately.",
+                    Description = "How quickly an opted-in momentary custom command resets to off. 0 = immediately.",
                     Kind = SettingKind.Number,
                     Minimum = 0,
                     Maximum = 2000,

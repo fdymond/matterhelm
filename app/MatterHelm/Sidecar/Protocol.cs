@@ -27,11 +27,17 @@ public sealed record HelloFrame(string Token) : SidecarFrame;
 /// <summary>Base of every <c>action</c> frame variant; <paramref name="Id"/> correlates the eventual ack.</summary>
 public abstract record ActionFrame(Guid Id) : SidecarFrame;
 
-/// <summary>The payload-less action names (each is "press the button").</summary>
+/// <summary>The payload-less action names.</summary>
 public enum BareActionName
 {
     /// <summary>Media play/pause toggle.</summary>
     PlayPause,
+
+    /// <summary>Dedicated play.</summary>
+    Play,
+
+    /// <summary>Dedicated pause.</summary>
+    Pause,
 
     /// <summary>Next track.</summary>
     Next,
@@ -46,11 +52,11 @@ public enum BareActionName
     PowerOff,
 }
 
-/// <summary>An action that carries no payload (playPause/next/previous/powerOn/powerOff).</summary>
+/// <summary>An action that carries no payload (playPause/play/pause/next/previous/powerOn/powerOff).</summary>
 public sealed record BareActionFrame(Guid Id, BareActionName Name) : ActionFrame(Id);
 
 /// <summary>
-/// <c>custom</c> (protocol v2, ADR-004 §3): a user-defined momentary endpoint
+/// <c>custom</c> (protocol v2, ADR-004 §3): a user-defined endpoint
 /// fired; <paramref name="Key"/> is its stable kebab-case slug — the config
 /// key, the Matter endpoint id, and the wire identifier. Carries no
 /// <c>value</c> field.
@@ -173,9 +179,9 @@ public sealed class SidecarParseResult
 public static class Protocol
 {
     /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). Version 3 adds Matter lifecycle and advertisement health; only this exact value parses.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
-    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v3 — no breaking field changes.</summary>
+    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v4 — no breaking field changes.</summary>
     public const int HandshakeProtocol = 1;
 
     private static readonly string[] _helloKeys = ["v", "type", "token", "protocol"];
@@ -323,6 +329,10 @@ public static class Protocol
         {
             case "playPause":
                 return SidecarParseResult.Ok(new BareActionFrame(id, BareActionName.PlayPause));
+            case "play":
+                return SidecarParseResult.Ok(new BareActionFrame(id, BareActionName.Play));
+            case "pause":
+                return SidecarParseResult.Ok(new BareActionFrame(id, BareActionName.Pause));
             case "next":
                 return SidecarParseResult.Ok(new BareActionFrame(id, BareActionName.Next));
             case "previous":

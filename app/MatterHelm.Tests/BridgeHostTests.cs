@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Text.Json;
 using MatterHelm.Actions;
 using MatterHelm.Diagnostics;
 using MatterHelm.Sidecar;
@@ -84,9 +85,54 @@ public static class BridgeHostTests
     public sealed class PowerRouting
     {
         [Theory]
+        [InlineData(PowerOffAction.DisplaysOff, false)]
+        [InlineData(PowerOffAction.PauseAndDisplaysOff, false)]
+        [InlineData(PowerOffAction.Screensaver, false)]
+        [InlineData(PowerOffAction.Sleep, true)]
+        public void MomentaryPolicyMatchesWhetherTheActionTakesTheBridgeOffline(
+            PowerOffAction action,
+            bool expected)
+        {
+            Assert.Equal(expected, BridgeHost.IsMomentaryPowerAction(action));
+        }
+
+        [Theory]
+        [InlineData(PowerOffAction.DisplaysOff, false)]
+        [InlineData(PowerOffAction.PauseAndDisplaysOff, false)]
+        [InlineData(PowerOffAction.Screensaver, false)]
+        [InlineData(PowerOffAction.Sleep, true)]
+        public void EndpointsEnvCarriesTheDerivedPowerPolicyIndependentlyOfCustomResetDelay(
+            PowerOffAction action,
+            bool expected)
+        {
+            var config = new BridgeConfig
+            {
+                PowerOffAction = action,
+                MomentaryResetMs = 2000,
+            };
+
+            Dictionary<string, string> env = BridgeHost.BuildSidecarExtraEnv(config);
+            using JsonDocument endpoints = JsonDocument.Parse(env["HTPC_BRIDGE_ENDPOINTS"]);
+
+            Assert.Equal(
+                expected,
+                endpoints.RootElement.GetProperty("power").GetProperty("momentary").GetBoolean());
+            Assert.Equal("2000", env["HTPC_BRIDGE_MOMENTARY_RESET_MS"]);
+        }
+
+        [Fact]
+        public void PowerActionChangeRequiresSidecarRestartSoTheDerivedFlagIsRecomputed()
+        {
+            var before = new BridgeConfig { PowerOffAction = PowerOffAction.Screensaver };
+            var after = new BridgeConfig { PowerOffAction = PowerOffAction.Sleep };
+
+            Assert.True(BridgeHost.RequiresSidecarRestart(before, after));
+        }
+
+        [Theory]
         [InlineData(PowerOffAction.DisplaysOff, false, "powerOff")]
         [InlineData(PowerOffAction.DisplaysOff, true, "powerOn")]
-        [InlineData(PowerOffAction.PauseAndDisplaysOff, false, "playPause,powerOff")]
+        [InlineData(PowerOffAction.PauseAndDisplaysOff, false, "pause,powerOff")]
         [InlineData(PowerOffAction.PauseAndDisplaysOff, true, "powerOn")]
         [InlineData(PowerOffAction.Screensaver, false, "startScreenSaver")]
         [InlineData(PowerOffAction.Screensaver, true, "stopScreenSaver")]
@@ -123,11 +169,11 @@ public static class BridgeHostTests
                 (name, _) =>
                 {
                     calls.Add(name);
-                    return name != "playPause";
+                    return name != "pause";
                 });
 
             Assert.False(ok);
-            Assert.Equal(["playPause", "powerOff"], calls);
+            Assert.Equal(["pause", "powerOff"], calls);
         }
 
         [Theory]
@@ -145,7 +191,7 @@ public static class BridgeHostTests
             (bool ok, string pill) = BridgeHost.RoutePowerAction(
                 action,
                 on: false,
-                (name, _) => name == "playPause"
+                (name, _) => name == "pause"
                     ? true
                     : throw new InvalidOperationException("Generic power-off must not hide the path."),
                 () =>
@@ -222,6 +268,29 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public void PowerRoutingUsesTheCapturedSessionPolicyWhenLiveConfigChanges()
+        {
+            var executor = new ReleaseRecordingExecutor();
+            var config = new Config(
+                Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"), "config.json"),
+                (_, _) => { });
+            config.Current.PowerOffAction = PowerOffAction.Screensaver;
+            using var host = new BridgeHost(
+                config,
+                executor,
+                new SidecarSpec("unused.exe", [], Path.GetTempPath()),
+                log: (_, _) => { });
+
+            config.Current.PowerOffAction = PowerOffAction.Sleep;
+            (bool ok, string pill, _) = host.ExecutePowerAction(on: false);
+
+            Assert.True(ok);
+            Assert.Equal("screensaver started", pill);
+            Assert.Contains(("startScreenSaver", (object?)null), executor.Calls);
+            Assert.DoesNotContain(("sleep", (object?)null), executor.Calls);
+        }
+
+        [Fact]
         public void AuthenticatedClientLossAndSupervisorRestartEachReleaseAnyHeldGuard()
         {
             var executor = new ReleaseRecordingExecutor();
@@ -242,6 +311,8 @@ public static class BridgeHostTests
 
         private sealed class ReleaseRecordingExecutor : IActionExecutor
         {
+            private readonly List<(string Name, object? Value)> _calls = [];
+
             public event EventHandler<VolumeState>? VolumeChanged
             {
                 add { }
@@ -250,7 +321,13 @@ public static class BridgeHostTests
 
             public int ReleaseCalls { get; private set; }
 
-            public bool Execute(string name, object? value = null) => true;
+            public IReadOnlyList<(string Name, object? Value)> Calls => _calls;
+
+            public bool Execute(string name, object? value = null)
+            {
+                _calls.Add((name, value));
+                return true;
+            }
 
             public bool ReleaseDisplayKeepAwake()
             {
@@ -479,7 +556,7 @@ public static class BridgeHostTests
         public async Task ActionFrameExecutesFlashesOverlayAndAcksOkThenDisableGoesGray()
         {
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -487,7 +564,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive setVolume 25");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -510,17 +587,32 @@ public static class BridgeHostTests
                 "the stub must exit via the stdin tether on stop");
         }
 
+        [Theory]
+        [InlineData("play")]
+        [InlineData("pause")]
+        public async Task DedicatedTransportActionExecutesTheMatchingAbsoluteVerb(string verb)
+        {
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"{{verb}}"}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains((verb, (object?)null)),
+                TimeSpan.FromSeconds(10),
+                $"executor to receive dedicated {verb}");
+        }
+
         [Fact]
         public async Task FailedActionFlashesErrorPillAndNacksWithTheIntent()
         {
             _executor.NextResult = false;
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":false,"error":"action failed: volume 25 %"}"""),
+                    $$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":false,"error":"action failed: volume 25 %"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack with the intent text");
 
@@ -539,14 +631,14 @@ public static class BridgeHostTests
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":3,"type":"state","volume":55,"muted":false}"""),
+                () => _log.ContainsMessage("""recv {"v":4,"type":"state","volume":55,"muted":false}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the on-connect state snapshot");
 
             _executor.RaiseVolumeChanged(new VolumeState(61, true));
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":3,"type":"state","volume":61,"muted":true}"""),
+                () => _log.ContainsMessage("""recv {"v":4,"type":"state","volume":61,"muted":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the volume-change state frame");
         }
@@ -559,11 +651,11 @@ public static class BridgeHostTests
             // read-back right after a command must be swallowed; a genuinely
             // different change must still publish.
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -573,7 +665,7 @@ public static class BridgeHostTests
             _executor.RaiseVolumeChanged(new VolumeState(40, false));
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":3,"type":"state","volume":40,"muted":false}"""),
+                () => _log.ContainsMessage("""recv {"v":4,"type":"state","volume":40,"muted":false}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the genuine volume-change state frame");
 
@@ -581,7 +673,7 @@ public static class BridgeHostTests
             // to land before asserting it never does.
             await Task.Delay(250);
             Assert.False(
-                _log.ContainsMessage("""recv {"v":3,"type":"state","volume":26,"muted":false}"""),
+                _log.ContainsMessage("""recv {"v":4,"type":"state","volume":26,"muted":false}"""),
                 "the ±1 echo of the commanded volume must be suppressed");
         }
 
@@ -589,7 +681,7 @@ public static class BridgeHostTests
         public async Task PairingFrameSurfacesWithPayloadAndFlashesTheOverlay()
         {
             using var host = CreateHost(NodeClientSpec(
-                """{"v":3,"type":"pairing","qrPayload":"MT:TEST","manualCode":"1111-222-3333"}"""));
+                """{"v":4,"type":"pairing","qrPayload":"MT:TEST","manualCode":"1111-222-3333"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -616,7 +708,7 @@ public static class BridgeHostTests
         public async Task MissingAdvertisementProducesErrorOverlayLogAndFaultedTrayState()
         {
             using var host = CreateHost(NodeClientSpec(
-                """{"v":3,"type":"matterStatus","commissioned":false,"advertisement":"missing"}"""));
+                """{"v":4,"type":"matterStatus","commissioned":false,"advertisement":"missing"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -644,7 +736,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"stop-media"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"stop-media"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -652,7 +744,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive mediaStop");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -680,7 +772,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"abs-key"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"abs-key"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -705,7 +797,7 @@ public static class BridgeHostTests
             ];
             _executor.State = new VolumeState(45, false);
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"volume-nudge"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"volume-nudge"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -732,11 +824,11 @@ public static class BridgeHostTests
         {
             _executor.State = new VolumeState(42, false);
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"setMuted","value":true}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setMuted","value":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -762,7 +854,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -770,7 +862,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the launch request");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -793,7 +885,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"paste-plain"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"paste-plain"}"""));
             host.SetEnabled(true);
 
             // The executor seam receives the PARSED chord (records compare by
@@ -805,7 +897,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the parsed Ctrl+Shift+V chord");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -831,7 +923,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"lock-pc"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"lock-pc"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -839,7 +931,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the lock verb");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -873,7 +965,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
             host.SetEnabled(true);
 
             var expectedChord = new ParsedKeyChord(
@@ -883,7 +975,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the macro's final chord step");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok (started) ack");
 
@@ -933,8 +1025,8 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"slow-macro"}""",
-                """{"v":3,"type":"action","id":"7f9be2e6-9d0a-4f7e-9a76-1a2b3c4d5e70","name":"setVolume","value":25}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"slow-macro"}""",
+                """{"v":4,"type":"action","id":"7f9be2e6-9d0a-4f7e-9a76-1a2b3c4d5e70","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -967,7 +1059,7 @@ public static class BridgeHostTests
                 },
             ];
             var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"shutdown-macro"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"shutdown-macro"}"""));
             host.SetEnabled(true);
             await TestSupport.WaitUntilAsync(
                 () => host.RunningMacroCount == 1,
@@ -1026,7 +1118,7 @@ public static class BridgeHostTests
             ];
             _executor.NextResult = false; // every executor call fails
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -1042,8 +1134,20 @@ public static class BridgeHostTests
         public async Task SupervisorEnvCarriesTheConfiguredMomentaryResetInterval()
         {
             _config.Current.MomentaryResetMs = 450;
+            _config.Current.PowerOffAction = PowerOffAction.Sleep;
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "movie-mode",
+                    Name = "Movie Mode",
+                    ResetAfterActivation = true,
+                    Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                },
+            ];
             const string script =
                 "console.log('MRESET=' + process.env.HTPC_BRIDGE_MOMENTARY_RESET_MS);" +
+                "console.log('ENDPOINTS=' + process.env.HTPC_BRIDGE_ENDPOINTS);" +
                 "process.stdin.resume();" +
                 "process.stdin.on('end', () => process.exit(0));" +
                 "setInterval(() => {}, 1000);";
@@ -1055,18 +1159,26 @@ public static class BridgeHostTests
                 () => _log.ContainsMessage("MRESET=450"),
                 TimeSpan.FromSeconds(10),
                 "sidecar env to carry HTPC_BRIDGE_MOMENTARY_RESET_MS=450");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("\"resetAfterActivation\":true"),
+                TimeSpan.FromSeconds(10),
+                "sidecar endpoint env to carry custom resetAfterActivation=true");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("\"momentary\":true"),
+                TimeSpan.FromSeconds(10),
+                "sidecar endpoint env to carry power momentary=true independently of the custom delay");
         }
 
         [Fact]
         public async Task UnknownCustomKeyNacksWithAReasonAndNeverHitsTheExecutor()
         {
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"no-such-key"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"no-such-key"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: no-such-key"}"""),
+                    $$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: no-such-key"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack naming the unknown key");
 
@@ -1092,12 +1204,12 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: movie-mode"}"""),
+                    $$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: movie-mode"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack for the disabled command");
 
@@ -1108,14 +1220,14 @@ public static class BridgeHostTests
         public async Task SupersededV1FrameIsRejectedAndClosesTheSocket()
         {
             // Version-bump proof at the wiring level (ADR-004 §3): a stub
-            // still speaking v1 authenticates (hello is v3 in the spec below)
+            // still speaking v1 authenticates (hello is v4 in the spec below)
             // but its v1 action must close the socket, not execute.
             using var host = CreateHost(NodeClientSpec(
                 $$"""{"v":1,"type":"action","id":"{{ActionId}}","name":"playPause"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.Contains("WARN", "\"v\" must be the integer 3"),
+                () => _log.Contains("WARN", "\"v\" must be the integer 4"),
                 TimeSpan.FromSeconds(10),
                 "the v1 frame to be rejected with the version reason");
 
@@ -1127,11 +1239,11 @@ public static class BridgeHostTests
         {
             using var counters = new CounterCapture();
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":3,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":3,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
             await TestSupport.WaitUntilAsync(
@@ -1210,6 +1322,39 @@ public static class BridgeHostTests
             {
                 Assert.Contains(_overlay, content => content.Primary == "Settings saved" && !content.IsError);
             }
+        }
+
+        [Fact]
+        public async Task PowerActionChangeRestartsWithARecomputedMomentaryFlag()
+        {
+            _config.Current.BridgeEnabled = true;
+            _config.Current.PowerOffAction = PowerOffAction.Screensaver;
+            Assert.True(_config.Save());
+            const string script =
+                "const e = JSON.parse(process.env.HTPC_BRIDGE_ENDPOINTS);" +
+                "console.log('POWER_MOMENTARY=' + e.power.momentary);" +
+                "process.stdin.resume();" +
+                "process.stdin.on('end', () => process.exit(0));" +
+                "setInterval(() => {}, 1000);";
+            using var host = CreateHost(
+                new SidecarSpec(TestSupport.RequireNodeExe(), ["-e", script], Path.GetTempPath()));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("POWER_MOMENTARY=false"),
+                TimeSpan.FromSeconds(10),
+                "the reversible Power policy to reach the first sidecar");
+
+            var external = new Config(Path.Combine(_dir, "config.json"), _log.Sink);
+            external.Current.PowerOffAction = PowerOffAction.Sleep;
+            Assert.True(external.Save());
+            _config.Reload();
+
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("POWER_MOMENTARY=true"),
+                TimeSpan.FromSeconds(10),
+                "the irreversible Power policy to reach the restarted sidecar");
+            Assert.True(_log.Contains("INFO", "saved settings require a restart"));
         }
 
         [Fact]
@@ -1381,8 +1526,8 @@ public static class BridgeHostTests
                 "const ws = new WebSocket('ws://localhost:' + p + '/');" +
                 "ws.addEventListener('message', (e) => console.log(JSON.stringify({ level: 30, msg: 'recv ' + e.data })));" +
                 "ws.addEventListener('open', () => {" +
-                "ws.send(JSON.stringify({ v: 3, type: 'hello', token: t, protocol: 1 }));" +
-                "ws.send(JSON.stringify({ v: 3, type: 'matterStatus', commissioned: true, advertisement: 'notApplicable' }));" +
+                "ws.send(JSON.stringify({ v: 4, type: 'hello', token: t, protocol: 1 }));" +
+                "ws.send(JSON.stringify({ v: 4, type: 'matterStatus', commissioned: true, advertisement: 'notApplicable' }));" +
                 string.Concat(framesAfterHello.Select(frame => $"ws.send('{frame}');")) +
                 "});" +
                 "process.stdin.resume();" +

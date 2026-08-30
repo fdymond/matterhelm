@@ -91,6 +91,7 @@ public sealed class ConfigTests : IDisposable
             {
                 Key = "movie-mode",
                 Name = "Movie Mode",
+                ResetAfterActivation = true,
                 Action = new LaunchActionConfig { Path = @"C:\apps\kodi.exe", Args = "-fs \"C:\\My Movies\"" },
             },
             new CustomCommandConfig
@@ -132,6 +133,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal("movie-mode", movieMode.Key);
         Assert.Equal("Movie Mode", movieMode.Name);
         Assert.True(movieMode.Enabled);
+        Assert.True(movieMode.ResetAfterActivation);
         LaunchActionConfig launch = Assert.IsType<LaunchActionConfig>(movieMode.Action);
         Assert.Equal(@"C:\apps\kodi.exe", launch.Path);
         Assert.Equal("-fs \"C:\\My Movies\"", launch.Args);
@@ -178,6 +180,7 @@ public sealed class ConfigTests : IDisposable
         Assert.True(commands.TryGetProperty("custom", out JsonElement custom));
         JsonElement entry = Assert.Single(custom.EnumerateArray());
         Assert.Equal("stop-media", entry.GetProperty("key").GetString());
+        Assert.False(entry.GetProperty("resetAfterActivation").GetBoolean());
         JsonElement action = entry.GetProperty("action");
         Assert.Equal("mediaKey", action.GetProperty("type").GetString());
         Assert.Equal("volumeUp", action.GetProperty("keyName").GetString());
@@ -415,7 +418,7 @@ public sealed class ConfigTests : IDisposable
         {
             WriteConfig("""
                 {"commands": {"custom": [
-                    {"key": "movie-mode", "name": "Movie Mode", "enabled": true,
+                    {"key": "movie-mode", "name": "Movie Mode", "enabled": true, "resetAfterActivation": true,
                      "action": {"type": "launch", "path": "C:\\apps\\kodi.exe", "args": "-fs"}},
                     {"key": "stop-media", "name": "HTPC Stop", "enabled": false,
                      "action": {"type": "mediaKey", "keyName": "stop"}}
@@ -429,12 +432,46 @@ public sealed class ConfigTests : IDisposable
             Assert.Equal("movie-mode", movieMode.Key);
             Assert.Equal("Movie Mode", movieMode.Name);
             Assert.True(movieMode.Enabled);
+            Assert.True(movieMode.ResetAfterActivation);
             LaunchActionConfig launch = Assert.IsType<LaunchActionConfig>(movieMode.Action);
             Assert.Equal(@"C:\apps\kodi.exe", launch.Path);
             Assert.Equal("-fs", launch.Args);
             CustomCommandConfig stopMedia = config.Current.Commands.Custom[1];
             Assert.False(stopMedia.Enabled);
+            Assert.False(stopMedia.ResetAfterActivation);
             Assert.Equal(MediaKeyName.Stop, Assert.IsType<MediaKeyActionConfig>(stopMedia.Action).KeyName);
+        }
+
+        [Fact]
+        public void MissingResetAfterActivationDefaultsFalseWithoutWarning()
+        {
+            WriteConfig("""
+                {"commands": {"custom": [
+                    {"key": "movie-mode", "name": "Movie Mode",
+                     "action": {"type": "mediaKey", "keyName": "stop"}}
+                ]}}
+                """);
+
+            CustomCommandConfig command = Assert.Single(NewConfig().Current.Commands.Custom);
+
+            Assert.False(command.ResetAfterActivation);
+            Assert.False(Log.Contains("WARN", "resetAfterActivation"));
+        }
+
+        [Fact]
+        public void NonBooleanResetAfterActivationFallsBackFalseAndWarns()
+        {
+            WriteConfig("""
+                {"commands": {"custom": [
+                    {"key": "movie-mode", "name": "Movie Mode", "resetAfterActivation": "yes",
+                     "action": {"type": "mediaKey", "keyName": "stop"}}
+                ]}}
+                """);
+
+            CustomCommandConfig command = Assert.Single(NewConfig().Current.Commands.Custom);
+
+            Assert.False(command.ResetAfterActivation);
+            Assert.True(Log.Contains("WARN", "commands.custom[0].resetAfterActivation"));
         }
 
         [Theory]
@@ -1150,6 +1187,22 @@ public sealed class ConfigTests : IDisposable
 
         Assert.Contains("\"powerOffAction\": \"screensaver\"", File.ReadAllText(_path));
         Assert.Equal(PowerOffAction.Screensaver, NewConfig().Current.PowerOffAction);
+    }
+
+    [Fact]
+    public void SleepPowerOffActionRoundTripsIntoTheMomentarySidecarFlag()
+    {
+        File.WriteAllText(_path, """{"powerOffAction": "sleep"}""");
+
+        Config config = NewConfig();
+        Assert.True(config.Save());
+        BridgeConfig reloaded = NewConfig().Current;
+        Dictionary<string, string> env = BridgeHost.BuildSidecarExtraEnv(reloaded);
+        using JsonDocument endpoints = JsonDocument.Parse(env["HTPC_BRIDGE_ENDPOINTS"]);
+
+        Assert.Equal(PowerOffAction.Sleep, reloaded.PowerOffAction);
+        Assert.True(
+            endpoints.RootElement.GetProperty("power").GetProperty("momentary").GetBoolean());
     }
 
     [Fact]

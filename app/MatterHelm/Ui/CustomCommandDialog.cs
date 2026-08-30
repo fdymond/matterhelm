@@ -43,6 +43,7 @@ public sealed class CustomCommandDialog : Form
     private readonly TextBox _keyBox;
     private readonly TextBox _nameBox;
     private readonly CheckBox _enabledCheck;
+    private readonly CheckBox _resetAfterActivationCheck;
     private readonly ComboBox _actionTypeCombo;
     private readonly ComboBox _mediaKeyCombo;
     private readonly TableLayoutPanel _mediaKeyRow;
@@ -104,6 +105,29 @@ public sealed class CustomCommandDialog : Form
 
         _enabledCheck = new CheckBox { AutoSize = true, Checked = existing?.Enabled ?? true };
         AddRow(grid, "Enabled", _enabledCheck);
+
+        _resetAfterActivationCheck = new CheckBox
+        {
+            AutoSize = true,
+            Checked = existing?.ResetAfterActivation ?? false,
+            Text = "Reset the switch after it runs (momentary button)",
+        };
+        var resetEditor = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = Padding.Empty,
+        };
+        resetEditor.Controls.Add(_resetAfterActivationCheck);
+        resetEditor.Controls.Add(new Label
+        {
+            AutoSize = true,
+            ForeColor = SystemColors.GrayText,
+            Text = "The automatic reset does not run the command again.",
+        });
+        AddRow(grid, "Switch behavior", resetEditor);
 
         _actionTypeCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(240) };
         _actionTypeCombo.Items.Add("Press a media key");
@@ -518,6 +542,7 @@ public sealed class CustomCommandDialog : Form
             Key = _keyBox.Text.Trim(),
             Name = _nameBox.Text.Trim(),
             Enabled = _enabledCheck.Checked,
+            ResetAfterActivation = _resetAfterActivationCheck.Checked,
             Action = action,
         };
         DialogResult = DialogResult.OK;
