@@ -145,20 +145,20 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 - **P-7** (deferred by owner 2026-08-30, feasibility already established): make a
   Hue light-sync command STATE-AWARE instead of a blind hotkey toggle. Probed
   live: a Hue Bridge Pro (BSB003, apiversion 1.78.0) is reachable on the LAN;
-   answers unauthenticated, while
-   403s without a key — with an
-  application key it exposes , which IS the sync state,
-  and  pushes changes (no polling needed). The bridge can
-  also STOP streaming directly, but cannot START the desktop app’s sync — that
-  still needs the Ctrl+Shift+V hotkey on the machine running Hue Sync.
-  Scope options when picked up: (a) full state-aware switch — report live state,
-  hotkey only when the desired state differs, bridge-side stop, blind-toggle
-  fallback when unreachable; (b) read-only accurate reporting; (c) local assumed
-  state, no dependency. Costs: one-time link-button pairing, an app key to store
-  as a secret (never logged), self-signed-cert handling, graceful degradation,
-  and an ADR — it is the product’s first outbound network integration.
-  Caveat: bridge state reflects ANY streaming source (Sync Box, game, either PC),
-  not specifically one app.
+  `GET /api/config` answers unauthenticated, while
+  `/clip/v2/resource/entertainment_configuration` returns 403 without a key —
+  with an application key it exposes `status: active|inactive`, which IS the
+  sync state, and `/eventstream/clip/v2` pushes changes (no polling needed).
+  The bridge can also STOP streaming directly, but cannot START the desktop
+  app's sync — that still needs the Ctrl+Shift+V hotkey on the machine running
+  Hue Sync. Scope options when picked up: (a) full state-aware switch — report
+  live state, send the hotkey only when the desired state differs, stop via the
+  bridge, blind-toggle fallback when unreachable; (b) read-only accurate
+  reporting; (c) local assumed state, no dependency. Costs: one-time
+  link-button pairing, an application key stored as a secret (never logged),
+  self-signed-certificate handling, graceful degradation, and an ADR — it would
+  be the product's first outbound network integration. Caveat: bridge state
+  reflects ANY streaming source (Sync Box, a game, either PC), not one app.
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the
   static `Log` default directory, creating a stray `%APPDATA%\MatterHelm`
