@@ -1,8 +1,8 @@
 /**
  * Endpoint specs for the §2.2 device model as amended by ADR-004 (settings +
  * custom commands): the endpoint set is now DERIVED from configuration —
- * disabled built-ins are omitted entirely, and each custom command becomes an
- * additional momentary On/Off plug.
+ * disabled built-ins are omitted entirely, each custom command becomes an
+ * additional On/Off plug, and Power carries its app-derived momentary policy.
  *
  * Pure module: derives each endpoint's stable identity (Matter endpoint id,
  * serialNumber, uniqueId) from the bridge's `uniqueIdSeed` and maps the
@@ -42,15 +42,6 @@ export const BUILTIN_ENDPOINT_KEYS: readonly BuiltinEndpointKey[] = [
   "power",
 ];
 
-/** The three built-in auto-resetting transport buttons (BLUEPRINT §2.2). */
-export type MomentaryEndpointKey = "playPause" | "next" | "previous";
-
-export const MOMENTARY_ENDPOINT_KEYS: readonly MomentaryEndpointKey[] = [
-  "playPause",
-  "next",
-  "previous",
-];
-
 /** Which adapter factory builds the endpoint (§2.2 device-type column). */
 export type BridgedDeviceKind = "speaker" | "onOffPlug";
 
@@ -60,6 +51,12 @@ export interface BuiltinEndpointConfig {
   name: string;
   /** `false` = the endpoint is omitted from the bridge entirely. */
   enabled: boolean;
+}
+
+/** Power endpoint settings, including whether Off must snap back to On. */
+export interface PowerEndpointConfig extends BuiltinEndpointConfig {
+  /** True for actions that stop the sidecar along with the PC (for example sleep). */
+  momentary: boolean;
 }
 
 /**
@@ -72,6 +69,8 @@ export interface CustomEndpointConfig {
   key: string;
   /** Display name — the Google voice target. */
   name: string;
+  /** True only when this custom endpoint opts into reset-after-On behavior. */
+  resetAfterActivation: boolean;
 }
 
 /** The parsed `HTPC_BRIDGE_ENDPOINTS` shape (ADR-004 §2), fully defaulted. */
@@ -80,7 +79,7 @@ export interface EndpointsConfig {
   playPause: BuiltinEndpointConfig;
   next: BuiltinEndpointConfig;
   previous: BuiltinEndpointConfig;
-  power: BuiltinEndpointConfig;
+  power: PowerEndpointConfig;
   custom: readonly CustomEndpointConfig[];
 }
 
@@ -90,13 +89,30 @@ export interface EndpointsConfig {
  * custom commands carry `role: "custom"` plus their slug.
  */
 export type EndpointSpec =
-  | { role: BuiltinEndpointKey; kind: BridgedDeviceKind; info: BridgedDeviceInfo }
-  | { role: "custom"; key: string; kind: "onOffPlug"; info: BridgedDeviceInfo };
+  | {
+      role: Exclude<BuiltinEndpointKey, "power">;
+      kind: BridgedDeviceKind;
+      info: BridgedDeviceInfo;
+    }
+  | {
+      role: "power";
+      momentary: boolean;
+      kind: "onOffPlug";
+      info: BridgedDeviceInfo;
+    }
+  | {
+      role: "custom";
+      key: string;
+      resetAfterActivation: boolean;
+      kind: "onOffPlug";
+      info: BridgedDeviceInfo;
+    };
 
-/** True when the endpoint auto-resets to `off` after `on` (§2.2/ADR-004). */
+/** True for reset-enabled custom commands and irreversible Power modes. */
 export function isMomentary(spec: EndpointSpec): boolean {
   return (
-    spec.role === "custom" || (MOMENTARY_ENDPOINT_KEYS as readonly string[]).includes(spec.role)
+    (spec.role === "custom" && spec.resetAfterActivation) ||
+    (spec.role === "power" && spec.momentary)
   );
 }
 
@@ -144,7 +160,7 @@ export function bridgeIdentity(seed: string): BridgeIdentity {
 /**
  * Derives the bridge's endpoint set from configuration (ADR-004): enabled
  * built-ins in §2.2 table order, then custom commands in config order — each
- * a momentary On/Off plug with endpoint id `custom-<key>`. Disabled
+ * an On/Off plug with endpoint id `custom-<key>`. Disabled
  * built-ins yield no spec at all (the endpoint is never constructed).
  */
 export function endpointSpecs(config: EndpointsConfig, seed: string): readonly EndpointSpec[] {
@@ -153,16 +169,17 @@ export function endpointSpecs(config: EndpointsConfig, seed: string): readonly E
     if (!config[role].enabled) {
       continue;
     }
-    specs.push({
-      role,
-      kind: role === "speaker" ? "speaker" : "onOffPlug",
-      info: {
-        // Fixed, role-derived Matter endpoint id (the matter.js storage key).
-        id: role.toLowerCase(),
-        name: config[role].name,
-        ...identityFor(seed, role),
-      },
-    });
+    const info = {
+      // Fixed, role-derived Matter endpoint id (the matter.js storage key).
+      id: role.toLowerCase(),
+      name: config[role].name,
+      ...identityFor(seed, role),
+    };
+    specs.push(
+      role === "power"
+        ? { role, momentary: config.power.momentary, kind: "onOffPlug", info }
+        : { role, kind: role === "speaker" ? "speaker" : "onOffPlug", info },
+    );
   }
   for (const custom of config.custom) {
     // `custom-<key>` is both the endpoint id and the identity role: stable
@@ -171,6 +188,7 @@ export function endpointSpecs(config: EndpointsConfig, seed: string): readonly E
     specs.push({
       role: "custom",
       key: custom.key,
+      resetAfterActivation: custom.resetAfterActivation,
       kind: "onOffPlug",
       info: {
         id: role,

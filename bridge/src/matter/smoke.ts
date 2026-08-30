@@ -53,8 +53,8 @@ const bridge = await createBridge({
     playPause: { name: "HTPC Play Pause", enabled: true },
     next: { name: "HTPC Next", enabled: false }, // disabled built-in: omitted
     previous: { name: "HTPC Previous", enabled: true },
-    power: { name: "HTPC Power", enabled: true },
-    custom: [{ key: "movie-mode", name: "Movie Mode" }],
+    power: { name: "HTPC Power", enabled: true, momentary: false },
+    custom: [{ key: "movie-mode", name: "Movie Mode", resetAfterActivation: true }],
   },
   onClusterWrite: (write) => {
     writes.push(write);
@@ -80,9 +80,7 @@ try {
   // Echo suppression: local speaker writes must not re-emit onClusterWrite.
   await bridge.setSpeakerState(127, true);
   await bridge.setSpeakerState(200, false);
-  // Momentary endpoints exist and accept writes; already-off resets are no-ops.
-  await bridge.resetMomentary("playpause");
-  await bridge.resetMomentary("previous");
+  // The opt-in custom momentary exists and accepts an already-off no-op reset.
   await bridge.resetMomentary("custom-movie-mode");
   await delay(250); // let any (erroneous) change events drain
   ok(
@@ -101,13 +99,12 @@ try {
     playPauseOns.length === 2,
     `two On commands with no intervening Off dispatched twice — saw ${String(playPauseOns.length)}`,
   );
-  // The reset window then returns the attribute to off exactly once, and that
-  // write invokes no command, so it cannot dispatch as a press.
+  // Built-ins retain their state; no reset is scheduled after the commands.
   const beforeReset = writes.length;
   await delay(SMOKE_RESET_MS + 250);
   ok(
     writes.length === beforeReset,
-    `the auto-reset write emitted no further ClusterWrite — saw ${String(writes.length - beforeReset)}`,
+    `retained built-in state emitted no delayed ClusterWrite — saw ${String(writes.length - beforeReset)}`,
   );
 
   // A repeated Off command on the stateful power plug also dispatches twice.

@@ -26,7 +26,7 @@
 import { z } from "zod";
 
 /** Current per-message revision. Bump additively only — see module doc. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Upper length bound for a custom-command key (ADR-004 §3). */
 export const CUSTOM_KEY_MAX_LENGTH = 64;
@@ -79,6 +79,8 @@ const actionFrameBase = z.object({
 // IS the contract for what each action name means.
 
 const ActionPlayPauseSchema = actionFrameBase.extend({ name: z.literal("playPause") }).strict();
+const ActionPlaySchema = actionFrameBase.extend({ name: z.literal("play") }).strict();
+const ActionPauseSchema = actionFrameBase.extend({ name: z.literal("pause") }).strict();
 const ActionNextSchema = actionFrameBase.extend({ name: z.literal("next") }).strict();
 const ActionPreviousSchema = actionFrameBase.extend({ name: z.literal("previous") }).strict();
 const ActionPowerOnSchema = actionFrameBase.extend({ name: z.literal("powerOn") }).strict();
@@ -91,9 +93,8 @@ const ActionSetMutedSchema = actionFrameBase
   .extend({ name: z.literal("setMuted"), value: z.boolean() })
   .strict();
 /**
- * A user-defined command's momentary plug was switched on (ADR-004 §3);
- * `key` identifies which one. Custom endpoints carry no payload — like the
- * built-in momentaries, the auto-reset off-echo never reaches the wire.
+ * A user-defined command endpoint fired; `key` identifies which one. Reset
+ * policy stays in endpoint config and does not change this payload.
  */
 const ActionCustomSchema = actionFrameBase
   .extend({ name: z.literal("custom"), key: CustomCommandKeySchema })
@@ -101,6 +102,8 @@ const ActionCustomSchema = actionFrameBase
 
 export const ActionFrameSchema = z.discriminatedUnion("name", [
   ActionPlayPauseSchema,
+  ActionPlaySchema,
+  ActionPauseSchema,
   ActionNextSchema,
   ActionPreviousSchema,
   ActionPowerOnSchema,

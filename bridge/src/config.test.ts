@@ -32,7 +32,7 @@ describe("parseConfig", () => {
         playPause: { name: "HTPC Play Pause", enabled: true },
         next: { name: "HTPC Next", enabled: true },
         previous: { name: "HTPC Previous", enabled: true },
-        power: { name: "HTPC Power", enabled: true },
+        power: { name: "HTPC Power", enabled: true, momentary: false },
         custom: [],
       },
       momentaryResetMs: 0,
@@ -276,8 +276,8 @@ describe("parseConfig", () => {
       playPause: { name: "HTPC Play Pause", enabled: false },
       next: { name: "HTPC Next", enabled: true },
       previous: { name: "HTPC Previous", enabled: true },
-      power: { name: "HTPC Power", enabled: true },
-      custom: [{ key: "movie-mode", name: "Movie Mode" }],
+      power: { name: "HTPC Power", enabled: true, momentary: true },
+      custom: [{ key: "movie-mode", name: "Movie Mode", resetAfterActivation: true }],
     };
 
     const withEndpoints = (value: unknown): Record<string, string | undefined> =>
@@ -301,7 +301,11 @@ describe("parseConfig", () => {
         withEndpoints({ speaker: { name: "Living Room", enabled: true } }),
       );
       expect(config.endpoints.speaker).toEqual({ name: "Living Room", enabled: true });
-      expect(config.endpoints.power).toEqual({ name: "HTPC Power", enabled: true });
+      expect(config.endpoints.power).toEqual({
+        name: "HTPC Power",
+        enabled: true,
+        momentary: false,
+      });
       expect(config.endpoints.custom).toEqual([]);
     });
 
@@ -310,15 +314,46 @@ describe("parseConfig", () => {
         withEndpoints({ next: { enabled: false }, power: { name: "TV" } }),
       );
       expect(config.endpoints.next).toEqual({ name: "HTPC Next", enabled: false });
-      expect(config.endpoints.power).toEqual({ name: "TV", enabled: true });
+      expect(config.endpoints.power).toEqual({ name: "TV", enabled: true, momentary: false });
     });
 
     it("preserves the order of custom commands", () => {
       const custom = [
-        { key: "b-second", name: "B" },
-        { key: "a-first", name: "A" },
+        { key: "b-second", name: "B", resetAfterActivation: true },
+        { key: "a-first", name: "A", resetAfterActivation: false },
       ];
       expect(parseConfig(withEndpoints({ custom })).endpoints.custom).toEqual(custom);
+    });
+
+    it("defaults an omitted custom resetAfterActivation field to false", () => {
+      expect(
+        parseConfig(withEndpoints({ custom: [{ key: "movie-mode", name: "Movie Mode" }] }))
+          .endpoints.custom,
+      ).toEqual([{ key: "movie-mode", name: "Movie Mode", resetAfterActivation: false }]);
+    });
+
+    it("round-trips the Power momentary flag and defaults it to false when omitted", () => {
+      expect(parseConfig(withEndpoints(fullShape)).endpoints.power.momentary).toBe(true);
+      expect(
+        parseConfig(withEndpoints({ power: { name: "Power", enabled: true } })).endpoints.power
+          .momentary,
+      ).toBe(false);
+    });
+
+    it("rejects a non-boolean Power momentary flag", () => {
+      expect(() => {
+        parseConfig(withEndpoints({ power: { momentary: "yes" } }));
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it("rejects a non-boolean custom resetAfterActivation field", () => {
+      expect(() => {
+        parseConfig(
+          withEndpoints({
+            custom: [{ key: "movie-mode", name: "Movie Mode", resetAfterActivation: "yes" }],
+          }),
+        );
+      }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
     });
 
     it("is fatal (not silent) on malformed JSON", () => {

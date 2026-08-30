@@ -12,13 +12,14 @@ import type { ClusterWrite } from "../mapping/actions.js";
 
 import {
   DEFAULT_MOMENTARY_RESET_MS,
+  POWER_MOMENTARY_RESET_MS,
   EchoSuppressor,
   MomentaryResetScheduler,
   SerializedSpeakerStateWriter,
   endpointEventToClusterWrite,
   makePlugCommandHandler,
+  makePowerCommandHandler,
   type EndpointEvent,
-  type MomentaryEndpointKey,
 } from "./bridge.js";
 
 describe("EchoSuppressor — value-based FIFO suppression of local writes", () => {
@@ -131,77 +132,74 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
   });
 
   function makeScheduler(): {
-    scheduler: MomentaryResetScheduler<MomentaryEndpointKey>;
-    resets: MomentaryEndpointKey[];
+    scheduler: MomentaryResetScheduler;
+    resets: string[];
   } {
-    const resets: MomentaryEndpointKey[] = [];
-    const scheduler = new MomentaryResetScheduler<MomentaryEndpointKey>(
-      TEST_RESET_MS,
-      (endpoint) => {
-        resets.push(endpoint);
-      },
-    );
+    const resets: string[] = [];
+    const scheduler = new MomentaryResetScheduler(TEST_RESET_MS, (endpoint) => {
+      resets.push(endpoint);
+    });
     return { scheduler, resets };
   }
 
   it("resets a momentary endpoint exactly one reset window after its on write", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOn("playPause");
+    scheduler.noteOn("custom-movie-mode");
     vi.advanceTimersByTime(TEST_RESET_MS - 1);
     expect(resets).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(resets).toEqual(["playPause"]);
+    expect(resets).toEqual(["custom-movie-mode"]);
   });
 
   it("fires only once per on write", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOn("next");
+    scheduler.noteOn("custom-next");
     vi.advanceTimersByTime(TEST_RESET_MS * 5);
-    expect(resets).toEqual(["next"]);
+    expect(resets).toEqual(["custom-next"]);
   });
 
   it("restarts the window when a second on write lands before the reset", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOn("playPause");
+    scheduler.noteOn("custom-movie-mode");
     vi.advanceTimersByTime(TEST_RESET_MS - 100);
-    scheduler.noteOn("playPause"); // rapid double-tap: last tap wins
+    scheduler.noteOn("custom-movie-mode"); // rapid double-tap: last tap wins
     vi.advanceTimersByTime(TEST_RESET_MS - 1);
     expect(resets).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(resets).toEqual(["playPause"]);
+    expect(resets).toEqual(["custom-movie-mode"]);
   });
 
   it("cancels the pending reset when the endpoint is written off", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOn("previous");
-    scheduler.noteOff("previous");
+    scheduler.noteOn("custom-previous");
+    scheduler.noteOff("custom-previous");
     vi.advanceTimersByTime(TEST_RESET_MS * 2);
     expect(resets).toEqual([]);
   });
 
   it("tolerates an off write with no pending reset", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOff("previous");
+    scheduler.noteOff("custom-previous");
     vi.advanceTimersByTime(TEST_RESET_MS * 2);
     expect(resets).toEqual([]);
   });
 
   it("times each endpoint independently", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOn("playPause");
+    scheduler.noteOn("custom-a");
     vi.advanceTimersByTime(300);
-    scheduler.noteOn("next");
+    scheduler.noteOn("custom-b");
     vi.advanceTimersByTime(TEST_RESET_MS - 300);
-    expect(resets).toEqual(["playPause"]);
+    expect(resets).toEqual(["custom-a"]);
     vi.advanceTimersByTime(300);
-    expect(resets).toEqual(["playPause", "next"]);
+    expect(resets).toEqual(["custom-a", "custom-b"]);
   });
 
   it("clear() cancels every pending reset (bridge close)", () => {
     const { scheduler, resets } = makeScheduler();
-    scheduler.noteOn("playPause");
-    scheduler.noteOn("next");
-    scheduler.noteOn("previous");
+    scheduler.noteOn("custom-a");
+    scheduler.noteOn("custom-b");
+    scheduler.noteOn("custom-c");
     scheduler.clear();
     vi.advanceTimersByTime(TEST_RESET_MS * 2);
     expect(resets).toEqual([]);
@@ -216,12 +214,12 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     const scheduler = new MomentaryResetScheduler(0, (endpoint: string) => {
       resets.push(endpoint);
     });
-    scheduler.noteOn("next");
+    scheduler.noteOn("custom-next");
     // Never synchronously — the On command's handler runs inside the matter.js
     // transaction, and the reset write must land after it commits.
     expect(resets).toEqual([]);
     vi.advanceTimersByTime(0);
-    expect(resets).toEqual(["next"]);
+    expect(resets).toEqual(["custom-next"]);
     scheduler.clear();
   });
 
@@ -238,14 +236,14 @@ describe("MomentaryResetScheduler — §2.2 auto-reset window", () => {
     scheduler.clear();
   });
 
-  it("schedules custom-plug endpoint ids exactly like built-in keys (ADR-004)", () => {
+  it("schedules only explicit custom-plug endpoint ids", () => {
     const resets: string[] = [];
     const scheduler = new MomentaryResetScheduler(TEST_RESET_MS, (endpoint: string) => {
       resets.push(endpoint);
     });
     scheduler.noteOn("custom-movie-mode");
-    scheduler.noteOn("playpause");
-    scheduler.noteOff("playpause");
+    scheduler.noteOn("custom-cancelled");
+    scheduler.noteOff("custom-cancelled");
     vi.advanceTimersByTime(TEST_RESET_MS);
     expect(resets).toEqual(["custom-movie-mode"]);
     scheduler.clear();
@@ -290,34 +288,62 @@ describe("endpointEventToClusterWrite — synthetic endpoint events", () => {
     ).toEqual({ endpoint: "playPause", cluster: "onOff", on: false });
   });
 
-  it("maps power OnOff commands to the stateful power endpoint's writes", () => {
-    expect(endpointEventToClusterWrite({ kind: "plugCommand", key: "power", on: true })).toEqual({
+  it("maps Power commands with their reversible/momentary policy", () => {
+    expect(
+      endpointEventToClusterWrite({ kind: "powerCommand", on: true, momentary: false }),
+    ).toEqual({
       endpoint: "power",
       cluster: "onOff",
       on: true,
+      momentary: false,
     });
-    expect(endpointEventToClusterWrite({ kind: "plugCommand", key: "power", on: false })).toEqual({
+    expect(
+      endpointEventToClusterWrite({ kind: "powerCommand", on: false, momentary: true }),
+    ).toEqual({
       endpoint: "power",
       cluster: "onOff",
       on: false,
+      momentary: true,
     });
   });
 
   it("maps a custom plug's On command to a custom write carrying its key (ADR-004)", () => {
     expect(
-      endpointEventToClusterWrite({ kind: "customCommand", customKey: "movie-mode", on: true }),
-    ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true });
+      endpointEventToClusterWrite({
+        kind: "customCommand",
+        customKey: "movie-mode",
+        on: true,
+        resetAfterActivation: false,
+      }),
+    ).toEqual({
+      endpoint: "custom",
+      key: "movie-mode",
+      cluster: "onOff",
+      on: true,
+      resetAfterActivation: false,
+    });
   });
 
-  it("passes a custom plug's Off command through (mapping/actions.ts dispatches it as a press, S8-4)", () => {
+  it("preserves reset mode on a custom plug's Off command", () => {
     expect(
-      endpointEventToClusterWrite({ kind: "customCommand", customKey: "movie-mode", on: false }),
-    ).toEqual({ endpoint: "custom", key: "movie-mode", cluster: "onOff", on: false });
+      endpointEventToClusterWrite({
+        kind: "customCommand",
+        customKey: "movie-mode",
+        on: false,
+        resetAfterActivation: true,
+      }),
+    ).toEqual({
+      endpoint: "custom",
+      key: "movie-mode",
+      cluster: "onOff",
+      on: false,
+      resetAfterActivation: true,
+    });
   });
 });
 
 describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
-  function makeMomentary(key: "playPause" | "next" | "previous" = "next"): {
+  function makeRetained(key: "playPause" | "next" | "previous" = "next"): {
     handle: (on: boolean) => void;
     writes: (ClusterWrite | null)[];
     window: string[];
@@ -329,16 +355,12 @@ describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
       (event) => {
         writes.push(endpointEventToClusterWrite(event));
       },
-      {
-        noteOn: () => window.push("noteOn"),
-        noteOff: () => window.push("noteOff"),
-      },
     );
     return { handle, writes, window };
   }
 
   it("dispatches EVERY repeated On command — the defect ADR-008 fixes", () => {
-    const { handle, writes } = makeMomentary();
+    const { handle, writes } = makeRetained();
     handle(true);
     handle(true);
     handle(true);
@@ -351,31 +373,27 @@ describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
     ]);
   });
 
-  it("re-arms the reset window on every On command (last press wins)", () => {
-    const { handle, window } = makeMomentary();
-    handle(true);
-    handle(true);
-    expect(window).toEqual(["noteOn", "noteOn"]);
-  });
-
-  it("cancels the pending reset on an Off command and dispatches the Off press", () => {
-    const { handle, writes, window } = makeMomentary("playPause");
+  it("retains built-in state and dispatches both transition directions without reset scheduling", () => {
+    const { handle, writes, window } = makeRetained("playPause");
     handle(true);
     handle(false);
-    expect(window).toEqual(["noteOn", "noteOff"]);
-    // The Off command reaches mapping/actions.ts, which dispatches it as a
-    // press too (S8-4) — Google's toggle tile can send Off for a tap.
+    expect(window).toEqual([]);
     expect(writes).toEqual([
       { endpoint: "playPause", cluster: "onOff", on: true },
       { endpoint: "playPause", cluster: "onOff", on: false },
     ]);
   });
 
-  it("dispatches a custom plug's repeated On commands exactly like a built-in", () => {
+  it("schedules reset-enabled custom On commands while preserving reset metadata", () => {
     const writes: (ClusterWrite | null)[] = [];
     const window: string[] = [];
     const handle = makePlugCommandHandler(
-      (on): EndpointEvent => ({ kind: "customCommand", customKey: "movie-mode", on }),
+      (on): EndpointEvent => ({
+        kind: "customCommand",
+        customKey: "movie-mode",
+        on,
+        resetAfterActivation: true,
+      }),
       (event) => {
         writes.push(endpointEventToClusterWrite(event));
       },
@@ -384,27 +402,116 @@ describe("makePlugCommandHandler — ADR-008 command-driven dispatch", () => {
     handle(true);
     handle(true);
     expect(writes).toEqual([
-      { endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true },
-      { endpoint: "custom", key: "movie-mode", cluster: "onOff", on: true },
+      {
+        endpoint: "custom",
+        key: "movie-mode",
+        cluster: "onOff",
+        on: true,
+        resetAfterActivation: true,
+      },
+      {
+        endpoint: "custom",
+        key: "movie-mode",
+        cluster: "onOff",
+        on: true,
+        resetAfterActivation: true,
+      },
     ]);
     expect(window).toEqual(["noteOn", "noteOn"]);
   });
+});
 
-  it("dispatches a repeated Off command on the stateful power plug (no reset window)", () => {
+describe("makePowerCommandHandler — split retained/momentary Power policy", () => {
+  it("dispatches both reversible edges and never schedules a reset", () => {
     const writes: (ClusterWrite | null)[] = [];
-    const handle = makePlugCommandHandler(
-      (on): EndpointEvent => ({ kind: "plugCommand", key: "power", on }),
+    const window: string[] = [];
+    const handle = makePowerCommandHandler(
+      false,
       (event) => {
         writes.push(endpointEventToClusterWrite(event));
       },
+      { noteOn: () => window.push("noteOn"), noteOff: () => window.push("noteOff") },
     );
+    handle(true);
     handle(false);
-    handle(false);
-    // "Hey Google, turn off HTPC Power" when it already reads off used to do
-    // nothing at all; both invocations now reach the executor.
     expect(writes).toEqual([
-      { endpoint: "power", cluster: "onOff", on: false },
-      { endpoint: "power", cluster: "onOff", on: false },
+      { endpoint: "power", cluster: "onOff", on: true, momentary: false },
+      { endpoint: "power", cluster: "onOff", on: false, momentary: false },
     ]);
+    expect(window).toEqual([]);
+  });
+
+  it("dispatches irreversible Off before scheduling reset-to-On", () => {
+    const order: string[] = [];
+    const handle = makePowerCommandHandler(
+      true,
+      (event) => {
+        if (event.kind !== "powerCommand") {
+          expect.fail("expected a Power command event");
+        }
+        order.push(`emit:${event.kind}:${String(event.on)}`);
+      },
+      { noteOn: () => order.push("reset:on"), noteOff: () => order.push("cancel") },
+    );
+
+    handle(false);
+
+    expect(order).toEqual(["emit:powerCommand:false", "reset:on"]);
+  });
+
+  it("emits irreversible user On for no-action mapping and cancels any pending reset", () => {
+    const writes: (ClusterWrite | null)[] = [];
+    const window: string[] = [];
+    const handle = makePowerCommandHandler(
+      true,
+      (event) => {
+        writes.push(endpointEventToClusterWrite(event));
+      },
+      { noteOn: () => window.push("noteOn"), noteOff: () => window.push("noteOff") },
+    );
+
+    handle(true);
+
+    expect(writes).toEqual([{ endpoint: "power", cluster: "onOff", on: true, momentary: true }]);
+    expect(window).toEqual(["noteOff"]);
+  });
+
+  it("uses a prompt fixed reset instead of the configured custom-command delay", () => {
+    vi.useFakeTimers();
+    const writes: (ClusterWrite | null)[] = [];
+    const localPowerWrites: boolean[] = [];
+    const powerScheduler = new MomentaryResetScheduler(POWER_MOMENTARY_RESET_MS, (endpoint) => {
+      expect(endpoint).toBe("power");
+      localPowerWrites.push(true);
+    });
+    const customScheduler = new MomentaryResetScheduler(TEST_RESET_MS, () => undefined);
+    const handle = makePowerCommandHandler(
+      true,
+      (event) => {
+        writes.push(endpointEventToClusterWrite(event));
+      },
+      {
+        noteOn: () => {
+          powerScheduler.noteOn("power");
+        },
+        noteOff: () => {
+          powerScheduler.noteOff("power");
+        },
+      },
+    );
+
+    handle(false);
+    customScheduler.noteOn("custom-slow");
+    expect(writes).toEqual([{ endpoint: "power", cluster: "onOff", on: false, momentary: true }]);
+    expect(localPowerWrites).toEqual([]);
+    vi.advanceTimersByTime(POWER_MOMENTARY_RESET_MS);
+    expect(localPowerWrites).toEqual([true]);
+    // The local attribute write bypasses the command observer, so no second
+    // dispatch descriptor appeared.
+    expect(writes).toHaveLength(1);
+
+    powerScheduler.clear();
+    customScheduler.clear();
+    vi.useRealTimers();
   });
 });

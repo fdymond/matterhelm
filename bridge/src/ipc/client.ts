@@ -20,6 +20,10 @@
  *   off to the cap.
  * - Inbound frames cross the trust boundary through `parseTrayFrame`;
  *   invalid frames are logged (one WARN each) and ignored, never thrown.
+ * - A policy close before the first valid tray frame is the stale-peer
+ *   signature: the spawning tray supplied the session token, so repeated
+ *   rejection of the well-formed hello diagnoses tray/sidecar version skew.
+ *   It is logged once, then summarized every ten rejects.
  */
 import { PROTOCOL_VERSION, parseTrayFrame } from "./protocol.js";
 import type {
@@ -62,6 +66,9 @@ const JITTER = 0.25;
  */
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 
+/** Count-based summary cadence once a stale peer repeatedly rejects hello. */
+const VERSION_REJECTION_SUMMARY_EVERY = 10;
+
 /**
  * Pure backoff schedule: `min(baseMs * 2^attempt, capMs)` scaled by a uniform
  * jitter factor in [1-JITTER, 1+JITTER]. `random` is injectable for tests.
@@ -102,6 +109,7 @@ export class IpcClient {
   #established = false;
   #dropWarned = false;
   #backpressureWarned = false;
+  #versionRejections = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: IpcClientOptions) {
@@ -201,14 +209,18 @@ export class IpcClient {
     // schedule the reconnect; the settled flag keeps it to once per socket
     // when a failure fires both.
     let settled = false;
-    const onDown = (): void => {
+    const onDown = (close?: { code: number; reason: string }): void => {
       if (!settled) {
         settled = true;
-        this.#handleDown(ws);
+        this.#handleDown(ws, close);
       }
     };
-    ws.addEventListener("close", onDown);
-    ws.addEventListener("error", onDown);
+    ws.addEventListener("close", (event) => {
+      onDown({ code: event.code, reason: event.reason });
+    });
+    ws.addEventListener("error", () => {
+      onDown();
+    });
   }
 
   #handleOpen(ws: WebSocket): void {
@@ -225,7 +237,9 @@ export class IpcClient {
     this.#dropWarned = false; // new episode begins at the next disconnect
     this.#backpressureWarned = false;
     this.#setState("connected");
-    this.#options.logger.info({ evt: "ipc.connected" }, "connected to tray app; hello sent");
+    if (this.#versionRejections === 0) {
+      this.#options.logger.info({ evt: "ipc.connected" }, "connected to tray app; hello sent");
+    }
   }
 
   #handleMessage(ws: WebSocket, data: unknown): void {
@@ -252,6 +266,13 @@ export class IpcClient {
       // First authenticated tray frame — session established, backoff resets.
       this.#established = true;
       this.#attempt = 0;
+      if (this.#versionRejections > 0) {
+        this.#options.logger.info(
+          { evt: "ipc.version-mismatch.resolved", rejectedHandshakes: this.#versionRejections },
+          "tray accepted the IPC handshake; version-mismatch condition cleared",
+        );
+        this.#versionRejections = 0;
+      }
     }
     this.#options.onFrame(result.data);
   }
@@ -263,12 +284,40 @@ export class IpcClient {
     );
   }
 
-  #handleDown(ws: WebSocket): void {
+  #noteVersionRejection(close: { code: number; reason: string }): void {
+    this.#versionRejections += 1;
+    if (
+      this.#versionRejections !== 1 &&
+      this.#versionRejections % VERSION_REJECTION_SUMMARY_EVERY !== 0
+    ) {
+      return;
+    }
+    const summary = this.#versionRejections > 1;
+    this.#options.logger.warn(
+      {
+        evt: summary ? "ipc.version-mismatch.summary" : "ipc.version-mismatch",
+        diagnosis: "tray-sidecar-version-mismatch",
+        rejectedHandshakes: this.#versionRejections,
+        sidecarFrameVersion: PROTOCOL_VERSION,
+        handshakeProtocol: 1,
+        closeCode: close.code,
+        ...(close.reason === "" ? {} : { closeReason: close.reason }),
+      },
+      summary
+        ? "IPC VERSION MISMATCH persists; tray keeps rejecting this sidecar hello; update both components to the same MatterHelm release"
+        : "IPC VERSION MISMATCH: tray rejected this sidecar hello; update tray and sidecar to the same MatterHelm release",
+    );
+  }
+
+  #handleDown(ws: WebSocket, close?: { code: number; reason: string }): void {
     if (ws !== this.#ws) {
       return; // stopped, or superseded by a newer socket
     }
     this.#ws = undefined;
-    if (this.#state === "connected") {
+    const versionRejected = !this.#established && close?.code === 1008;
+    if (versionRejected) {
+      this.#noteVersionRejection(close);
+    } else if (this.#state === "connected") {
       this.#options.logger.info({ evt: "ipc.disconnected" }, "tray app connection closed");
     }
     const delay = backoffDelayMs(this.#attempt, this.#backoff);

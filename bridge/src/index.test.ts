@@ -120,7 +120,7 @@ describe("composition-root commissioning transitions", () => {
   it("emits uncommissioned matterStatus before fresh pairing codes after controller removal", async () => {
     await vi.waitFor(() => {
       expect(seam.frames).toContainEqual({
-        v: 3,
+        v: 4,
         type: "matterStatus",
         commissioned: true,
         advertisement: "notApplicable",
@@ -133,13 +133,13 @@ describe("composition-root commissioning transitions", () => {
 
     expect(seam.frames).toEqual([
       {
-        v: 3,
+        v: 4,
         type: "matterStatus",
         commissioned: false,
         advertisement: "checking",
       },
       {
-        v: 3,
+        v: 4,
         type: "pairing",
         qrPayload: "MT:NEW-CODE",
         manualCode: "1111-222-3333",
@@ -155,7 +155,7 @@ describe("composition-root commissioning transitions", () => {
     seam.speakerStateCalls.length = 0;
     seam.rejectSpeakerState = true;
 
-    seam.frameCallbacks[0]?.({ v: 3, type: "state", volume: 40, muted: false });
+    seam.frameCallbacks[0]?.({ v: 4, type: "state", volume: 40, muted: false });
     await vi.waitFor(() => {
       expect(seam.loggerErrors).toEqual([
         {
@@ -168,7 +168,7 @@ describe("composition-root commissioning transitions", () => {
       ]);
     });
 
-    seam.frameCallbacks[0]?.({ v: 3, type: "state", volume: 50, muted: true });
+    seam.frameCallbacks[0]?.({ v: 4, type: "state", volume: 50, muted: true });
     await vi.waitFor(() => {
       expect(seam.speakerStateCalls).toEqual([
         { level: 102, onOff: true },

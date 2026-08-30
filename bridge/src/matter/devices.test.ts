@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   BUILTIN_ENDPOINT_KEYS,
-  MOMENTARY_ENDPOINT_KEYS,
   bridgeIdentity,
   endpointSpecs,
   isMomentary,
@@ -20,14 +19,22 @@ const allEnabled: EndpointsConfig = {
   playPause: { name: "HTPC Play Pause", enabled: true },
   next: { name: "HTPC Next", enabled: true },
   previous: { name: "HTPC Previous", enabled: true },
-  power: { name: "HTPC Power", enabled: true },
+  power: { name: "HTPC Power", enabled: true, momentary: false },
   custom: [],
 };
 
 const seed = "test-seed";
 
-function withCustom(...custom: { key: string; name: string }[]): EndpointsConfig {
-  return { ...allEnabled, custom };
+function withCustom(
+  ...custom: { key: string; name: string; resetAfterActivation?: boolean }[]
+): EndpointsConfig {
+  return {
+    ...allEnabled,
+    custom: custom.map((entry) => ({
+      ...entry,
+      resetAfterActivation: entry.resetAfterActivation ?? false,
+    })),
+  };
 }
 
 function roles(specs: readonly EndpointSpec[]): string[] {
@@ -57,7 +64,7 @@ describe("endpointSpecs — endpoint-set derivation (ADR-004)", () => {
       playPause: { name: "P", enabled: false },
       next: { name: "N", enabled: false },
       previous: { name: "V", enabled: false },
-      power: { name: "W", enabled: false },
+      power: { name: "W", enabled: false, momentary: false },
       custom: [],
     };
     expect(endpointSpecs(config, seed)).toEqual([]);
@@ -90,23 +97,40 @@ describe("endpointSpecs — endpoint-set derivation (ADR-004)", () => {
     expect(nameOf("power")).toBe("HTPC Power");
     expect(nameOf("custom-movie-mode")).toBe("Movie Mode");
   });
-
-  it("classifies exactly playPause/next/previous as built-in momentaries", () => {
-    expect(MOMENTARY_ENDPOINT_KEYS).toEqual(["playPause", "next", "previous"]);
-  });
 });
 
-describe("isMomentary — §2.2/ADR-004 auto-reset semantics", () => {
-  const specs = endpointSpecs(withCustom({ key: "movie-mode", name: "Movie Mode" }), seed);
+describe("isMomentary — custom opt-in auto-reset semantics", () => {
+  const specs = endpointSpecs(
+    withCustom(
+      { key: "stateful", name: "Stateful" },
+      { key: "movie-mode", name: "Movie Mode", resetAfterActivation: true },
+    ),
+    seed,
+  );
 
-  it("marks playPause/next/previous and every custom command as momentary", () => {
+  it("marks only reset-enabled custom commands as momentary in reversible Power mode", () => {
     const momentaryIds = specs.filter(isMomentary).map((spec) => spec.info.id);
-    expect(momentaryIds).toEqual(["playpause", "next", "previous", "custom-movie-mode"]);
+    expect(momentaryIds).toEqual(["custom-movie-mode"]);
   });
 
-  it("marks the speaker and the stateful power toggle as non-momentary", () => {
+  it("marks Power as momentary when its configured action is irreversible", () => {
+    const momentaryPower = endpointSpecs(
+      { ...allEnabled, power: { ...allEnabled.power, momentary: true } },
+      seed,
+    ).filter(isMomentary);
+    expect(momentaryPower.map((spec) => spec.info.id)).toEqual(["power"]);
+  });
+
+  it("marks all built-ins and default custom commands as non-momentary", () => {
     const stateful = specs.filter((spec) => !isMomentary(spec)).map((spec) => spec.info.id);
-    expect(stateful).toEqual(["speaker", "power"]);
+    expect(stateful).toEqual([
+      "speaker",
+      "playpause",
+      "next",
+      "previous",
+      "power",
+      "custom-stateful",
+    ]);
   });
 });
 
