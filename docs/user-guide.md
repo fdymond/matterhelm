@@ -252,7 +252,7 @@ The **Power off behavior** setting defines both halves of that toggle:
 |---|---|---|---|
 | **Displays off** | Powers compatible displays off in hardware through DDC/CI, without telling Windows that the screens are off | Restores DDC/CI-managed displays, sends a harmless net-zero mouse nudge, and releases any fallback keep-awake hold | No; state is retained |
 | **Pause, then displays off** | Sends dedicated Pause, then uses the same DDC/CI-first display handling | Restores the displays and releases any fallback hold; playback remains paused | No; state is retained |
-| **Start screensaver** | Starts the screensaver configured in Windows | Stops the running screensaver | No; state is retained |
+| **Start screensaver** | Remembers the focused window, then starts the screensaver configured in Windows | Stops the running screensaver, then validates and restores the remembered window | No; state is retained |
 | **Sleep** | Dispatches sleep once | No action | Yes; the tile is promptly written back to On without dispatching another action |
 
 The Sleep reset is deliberately independent of **Tap reset delay**, which is
@@ -260,6 +260,25 @@ only for custom commands. MatterHelm queues the local On write immediately
 after dispatching sleep so it has the best chance to publish the awake/default
 state before Windows suspends the app. When the PC wakes later, another Power
 Off command can therefore run sleep again.
+
+Screensaver focus restoration is intentionally narrow. Immediately before
+MatterHelm starts a screensaver - from the Power device or a custom **Start
+screensaver** command - it remembers the foreground window handle, owning
+process ID/name, and title in memory. After MatterHelm handles Power On or a
+custom **Stop screensaver** command, it first stops the saver, verifies that
+the handle is still a real window owned by the same process, restores it if it
+is minimized, and asks Windows to make it foreground. If normal activation is
+refused, MatterHelm retries while temporarily attached to the current
+foreground thread's input queue. The log records the target and successful
+route at INFO, or the validation/Windows-refusal reason at WARN. The capture is
+consumed after that attempt, replaced by a later start, and cleared when the
+bridge is disabled or MatterHelm exits; it is never saved across restarts.
+
+This does **not** run when you dismiss the screensaver yourself with the mouse
+or keyboard: MatterHelm receives no stop command, so it cannot restore the
+previous focus. Use the MatterHelm Power On or **Stop screensaver** action when
+focus restoration matters. **Displays off** and **Pause, then displays off**
+do not steal focus, so they deliberately neither capture nor restore a window.
 
 For **Displays off**, MatterHelm first sends VESA DDC/CI power mode to every
 physical monitor that accepts it. This switches the display hardware off while
@@ -376,7 +395,8 @@ click **Save** (closing the window with unsaved changes asks first).
       the dialog captures them and shows the resulting chord text so you
       can confirm it before saving.
     - **System command** — one functional Windows action: start/stop the
-      screensaver, displays off/on, sleep, hibernate, lock the PC, close
+      screensaver (with the same start-capture/stop-restore behavior described
+      above), displays off/on, sleep, hibernate, lock the PC, close
       the focused program (a graceful close, like the title-bar X — apps
       may still prompt to save), shut down, or restart. Shut down and
       restart act immediately — no confirmation on the PC — so consider
@@ -384,22 +404,30 @@ click **Save** (closing the window with unsaved changes asks first).
     - **Move the mouse** — moves to bottom right (the classic parked
       position), another virtual-desktop corner, the centre, or explicit X/Y
       coordinates. Presets use the complete multi-monitor virtual desktop;
-      explicit coordinates are clamped into it so the pointer cannot be
-      stranded off-screen. This action must remain a retained switch: On
+      Windows clamps explicit coordinates into it, so the pointer cannot be
+      parked off-screen (measured on a 1600×1000 desktop: `(5000,5000)` landed
+      at `(1600,1000)` and `(-500,-500)` at `(0,0)`). A corner preset is the
+      available non-invasive parking behavior; MatterHelm does not hide the
+      cursor. As a standalone action this must remain a retained switch: On
       captures the current pointer position and moves it, while Off restores
       the position captured by the last On. Off before any On is a successful
       no-op. The captured position is in memory only and is lost when
       MatterHelm exits.
     - **Command sequence (macro)** — runs several of the above in order
-      from one voice command or tile tap. Build the step list with **Add…**
-      (each step is a media key, launch, key sequence, system command, or a **Wait** of
-      1–5000 ms for pacing between steps; up to 16 steps, waits summing to
-      at most 10 s), reorder with Up/Down, and double-click a step to edit
-      it. If a step fails, the macro stops there and the log names the
-      failing step. A macro containing waits runs in the background so it
-      never delays other commands — the overlay shows "running N steps"
-      when it starts and the outcome when it finishes. Example — "movie
-      time": launch Kodi → wait 2000 ms → `F11` for fullscreen.
+      from one voice command or tile tap. Build the step list with **Add…**, or
+      **Add mouse move…** for the same target picker described above. Each
+      step is a media key, launch, key sequence, system command, mouse move,
+      or a **Wait** of 1–5000 ms for pacing between steps; up to 16 steps are
+      allowed, with waits summing to at most 10 s. Reorder with Up/Down and
+      double-click a step to edit it. A mouse step is a one-shot absolute move
+      to its clamped target: it does not capture or restore a position and
+      cannot read or change a standalone mouse command's retained restore
+      state. To move back, add another mouse step with the desired target.
+      If any step fails, the macro stops there and the log names the failing
+      step. A macro containing waits runs in the background so it never delays
+      other commands — the overlay shows "running N steps" when it starts and
+      the outcome when it finishes. Example — "movie time": launch Kodi →
+      wait 2000 ms → `F11` for fullscreen → move the pointer to the top left.
   - Uncheck a command's box to keep it configured but stop publishing it to
     Google Home (its tile disappears from Home the next time the bridge
     restarts).

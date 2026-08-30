@@ -13,7 +13,10 @@ namespace MatterHelm.Actions;
 /// lock, a graceful <c>WM_CLOSE</c> to the foreground window, and
 /// shutdown/restart via <c>shutdown.exe</c> (runs unelevated for the
 /// interactive user). Never throws; <c>false</c> = failure (logged), matching
-/// the executor contract.
+/// the executor contract. <see cref="ActionExecutor"/> wraps both screensaver
+/// verbs with an in-memory, HWND/PID/name-validated focus capture: capture
+/// immediately precedes this class's start call, while focus restoration runs
+/// only after this class's stop call succeeds.
 /// </summary>
 public static partial class SystemCommands
 {
@@ -22,7 +25,8 @@ public static partial class SystemCommands
     /// <summary>
     /// Starts the user's configured screensaver (HKCU <c>Control Panel\Desktop</c>,
     /// <c>SCRNSAVE.EXE</c>). No screensaver configured = failure, so the ack
-    /// tells the user why nothing happened.
+    /// tells the user why nothing happened. The caller owns foreground capture;
+    /// launching the configured <c>.scr</c> remains this method's sole concern.
     /// </summary>
     public static bool StartScreenSaver()
     {
@@ -85,7 +89,9 @@ public static partial class SystemCommands
     /// launched by <see cref="StartScreenSaver"/> runs as a plain process it
     /// never sees. Both cases run the <c>.scr</c> as a user-session process,
     /// so enumerate-and-close covers them uniformly (live-probed: found +
-    /// gone in under a second). No screensaver found = success, logged.
+    /// gone in under a second). No screensaver found = success, logged. The
+    /// caller restores its validated foreground capture only after this method
+    /// returns success.
     /// </summary>
     public static bool StopScreenSaver()
     {

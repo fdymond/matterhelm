@@ -37,4 +37,24 @@ public sealed class CustomCommandDialogTests
         Assert.Equal(original.X, result.X);
         Assert.Equal(original.Y, result.Y);
     }
+
+    [Theory]
+    [InlineData(MouseTarget.TopLeft, 0, 0)]
+    [InlineData(MouseTarget.Custom, -2500, 1400)]
+    public void SequenceMouseStepUsesTheStandaloneTargetPickerRoundTrip(MouseTarget target, int x, int y)
+    {
+        var original = new MouseMoveActionConfig
+        {
+            Target = target,
+            X = target == MouseTarget.Custom ? x : null,
+            Y = target == MouseTarget.Custom ? y : null,
+        };
+
+        MouseMoveActionConfig result = CustomCommandDialog.CreateMouseMoveSequenceStep(
+            CustomCommandDialog.MouseMoveEditorState.FromAction(original));
+
+        Assert.Equal(original.Target, result.Target);
+        Assert.Equal(original.X, result.X);
+        Assert.Equal(original.Y, result.Y);
+    }
 }

@@ -5,6 +5,9 @@ namespace MatterHelm.Actions;
 /// <summary>Executor payload for one retained mouse-move custom command.</summary>
 internal sealed record MouseMoveRequest(string CommandKey, MouseMoveActionConfig Action, bool On);
 
+/// <summary>Executor payload for one stateless absolute mouse move inside a sequence.</summary>
+internal sealed record MouseMoveOnceRequest(MouseMoveActionConfig Action);
+
 /// <summary>Testable pointer and virtual-screen boundary.</summary>
 internal interface IMousePointer
 {
@@ -77,6 +80,17 @@ internal sealed partial class MouseMover
         {
             return RestoreCore(commandKey);
         }
+    }
+
+    /// <summary>
+    /// Moves once without reading or changing retained capture state. Sequence
+    /// steps use this path so a macro cannot change where another command's
+    /// next OFF edge restores the pointer.
+    /// </summary>
+    internal bool MoveOnce(MouseMoveActionConfig action)
+    {
+        Point target = MouseTargetResolver.Resolve(action, _pointer.VirtualScreen);
+        return _pointer.TrySetPosition(target);
     }
 
     internal void Reconcile(IReadOnlySet<string> activeCommandKeys)

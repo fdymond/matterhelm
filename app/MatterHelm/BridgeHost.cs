@@ -12,8 +12,8 @@ namespace MatterHelm;
 /// <summary>
 /// Executor seam <see cref="BridgeHost"/> wires against, so wiring tests can
 /// substitute a fake without triggering real Windows side effects. The
-/// production implementation is <see cref="ActionExecutorAdapter"/>;
-/// <c>Actions/ActionExecutor.cs</c> itself is untouched by this seam.
+/// production implementation is <see cref="ActionExecutorAdapter"/>, including
+/// lifecycle invalidation for display and screensaver state.
 /// </summary>
 public interface IActionExecutor : IDisposable
 {
@@ -36,6 +36,11 @@ public interface IActionExecutor : IDisposable
 
     /// <summary>Invalidates retained pointer captures that no longer belong to enabled mouse commands.</summary>
     void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys)
+    {
+    }
+
+    /// <summary>Invalidates any foreground-window capture retained for screensaver dismissal.</summary>
+    void ClearScreensaverFocusCapture()
     {
     }
 
@@ -78,6 +83,9 @@ public sealed class ActionExecutorAdapter : IActionExecutor
     /// <inheritdoc />
     public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
         _executor.ReconcileMouseMoves(activeCommandKeys);
+
+    /// <inheritdoc />
+    public void ClearScreensaverFocusCapture() => _executor.ClearScreensaverFocusCapture();
 
     /// <inheritdoc />
     public void Dispose()
@@ -558,6 +566,7 @@ public sealed class BridgeHost : IDisposable
         if (releaseDisplayKeepAwake)
         {
             _ = _executor.ReleaseDisplayKeepAwake();
+            _executor.ClearScreensaverFocusCapture();
         }
 
         stoppingSupervisor?.Stop();
@@ -1366,7 +1375,8 @@ public sealed class BridgeHost : IDisposable
     private (bool Ok, string Pill, string? Error) ExecuteCustomAction(
         string commandKey,
         CustomActionConfig action,
-        bool on = true)
+        bool on = true,
+        bool sequenceStep = false)
     {
         switch (action)
         {
@@ -1386,6 +1396,8 @@ public sealed class BridgeHost : IDisposable
             }
             case KeySequenceActionConfig keySequence:
                 return ExecuteKeySequence(commandKey, keySequence.Sequence);
+            case MouseMoveActionConfig mouseMove when sequenceStep:
+                return RouteMouseMoveStep(commandKey, mouseMove, _executor.Execute);
             case MouseMoveActionConfig mouseMove:
                 return RouteMouseMoveAction(commandKey, mouseMove, on, _executor.Execute);
             case SystemActionConfig system:
@@ -1415,8 +1427,34 @@ public sealed class BridgeHost : IDisposable
             : (false, "failed", $"could not move or restore the mouse for {commandKey} (see the app log)");
     }
 
+    /// <summary>
+    /// Routes a sequence mouse step as a stateless one-shot absolute move.
+    /// The payload has no command key or edge and dispatches to the mover's
+    /// separate no-capture method.
+    /// </summary>
+    internal static (bool Ok, string Pill, string? Error) RouteMouseMoveStep(
+        string commandKey,
+        MouseMoveActionConfig action,
+        Func<string, object?, bool> execute)
+    {
+        bool moved = execute("mouseMoveOnce", new MouseMoveOnceRequest(action));
+        return moved
+            ? (true, "mouse moved", null)
+            : (false, "failed", $"could not move the mouse for {commandKey} (see the app log)");
+    }
+
     /// <summary>Runs a sequence's steps in order, stopping at the first failure (error carries the 1-based step number).</summary>
-    private (bool Ok, string Pill, string? Error) RunSequenceSteps(string commandKey, SequenceActionConfig sequence)
+    private (bool Ok, string Pill, string? Error) RunSequenceSteps(string commandKey, SequenceActionConfig sequence) =>
+        RunSequenceSteps(
+            commandKey,
+            sequence,
+            step => ExecuteCustomAction(commandKey, step, sequenceStep: true));
+
+    /// <summary>Pure instant-sequence runner shared by production dispatch and ordering/failure tests.</summary>
+    internal static (bool Ok, string Pill, string? Error) RunSequenceSteps(
+        string commandKey,
+        SequenceActionConfig sequence,
+        Func<CustomActionConfig, (bool Ok, string Pill, string? Error)> executeStep)
     {
         for (int i = 0; i < sequence.Steps.Count; i++)
         {
@@ -1427,7 +1465,7 @@ public sealed class BridgeHost : IDisposable
                 return (false, "failed", $"custom command {commandKey}: step {i + 1} is a nested sequence");
             }
 
-            (bool stepOk, string stepPill, string? stepError) = ExecuteCustomAction(commandKey, sequence.Steps[i]);
+            (bool stepOk, string stepPill, string? stepError) = executeStep(sequence.Steps[i]);
             if (!stepOk)
             {
                 return (false, "failed", $"custom command {commandKey}: step {i + 1} of {sequence.Steps.Count} failed: {stepError ?? stepPill}");
@@ -1454,7 +1492,7 @@ public sealed class BridgeHost : IDisposable
             (bool stepOk, string stepPill, string? stepError) = step switch
             {
                 DelayActionConfig delay => await WaitDelayStepAsync(delay.Ms, cancellationToken).ConfigureAwait(false),
-                _ => ExecuteCustomAction(commandKey, step),
+                _ => ExecuteCustomAction(commandKey, step, sequenceStep: true),
             };
             if (!stepOk)
             {

@@ -221,6 +221,25 @@ public static class BridgeHostTests
             host.SetEnabled(false);
 
             Assert.Equal(1, executor.ReleaseCalls);
+            Assert.Equal(1, executor.ClearScreensaverFocusCalls);
+        }
+
+        [Fact]
+        public void AppExitClearsScreensaverFocusCapture()
+        {
+            var executor = new ReleaseRecordingExecutor();
+            var config = new Config(
+                Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"), "config.json"),
+                (_, _) => { });
+            var host = new BridgeHost(
+                config,
+                executor,
+                new SidecarSpec("unused.exe", [], Path.GetTempPath()),
+                log: (_, _) => { });
+
+            host.Dispose();
+
+            Assert.Equal(1, executor.ClearScreensaverFocusCalls);
         }
 
         [Theory]
@@ -352,6 +371,8 @@ public static class BridgeHostTests
 
             public int ReleaseCalls { get; private set; }
 
+            public int ClearScreensaverFocusCalls { get; private set; }
+
             public List<HashSet<string>> MouseReconciliations { get; } = [];
 
             public IReadOnlyList<(string Name, object? Value)> Calls => _calls;
@@ -370,6 +391,8 @@ public static class BridgeHostTests
 
             public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
                 MouseReconciliations.Add([.. activeCommandKeys]);
+
+            public void ClearScreensaverFocusCapture() => ClearScreensaverFocusCalls++;
 
             public VolumeState GetVolumeState() => new(50, false);
 
@@ -410,6 +433,103 @@ public static class BridgeHostTests
             Assert.Same(action, request.Action);
             Assert.Equal(on, request.On);
             Assert.Equal(executorResult, error is null);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void SequenceMouseDispatcherCarriesOnlyAStatelessOneShotRequest(bool executorResult)
+        {
+            var action = new MouseMoveActionConfig { Target = MouseTarget.Custom, X = -5, Y = 10 };
+            string? verb = null;
+            object? payload = null;
+
+            (bool ok, string pill, string? error) = BridgeHost.RouteMouseMoveStep(
+                "movie-time",
+                action,
+                (name, value) =>
+                {
+                    verb = name;
+                    payload = value;
+                    return executorResult;
+                });
+
+            Assert.Equal(executorResult, ok);
+            Assert.Equal(executorResult ? "mouse moved" : "failed", pill);
+            Assert.Equal("mouseMoveOnce", verb);
+            MouseMoveOnceRequest request = Assert.IsType<MouseMoveOnceRequest>(payload);
+            Assert.Same(action, request.Action);
+            Assert.Equal(executorResult, error is null);
+        }
+
+        [Fact]
+        public void SequenceRunnerExecutesAOneShotMouseStepThenContinuesInOrder()
+        {
+            var sequence = new SequenceActionConfig
+            {
+                Steps =
+                [
+                    new MouseMoveActionConfig { Target = MouseTarget.TopLeft },
+                    new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                ],
+            };
+            var calls = new List<string>();
+
+            (bool ok, string pill, string? error) = BridgeHost.RunSequenceSteps(
+                "park-then-stop",
+                sequence,
+                step =>
+                {
+                    if (step is MouseMoveActionConfig mouseMove)
+                    {
+                        return BridgeHost.RouteMouseMoveStep(
+                            "park-then-stop",
+                            mouseMove,
+                            (name, _) =>
+                            {
+                                calls.Add(name);
+                                return true;
+                            });
+                    }
+
+                    calls.Add("mediaStop");
+                    return (true, "stopped", null);
+                });
+
+            Assert.True(ok);
+            Assert.Equal("ran 2 steps", pill);
+            Assert.Null(error);
+            Assert.Equal(["mouseMoveOnce", "mediaStop"], calls);
+        }
+
+        [Fact]
+        public void SequenceRunnerStopsAtAFailingOneShotMouseStep()
+        {
+            var sequence = new SequenceActionConfig
+            {
+                Steps =
+                [
+                    new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+                    new MediaKeyActionConfig { KeyName = MediaKeyName.Next },
+                ],
+            };
+            int calls = 0;
+
+            (bool ok, string pill, string? error) = BridgeHost.RunSequenceSteps(
+                "failed-mouse-macro",
+                sequence,
+                step =>
+                {
+                    calls++;
+                    return step is MouseMoveActionConfig mouseMove
+                        ? BridgeHost.RouteMouseMoveStep("failed-mouse-macro", mouseMove, (_, _) => false)
+                        : (true, "next", null);
+                });
+
+            Assert.False(ok);
+            Assert.Equal("failed", pill);
+            Assert.Contains("step 1 of 2", error, StringComparison.Ordinal);
+            Assert.Equal(1, calls);
         }
     }
 
@@ -1309,6 +1429,7 @@ public static class BridgeHostTests
             // Execution stopped at step 1: the second media key never ran.
             Assert.DoesNotContain(("next", (object?)null), _executor.Calls);
         }
+
 
         [Fact]
         public async Task SupervisorEnvCarriesTheConfiguredMomentaryResetInterval()

@@ -932,7 +932,6 @@ public sealed class ConfigTests : IDisposable
         [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 5001}]}""")] // delay above per-step maximum
         [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 5000}, {"type": "delay", "ms": 5000}, {"type": "delay", "ms": 1}]}""")] // summed delays over the cap
         [InlineData("""{"type": "sequence", "steps": [{"type": "mediaKey", "keyName": "bogus"}]}""")] // broken step
-        [InlineData("""{"type": "sequence", "steps": [{"type": "mouseMove", "target": "bottomRight"}]}""")] // retained edge is unavailable inside a macro
         [InlineData("""{"type": "delay", "ms": "fast"}""")] // non-numeric delay
         public void InvalidSequenceOrDelayActionDropsTheEntryAndWarns(string actionJson)
         {
@@ -946,6 +945,23 @@ public sealed class ConfigTests : IDisposable
 
             Assert.Empty(config.Current.Commands.Custom);
             Assert.True(Log.Contains("WARN", "commands.custom[0]"));
+        }
+
+        [Fact]
+        public void SequenceOverTheStepCapIsRejected()
+        {
+            string steps = string.Join(",", Enumerable.Repeat(
+                "{\"type\":\"mediaKey\",\"keyName\":\"stop\"}",
+                SequenceActionConfig.MaxSteps + 1));
+            WriteConfig(
+                "{\"commands\":{\"custom\":[{\"key\":\"too-long\",\"action\":{\"type\":\"sequence\",\"steps\":["
+                + steps
+                + "]}}]}}");
+
+            Config config = NewConfig();
+
+            Assert.Empty(config.Current.Commands.Custom);
+            Assert.True(Log.Contains("WARN", $"1-{SequenceActionConfig.MaxSteps} actions"));
         }
 
         [Fact]
@@ -964,6 +980,7 @@ public sealed class ConfigTests : IDisposable
                         [
                             new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
                             new DelayActionConfig { Ms = 250 },
+                            new MouseMoveActionConfig { Target = MouseTarget.Custom, X = -2500, Y = 1400 },
                             new LaunchActionConfig { Path = @"C:\apps\kodi.exe" },
                         ],
                     },
@@ -976,16 +993,24 @@ public sealed class ConfigTests : IDisposable
                 .GetProperty("commands").GetProperty("custom")[0].GetProperty("action");
             Assert.Equal("sequence", action.GetProperty("type").GetString());
             JsonElement steps = action.GetProperty("steps");
-            Assert.Equal(3, steps.GetArrayLength());
+            Assert.Equal(4, steps.GetArrayLength());
             Assert.Equal("mediaKey", steps[0].GetProperty("type").GetString());
             Assert.Equal("delay", steps[1].GetProperty("type").GetString());
             Assert.Equal(250, steps[1].GetProperty("ms").GetInt32());
-            Assert.Equal("launch", steps[2].GetProperty("type").GetString());
+            Assert.Equal("mouseMove", steps[2].GetProperty("type").GetString());
+            Assert.Equal("custom", steps[2].GetProperty("target").GetString());
+            Assert.Equal(-2500, steps[2].GetProperty("x").GetInt32());
+            Assert.Equal(1400, steps[2].GetProperty("y").GetInt32());
+            Assert.Equal("launch", steps[3].GetProperty("type").GetString());
 
             // And the saved file loads back to the same typed model.
             var reloaded = Assert.IsType<SequenceActionConfig>(
                 Assert.Single(NewConfig().Current.Commands.Custom).Action);
-            Assert.Equal(3, reloaded.Steps.Count);
+            Assert.Equal(4, reloaded.Steps.Count);
+            var mouseStep = Assert.IsType<MouseMoveActionConfig>(reloaded.Steps[2]);
+            Assert.Equal(MouseTarget.Custom, mouseStep.Target);
+            Assert.Equal(-2500, mouseStep.X);
+            Assert.Equal(1400, mouseStep.Y);
         }
 
         [Theory]

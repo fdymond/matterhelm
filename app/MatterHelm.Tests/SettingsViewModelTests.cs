@@ -324,7 +324,7 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ValidateActionRejectsMouseMoveInsideASequence()
+    public void ValidateActionAcceptsMouseMoveInsideASequence()
     {
         SettingsViewModel vm = NewViewModel();
         var sequence = new SequenceActionConfig
@@ -334,9 +334,7 @@ public sealed class SettingsViewModelTests : IDisposable
 
         string? error = vm.ValidateAction(sequence, allowSequence: true);
 
-        Assert.NotNull(error);
-        Assert.StartsWith("Step 1:", error, StringComparison.Ordinal);
-        Assert.Contains("On/Off edge", error, StringComparison.Ordinal);
+        Assert.Null(error);
     }
 
     [Fact]
