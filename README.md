@@ -23,15 +23,18 @@ bridge/  Node 22 + matter.js sidecar      (Matter Aggregator: Speaker + switches
         │  localhost WebSocket, token-auth
         ▼
 app/     C# .NET 10 WinForms tray app     (supervisor + executor + UI)
-        ├─ ActionExecutor → media keys / CoreAudio / key chords / system commands
+        ├─ ActionExecutor → SMTC + media keys / CoreAudio / key chords / system commands
         └─ Overlay HUD    → click-through pop-ups: incoming command + result
 ```
 
 ## Features
 
-- **Voice + app + routines** — volume/mute with a real slider, play/pause,
-  next/previous, configurable power off (displays off / sleep / pause-then-off).
-- **Custom commands** — each becomes its own Google Home device: press a
+- **Voice + app + routines** — volume/mute with a real slider; retained
+  Play/Pause, Next, and Previous switches; and configurable Power behavior:
+  displays off/on, pause then displays off/on (without resuming playback),
+  screensaver start/stop, or momentary sleep.
+- **Custom commands** — each becomes its own retained Google Home switch by
+  default, with an opt-in **Reset after activation** one-shot mode: press a
   media key, launch a program, send a keyboard chord (typed or captured),
   run a system command (screensaver, lock, sleep, hibernate, shutdown…), or
   chain them into a **macro** with waits.
@@ -59,7 +62,7 @@ detail plus troubleshooting.
 
 | Need | Why |
 |---|---|
-| **Windows 11** (x64) | The tray app is Windows-native |
+| **Windows 10 version 1809 (build 17763) or later**, x64 | The current app target is `net10.0-windows10.0.17763.0`; Windows 10 and 11 are supported |
 | A **Google Nest hub** on the same LAN — Nest Hub/Mini/Audio, Nest Wifi Pro, or Google TV Streamer | Google requires a hub to commission Matter devices; a phone alone cannot (`docs/adr/002`) |
 | **IPv6 enabled** on the active network adapter | A hard Matter requirement, even though all traffic stays local. It's on by default — only check this if pairing later fails |
 | The **Google Home app**, signed into the account that owns your home | Does the pairing scan |
@@ -90,7 +93,7 @@ Download from [Releases](https://github.com/fdymond/matterhelm/releases/latest):
 - **Installer** — `MatterHelm-Setup-<version>.exe`: per-user install (no
   admin prompt), Start-menu entry, optional start-with-Windows, clean
   uninstall that keeps your pairing and settings.
-- **Portable** — `matterhelm-<version>-win-x64.zip`: unzip anywhere and run
+- **Portable** — `matterhelm-v<version>-win-x64.zip`: unzip anywhere and run
   `MatterHelm.exe`.
 
 Either way it's self-contained — the Matter sidecar ships as a bundled single
@@ -116,15 +119,18 @@ your voice targets and are what the Home app offers during pairing, so set
 them now — especially if more than one PC will run MatterHelm (see below).
 Untick anything you don't want published.
 
-### 5. Enable the bridge and pair
+### 5. Start the bridge and pair
 
-1. Right-click the tray icon → tick **Enable bridge**. The icon turns
-   **amber** (running, not yet paired).
-2. **Allow the Windows Firewall prompt** for **Private** networks. Without it
+1. Right-click the tray icon → **Pair with Google Home…**. On an unpaired
+   install this is the bridge-start action: it enables and persists the bridge
+   and opens the pairing window. **Enable bridge** is intentionally hidden
+   until pairing has completed.
+2. The icon is briefly **amber** while starting, then **blue** when the bridge
+   is healthy, advertising, and awaiting pairing. **Allow the Windows Firewall
+   prompt** for **Private** networks. Without it
    the hub can't discover the bridge.
-3. Tray → **Pair with Google Home…** — a window shows the phone-side steps, a
-   QR code, an 11-digit manual code, and a live status line that follows the
-   bridge from "starting" through to paired.
+3. The pairing window shows the phone-side steps, a QR code, an 11-digit manual
+   code, and a live status line that follows the bridge through to paired.
 4. In the Home app: **+ Add** → **Matter-enabled device**, scan the QR (or
    "Set up without QR code" and type the manual code).
 5. Tap through the **"not Matter-certified"** notice — expected for a
@@ -133,6 +139,11 @@ Untick anything you don't want published.
 6. Pick a home/room and confirm the device names. The tray icon turns
    **green**.
 
+Tray legend: **gray** = disabled; **amber** = starting or awaiting lifecycle
+status; **blue** = healthy and awaiting pairing; **green** = commissioned and
+connected; **red** = a sidecar crash loop or missing commissionable
+advertisement.
+
 You'll get tiles for **HTPC Speaker**, **HTPC Play Pause**, **HTPC Next**,
 **HTPC Previous**, **HTPC Power**, plus one per custom command.
 
@@ -140,6 +151,12 @@ You'll get tiles for **HTPC Speaker**, **HTPC Play Pause**, **HTPC Next**,
 
 > "Hey Google, set HTPC Speaker volume to 40 %"
 > "Hey Google, turn on HTPC Play Pause"
+
+Play/Pause On requests Play and Off requests Pause through the current Windows
+media session. If no usable session is available or rejects/times out, the
+request fails and is logged; MatterHelm deliberately sends no appcommand
+fallback because measured appcommands can toggle and invert intent. Next and
+Previous retain their displayed state and fire once on either user transition.
 
 For natural phrasing like *"pause the HTPC"*, set up Google Home routines —
 see [docs/routines.md](docs/routines.md).
@@ -156,15 +173,16 @@ ships the same defaults and duplicate names make voice commands ambiguous.
 
 On the second (third, …) PC:
 
-1. Install and run it, but leave the bridge **disabled** for now.
+1. Install and run it. A fresh unpaired install remains disabled until you
+   choose **Pair with Google Home…**.
 2. Settings → **Devices** → set **Bridge name** (e.g. "Office Bridge" — what
    Google calls the bridge itself) and rename each device: "Office Speaker",
    "Office Play Pause", "Office Power", … Save.
 3. *(Optional check)* Settings → **Advanced** → **Device identity seed**
    should differ from the other PC's.
-4. Enable the bridge and allow the **firewall** prompt — it's a fresh prompt
-   on this PC.
-5. Pair as in step 5 above, using the **same Google account and home**. Put
+4. Choose **Pair with Google Home…** and allow the **firewall** prompt — it's
+   a fresh prompt on this PC.
+5. Complete pairing as in step 5 above, using the **same Google account and home**. Put
    it in a different **room** if you can; it makes voice targeting easier.
 
 Then both respond independently: *"pause the office PC"* vs *"pause the
@@ -181,7 +199,7 @@ beside it, then start it — a fresh identity is minted.
 | Doc | What's in it |
 |---|---|
 | [User guide](docs/user-guide.md) | The setup above in more depth, plus the full settings tour, custom commands and macros, troubleshooting, and privacy |
-| [Natural voice phrases](docs/routines.md) | Routine starters ("pause the HTPC") and stateless button tiles |
+| [Natural voice phrases](docs/routines.md) | Routine starters and retained/resettable switch guidance |
 | [Architecture blueprint](docs/BLUEPRINT.md) | Binding design & IPC protocol spec |
 | [ADRs](docs/adr/) | Every architectural decision, with context and consequences |
 | [Engineering standards](docs/ENGINEERING-STANDARDS.md) | The quality bar (TS + C#) |
@@ -190,10 +208,17 @@ beside it, then start it — a fresh identity is minted.
 ## Building from source
 
 ```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + 375 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 689 tests
+cd bridge && npm ci && npm run verify        # sidecar: lint + types + 391 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 720 tests
 ./build.ps1                                  # dist/: portable folder, SEA sidecar
 ```
+
+> **0.5.0 gate evidence** (integrator, standard commands, clean environment):
+> bridge `npm run verify` 391/391 green (lint + typecheck + tests, zero
+> warnings); app suite 720/720 green; `build.ps1` SEA packaging succeeds;
+> overlay, pairing-window and wired demos PASS. Dedicated Play/Pause were
+> additionally verified against a live Windows media session in the packaged
+> build: absolute play with a session, honest failure without one.
 
 Dev requirements: Node 22 LTS, .NET 10 SDK, Windows. CI runs the same gates
 on every push (bridge verify + coverage on ubuntu/windows, app build + tests
@@ -201,16 +226,24 @@ on every push (bridge verify + coverage on ubuntu/windows, app build + tests
 
 ## Status
 
-**v0.4.4 released** (deep-review hardening of lifecycle/memory paths, streamlined onboarding, filtered adapter dropdown, honest display-power labelling; v0.4.3 before it: (DDC/CI display power — no more Modern-Standby sleep on "displays off" — single-pill overlay, mDNS adapter dropdown; v0.4.2 before it: Windows mDNS discovery fix — the bridge now answers
+**0.5.0 is unreleased.** Its documentation and hardware release gates are in
+progress; see the changelog's `[Unreleased]` section and current E2E checklist.
+The latest tagged release is **v0.4.4** (deep-review hardening of
+lifecycle/memory paths, streamlined onboarding, filtered adapter dropdown,
+honest display-power labelling; v0.4.3 before it: DDC/CI display power — no
+more Modern-Standby sleep on "displays off" — single-pill overlay, mDNS
+adapter dropdown; v0.4.2 before it: Windows mDNS discovery fix — the bridge now answers
 mDNS queries instead of announcing into the void — tray auto-update,
 advertisement health status, live pairing window with auto-close, blue
 awaiting-pairing tray state, power-action fidelity with screensaver
 support; v0.4.1 before it: first-run guide, rebuilt pairing window,
 factory-reset re-pair fix). Commissioned and exercised against real
-Nest hub hardware, re-paired end-to-end after the discovery fix.
-1,1064 automated tests across both processes, measured resource budgets
-(`docs/adr/007`), and a scripted hardware E2E checklist
-(`docs/e2e-log.md`). See [`CHANGELOG.md`](CHANGELOG.md) for history and
+Nest hub hardware, re-paired end-to-end after the discovery fix. Automated
+test inventory is 1,111 (391 bridge + 720 app), but clean 0.5.0 release-gate
+results remain pending an integrator run outside this restricted sandbox.
+Measured resource budgets are recorded in `docs/adr/007`, and the current
+scripted hardware E2E checklist is `docs/e2e-log.md`. See
+[`CHANGELOG.md`](CHANGELOG.md) for history and
 [`BACKLOG.md`](BACKLOG.md) for what's next.
 
 ## Contributing

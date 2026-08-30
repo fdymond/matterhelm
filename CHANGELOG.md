@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
+## [0.5.1] — 2026-08-30
+
+Packaging fix for 0.5.0. Two files that belonged to the 0.5.0 change set were
+left unstaged and therefore missing from that release:
+
+### Fixed
+- The installer now enforces . 0.5.0 targets the
+  Windows media-session APIs introduced in Windows 10 1809, but its published
+  Setup exe would still install on older builds and then fail at runtime.
+  Installing 0.5.1 on an unsupported build is now refused cleanly up front.
+
+### Changed
+- README brought in line with 0.5.0 behaviour (retained switches, the media
+  session in the action path, current feature list and gate evidence).
+
 ## [0.5.0] — 2026-08-30
 
 This section is the 0.5.0 release candidate. Version and release date remain
