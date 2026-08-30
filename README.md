@@ -210,8 +210,8 @@ beside it, then start it — a fresh identity is minted.
 ## Building from source
 
 ```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + 391 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 720 tests
+cd bridge && npm ci && npm run verify        # sidecar: lint + types + 393 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 774 tests
 ./build.ps1                                  # dist/: portable folder, SEA sidecar
 ```
 

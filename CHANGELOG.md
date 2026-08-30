@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
+## [0.6.0] — 2026-08-30
+
+### Added
+- **Move the mouse** command category: virtual-screen presets (corners, centre)
+  or explicit coordinates, clamped so a command can never strand the pointer
+  off-desktop. Retained switch — ON captures the current position and moves,
+  OFF puts it back.
+
+### Fixed
+- **Media commands now try the focused app first.** Players that do not publish
+  a Windows media session — Kodi is the measured example — received nothing
+  from the dedicated verbs. They are now sent to the focused window first,
+  verified, and only then routed to a media session.
+- **Commands can no longer act on the wrong application.** Verification read
+  the GLOBAL media session, so with Kodi playing and a stale paused session
+  belonging to another app, a dedicated Pause concluded "already paused" and
+  did nothing — while an earlier build would instead start that other app
+  playing. Verification is now scoped to the focused app; a session owned by
+  someone else counts as unverifiable rather than as evidence.
+- playPause no longer falls back to a toggle, which could cancel out a focused
+  toggle that arrived late.
+- An immediately repeated dedicated verb to the same unverifiable target is
+  suppressed. Kodi honours PLAY absolutely but treats PAUSE as a toggle, and
+  offers no session to verify against.
+
+### Changed
+- IPC protocol 4 -> 5 (additive): the custom action frame now carries the
+  switch edge, which retained ON/OFF commands need. Tray and sidecar ship
+  together, so no user action is required.
+- Docs corrected where they still described media routing as session-only
+  (BLUEPRINT, ADR-003, README); ADR-013 records the final model.
+
+> **Known limitation.** For a player with no media session, success means the
+> command was delivered, not that playback changed — Google receives an OK and
+> the overlay shows success either way. The log names the path taken
+> (focused-handled / session-fallback / unverifiable) for diagnosis.
+
+
 ## [0.5.1] — 2026-08-30
 
 Packaging fix for 0.5.0. Two files that belonged to the 0.5.0 change set were
