@@ -1,48 +1,49 @@
 # Natural voice phrases via Google Home routines
 
-Google Home does not surface Matter's media clusters (research re-verified
-2026-08-02: Basic/Casting Video Player and Media Playback remain absent from
-Google's supported device/cluster lists, and Gemini for Home's new transport
-phrases apply only to Google-recognized streaming sessions). The supported way
-to get natural phrasing for the HTPC's commands is **routines with custom
-starters** — a one-time, ~5-minute setup in the Google Home app.
+Google Home does not surface Matter media-playback clusters for this bridge.
+Use Google Home automations with custom starter phrases to map natural speech
+to MatterHelm's Speaker and On/Off Plug-in Unit endpoints.
 
-Use multi-word starters: bare "pause"/"stop" collide with the Assistant's own
-reserved global commands (they halt timers/casting and shadow custom
-starters).
+Use multi-word starters: bare "pause" or "stop" can collide with Assistant's
+own timers/casting commands.
 
 ## Recommended routine set
 
 Google Home app → Automations → **+ New** → *When I say to Google Assistant*
 → *Then: Adjust Home devices*:
 
-| You say ("Hey Google, …") | Routine action |
-|---|---|
-| "pause the HTPC" | Turn **on** *HTPC Play Pause* |
-| "play the HTPC" / "resume the HTPC" | Turn **on** *HTPC Play Pause* |
-| "next on the HTPC" / "skip this track" | Turn **on** *HTPC Next* |
-| "back one on the HTPC" | Turn **on** *HTPC Previous* |
-| "movie time" | Turn on your custom command endpoint (e.g. *Movie Mode*), optionally + lights |
-| "shut down the theater" | Turn **off** *HTPC Power* |
+| You say ("Hey Google, …") | Routine action | Shipped meaning |
+|---|---|---|
+| "play the HTPC" / "resume the HTPC" | Turn **on** *HTPC Play Pause* | Requests absolute Play through the current SMTC session; fails/logs if none is usable |
+| "pause the HTPC" | Turn **off** *HTPC Play Pause* | Requests absolute Pause through the current SMTC session; fails/logs if none is usable |
+| "next on the HTPC" / "skip this track" | Change *HTPC Next* to its other state | Next fires on either user transition and retains the new state |
+| "back one on the HTPC" | Change *HTPC Previous* to its other state | Previous fires on either user transition and retains the new state |
+| "movie time" | Activate a custom command endpoint (e.g. *Movie Mode*), optionally plus lights | Retained custom commands fire on either transition by default |
+| "shut down the theater" | Turn **off** *HTPC Power* | Runs the configured Power Off behavior |
+| "wake the theater" | Turn **on** *HTPC Power* | Reverses displays-off/screensaver modes; does not resume playback |
 
-## Stateless button tiles (routine favorites)
+For Next/Previous or other repeated one-shot actions, the most predictable
+automation target is a custom command with **Reset the switch after it runs
+(momentary button)** enabled. The routine always sends On; MatterHelm executes
+once and locally returns the tile to Off after the configured delay (default
+0 ms). The local reset never executes the command again.
 
-The Home app renders every controllable Matter device as a stateful toggle —
-there is no momentary-button presentation for a bridged endpoint (Generic
-Switch is stateless but is an event source Google only accepts as a routine
-starter, not a tappable control). Since S8-4 the toggle's shown state is
-purely cosmetic (any tap fires), but if you want tiles that behave like real
-buttons — tap, brief flash, back to idle, no on/off state — pin the
-**routines themselves**: each routine added to the Home app's Favorites is a
-one-tap "run" button with no state. Create one routine per command you tap
-often (starter phrase + "Turn on <device>" action) and tap the routine tile
-instead of the device tile.
+## Tiles and retained state
+
+The built-in Play/Pause, Next, Previous, and reversible Power endpoints are
+real retained switches in 0.5.0; their shown state is meaningful and they do
+not auto-reset. Next and Previous use both edges as triggers, while Play/Pause
+uses On=Play and Off=Pause. Custom commands are also retained/both-edge unless
+their reset checkbox is enabled.
+
+Generic Switch is not a replacement: it is a device-to-controller event source
+that Google may accept as a routine starter, not a voice-targetable/tappable
+MatterHelm control.
 
 Notes:
-- Play/pause is a single toggle on the PC, so "pause" and "play" both press
-  the same button — both phrases exist purely so either feels natural.
-- Starters must be unique across all routines; Google rejects duplicates.
-- The direct forms keep working regardless ("set HTPC Speaker volume to
-  40 %", "turn off HTPC Power").
-- Custom commands you add in Settings → Devices appear as devices
-  and can be routine actions the same way.
+
+- Starters must be unique across routines.
+- Direct forms still work (for example, "set HTPC Speaker volume to 40 %" and
+  "turn off HTPC Power").
+- Custom commands live in **Settings → Custom devices** and each enabled
+  command publishes its own Google Home device.

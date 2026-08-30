@@ -1,6 +1,8 @@
 # ADR-011: Blue "awaiting pairing" tray state (deviation from BLUEPRINT amber)
 
-Date: 2026-08-26 · Status: accepted · Owner-directed (S10-10c)
+- **Status**: accepted
+- **Date**: 2026-08-26
+- **Story**: S10-10c (owner-directed)
 
 ## Context
 
@@ -23,9 +25,9 @@ but not yet paired").
 
 ## Consequences
 
-- BLUEPRINT §tray-state table is superseded on this one row by this ADR; the
-  user-guide icon legend documents blue (S10-13 docs task).
+- BLUEPRINT §2.4 and the user-guide now incorporate this accepted state.
 - The blue state derives from the additive `matterStatus` frame (protocol v3),
-  so a v2 sidecar (never shipped) would simply never leave amber — acceptable.
+  Protocol v2 shipped in 0.1.0 and v3 shipped in 0.4.2. A stale v2 sidecar
+  would never leave amber and is rejected by the current exact-v4 parser.
 - Tests: state derivation pinned in BridgeHostTests.StateDerivation;
   tray/tooltip behavior in TrayContextTests.

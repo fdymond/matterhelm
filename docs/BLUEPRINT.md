@@ -56,10 +56,10 @@ bridge/src/
   config.ts           env/args parsing + validation (zod)
   matter/
     bridge.ts         Aggregator endpoint; owns the matter.js ServerNode
-    devices.ts        endpoint factories: speaker, momentary switch, toggle
+    devices.ts        endpoint factories: speaker and retained/resettable switches
     adapter.ts        THIN wrapper isolating matter.js API churn
   mapping/
-    actions.ts        pure fns: cluster writes -> Action msgs (unit-tested)
+    actions.ts        pure fns: observed Speaker state / intercepted plug commands -> Action msgs
     state.ts          pure fns: app state -> cluster attribute updates
   ipc/
     client.ts         WS client to the tray app, reconnect w/ backoff, auth
@@ -109,29 +109,41 @@ One **Aggregator (bridge)** node exposing:
 | Endpoint | Matter device type | Clusters | Executor action |
 |---|---|---|---|
 | `HTPC Speaker` | Speaker | OnOff (= mute), LevelControl (0–254 → 0–100 %) | set system volume / mute / unmute |
-| `HTPC Play Pause` | On/Off Plug-in Unit (momentary) | OnOff | media play/pause toggle |
-| `HTPC Next` | On/Off Plug-in Unit (momentary) | OnOff | next track |
-| `HTPC Previous` | On/Off Plug-in Unit (momentary) | OnOff | previous track |
-| `HTPC Power` | On/Off Plug-in Unit (stateful) | OnOff | configurable: pause + display off / sleep |
+| `HTPC Play Pause` | On/Off Plug-in Unit (stateful) | OnOff | On = dedicated play; Off = dedicated pause |
+| `HTPC Next` | On/Off Plug-in Unit (stateful) | OnOff | next track on either transition |
+| `HTPC Previous` | On/Off Plug-in Unit (stateful) | OnOff | previous track on either transition |
+| `HTPC Power` | On/Off Plug-in Unit (stateful or momentary by action) | OnOff | configurable: displays off/on, pause + displays off/on, screensaver start/stop, or sleep |
 
-Trigger semantics (amended by ADR-008/S8-4): every plug endpoint above
-dispatches its action from the **OnOff command** it receives
-(`On`/`Off`/`Toggle`), not from the attribute change that command produces —
-Matter's `onOff` attribute is read-only, so commands are the complete
-observation point, and matter.js emits no change event for a command
-re-writing the value already held. Momentary endpoints are stateless, so BOTH
-commands dispatch the same press (S8-4: Google's toggle tile sends `Off` when
-its state model lags the auto-reset — dropping it made every other tap dead);
-only the stateful `power` endpoint gives `On`/`Off` distinct meanings. A momentary
-endpoint additionally auto-resets to `off` after a configurable window
-(configurable since S7-1, env `HTPC_BRIDGE_MOMENTARY_RESET_MS`; default 0 =
-next-tick reset since S8-2) so voice, app taps, and routines *present* as one
-button press; since ADR-008 that window is presentation only — repeated
-commands dispatch whether or not it has elapsed.
+Trigger semantics (ADR-008 as amended by ADR-012): every plug endpoint above
+dispatches from the **OnOff command** it receives (`On`/`Off`/`Toggle`), not
+from the attribute change that command produces. Matter's `onOff` attribute is
+read-only, so commands are the complete observation point, including repeated
+commands that rewrite the held value. Play/Pause maps On to dedicated Play and
+Off to dedicated Pause; Next and Previous fire their same action on either user
+transition. Power is stateful for reversible actions: Off engages displays-off,
+pause-plus-displays-off, or screensaver, while On wakes the displays or stops
+the screensaver. Pause-plus-displays-off never resumes playback on On. Power is
+momentary for irreversible actions (currently sleep): only Off dispatches, then
+the bridge promptly writes the attribute On locally. That local write invokes
+no OnOff command and therefore dispatches nothing. User On also dispatches
+nothing in an irreversible mode.
+
+Custom commands use the same retained-state, both-edge behavior by default.
+Each custom command may opt into `resetAfterActivation`: only On fires in that
+mode, then the bridge writes the attribute Off after
+`HTPC_BRIDGE_MOMENTARY_RESET_MS` (0 = next tick). That local attribute write
+does not invoke an OnOff command and therefore does not fire the custom action.
+No timing-based trailing-Off suppression is used (S10-29 was reverted).
 A true Matter "tap button" (Generic Switch) exists but Google grants it
-routine-trigger grammar only — no direct voice target — so the momentary plug
-remains the default (research 2026-08).
+routine-trigger grammar only — no direct voice target — so On/Off Plug-in Unit
+endpoints remain the controllable transport (research 2026-08).
 Endpoint names are user-configurable — they are the Google voice targets.
+Dedicated Play/Pause uses the current Windows SMTC session for absolute verbs;
+if no usable session exists or it rejects/times out, the tray logs failure and
+sends no appcommand because that path can toggle and invert intent. Display
+power uses DDC/CI VCP `0xD6` for
+each accepting physical monitor. Windows global blanking is used only when no
+physical monitor accepts DDC; in a mixed setup unsupported panels are left on.
 
 ### 2.3 IPC protocol (localhost WebSocket, default port 39531)
 
@@ -148,9 +160,9 @@ implement the same names):
 | `HTPC_BRIDGE_IPC_TOKEN` | per-session auth token for `hello` | required, no default |
 | `HTPC_BRIDGE_STORAGE_DIR` | matter.js `storage.path` | `%APPDATA%\MatterHelm\matter` |
 | `HTPC_BRIDGE_LOG_LEVEL` | pino level | `info` |
-| `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004** (built-ins with `{name, enabled}` + `custom: [{key, name}]` momentary plugs); supersedes the earlier `HTPC_BRIDGE_DEVICE_NAMES` | built-in "HTPC …" names, all enabled, no custom |
+| `HTPC_BRIDGE_ENDPOINTS` | JSON endpoint map per **ADR-004/ADR-012** (built-ins with `{name, enabled}`, Power also has `momentary`, plus `custom: [{key, name, resetAfterActivation}]`); missing reset/momentary fields default false | built-in "HTPC …" names, all enabled, reversible Power, no custom |
 | `HTPC_BRIDGE_MDNS_INTERFACE` | mDNS interface pin for multi-NIC hosts (maps to matter.js `mdns.networkInterface`) | unset = auto |
-| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | momentary endpoint auto-reset window, integer ms 0–2000 (0 = next-tick reset, S8-2); invalid = fatal (S7-1) | `0` |
+| `HTPC_BRIDGE_MOMENTARY_RESET_MS` | opt-in custom-command auto-reset window, integer ms 0–2000 (0 = next-tick reset); invalid = fatal | `0` |
 | `HTPC_BRIDGE_NAME` | the bridge's own display name in Google Home (S10-6); blank/unset = `HTPC Matter Bridge` | `HTPC Matter Bridge` |
 | `HTPC_BRIDGE_UNIQUE_ID_SEED` | seed for every endpoint's stable identity (ADR-009). Tray app resolves it once: existing fabric → the legacy shared constant (pairing preserved), fresh install → a minted per-install value | unset = legacy constant |
 | `HTPC_BRIDGE_VENDOR_ID` | Matter vendor id, decimal or `0x` hex, 1–65535; invalid = fatal (ADR-009) | `0xFFF1` (ADR-002 test VID) |
@@ -162,23 +174,46 @@ The supervisor inherits the parent process environment, so the two matter-log
 variables can also be set machine/user-wide for troubleshooting without any
 app changes.
 
-The token is never logged and never persisted (either side). One JSON object per message; additive
-evolution via `v`, breaking changes bump `protocol` in `hello`.
+The token is never logged and never persisted (either side). One strict JSON
+object per message: unknown/missing fields or wrong types are rejected.
+Additive evolution bumps `v`; breaking changes bump `protocol` in `hello`.
+The current message revision is `v: 4` (dedicated `play`/`pause` were
+additive); `hello.protocol` remains `1`. UUID fields use canonical RFC 9562
+form. Custom keys are lowercase kebab-case slugs, at most 64 characters.
 
 Sidecar → tray app:
 ```json
-{ "v": 3, "type": "hello", "token": "…", "protocol": 1 }
-{ "v": 3, "type": "action", "id": "uuid", "name": "playPause" }
-{ "v": 3, "type": "action", "id": "uuid", "name": "setVolume", "value": 40 }
-{ "v": 3, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
-{ "v": 3, "type": "matterStatus", "commissioned": false, "advertisement": "visible" }
+{ "v": 4, "type": "hello", "token": "…", "protocol": 1 }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "playPause" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "play" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "pause" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "next" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "previous" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "powerOn" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "powerOff" }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "setVolume", "value": 40 }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "setMuted", "value": true }
+{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "custom", "key": "movie-mode" }
+{ "v": 4, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
+{ "v": 4, "type": "matterStatus", "commissioned": false, "advertisement": "visible" }
 ```
+
+`setVolume.value` is an integer 0–100. `setMuted.value` is boolean.
+`pairing.qrPayload` starts with `MT:` and `manualCode` is non-empty.
+`matterStatus.advertisement` is `checking`, `visible`, `missing`, or
+`notApplicable`; commissioned is true exactly when advertisement is
+`notApplicable`.
 
 Tray app → sidecar:
 ```json
-{ "v": 3, "type": "ack", "id": "uuid", "ok": true }
-{ "v": 3, "type": "state", "volume": 40, "muted": false }
+{ "v": 4, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": true }
+{ "v": 4, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": false }
+{ "v": 4, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": false, "error": "optional context" }
+{ "v": 4, "type": "state", "volume": 40, "muted": false }
 ```
+
+A successful ack forbids `error`; a failed ack permits an optional string.
+`state.volume` is an integer 0–100 and `state.muted` is boolean.
 
 `matterStatus` (protocol v3) carries the Matter lifecycle plus the active mDNS
 self-check (`checking` / `visible` / `missing`; commissioned nodes use
@@ -189,7 +224,8 @@ State flows on connect and on every change (the executor observes system
 volume/mute via CoreAudio callbacks). If the socket is down, Matter writes are
 acked, the action is dropped with one WARN, and the bridge never crashes.
 
-### 2.4 `app/` — tray application (C# .NET 10 WinForms, `MatterHelm` — ADR-005)
+### 2.4 `app/` — tray application (C# .NET 10 WinForms,
+`net10.0-windows10.0.17763.0`, `MatterHelm` — ADR-005)
 
 ```
 app/MatterHelm/
@@ -203,10 +239,11 @@ app/MatterHelm/
     IpcServer.cs           loopback WS server, hello/auth, frame parsing
     Protocol.cs            typed records mirroring bridge/src/ipc/protocol.ts
   Actions/
-    ActionExecutor.cs      dispatch: playPause/next/previous/setVolume/mute/power
-    MediaKeys.cs           SendInput VK_MEDIA_* scan codes
+    ActionExecutor.cs      dispatch: play/pause/playPause/next/previous/setVolume/mute/power
+    MediaKeys.cs           SMTC absolute Play/Pause; SendInput media verbs for toggle/next/previous/stop
     SystemVolume.cs        CoreAudio IAudioEndpointVolume (get/set/observe)
-    DisplayPower.cs        SC_MONITORPOWER off / SendInput jiggle on
+    DdcDisplayPower.cs     DDC/CI VCP 0xD6 power for accepting physical displays
+    DisplayPower.cs        global blanking fallback / harmless SendInput wake nudge
   Ui/
     OverlayHud.cs          click-through, non-activating flash pop-ups:
                            static "MatterHelm" header + one command/result pill
@@ -237,8 +274,8 @@ House style: mirrors proven WinForms tray-app patterns (XML doc summaries,
 zero code imported from other repos.
 
 Concrete native techniques (WS server prefix, CoreAudio interop rules,
-SendInput-not-SMTC, message-only window for SC_MONITORPOWER, layered-window
-rules, QRCoder as the one NuGet, publish flags) are fixed by **ADR-003** —
+SMTC-only dedicated Play/Pause with logged failure, DDC/CI-first display
+power with global blanking fallback, layered-window rules, QRCoder as the one NuGet, publish flags) are fixed by **ADR-003** —
 Sprint-2 stories implement those choices, they don't reopen them.
 
 ### 2.5 Persistence & lifecycle
@@ -266,15 +303,14 @@ Sprint-2 stories implement those choices, they don't reopen them.
   trimming), bundling the sidecar exe beside it.
 - One dist folder ships both; one `build.ps1` at repo root produces it.
 
-## 3. Riskiest assumptions → Sprint 0 spikes
+## 3. Resolved feasibility findings
 
-1. **S0-3**: commissioning the uncertified bridge. Per ADR-002 a Nest hub
-   device is required and the test VID/PID must be registered in a free Google
-   Home Developer Console project first — the spike validates that recipe on
-   real hardware and explicitly verifies the Speaker endpoint's volume UX
-   (voice "set … volume to 40 %" + app slider), which Google documents but no
-   field report confirms for bridged endpoints.
-2. **S0-4**: momentary-switch auto-reset UX (Home app taps register cleanly;
-   no debounce weirdness at 800 ms) — plus commission one **Generic Switch**
-   endpoint and record how the Home app/routines surface it (ADR-002; Google
-   ships native button-press routine triggers since April 2026).
+1. **Commissioning**: S0-3 paired and persisted the bridge on real Nest Hub 2
+   hardware using a free Developer Console project and the test VID/PID. The
+   current 0.5.0 hardware checklist retains Speaker voice/slider validation as
+   an explicit release gate.
+2. **Trigger presentation**: On/Off Plug-in Units remain necessary voice/tile
+   targets. Generic Switch is only a controller event source/routine starter.
+   ADR-012 supersedes the original 800-ms default-momentary proposal: built-ins
+   and custom commands are retained by default, while a custom command can opt
+   into a next-tick reset (default delay 0 ms).

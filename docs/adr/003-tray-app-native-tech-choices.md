@@ -2,7 +2,8 @@
 
 - **Status**: accepted
 - **Date**: 2026-07-26
-- **Story**: pre-Sprint-2 (integrator feasibility research, 2026-07-26)
+- **Amended**: 2026-08-30 by S10-31 (dedicated Play/Pause only)
+- **Story**: pre-Sprint-2 (integrator feasibility research, 2026-07-26); S10-31
 
 ## Context
 
@@ -25,15 +26,27 @@ re-deciding or picking footgun variants.
    `UnregisterControlChangeNotify` on dispose, marshal `OnNotify` to the UI
    thread, and register `IMMNotificationClient` to re-acquire the endpoint on
    default-device change.
-3. **Media transport**: `SendInput` with `VK_MEDIA_*` is the primary and only
-   mechanism (system-wide, same path as hardware keys). Do NOT use
-   SMTC/`GlobalSystemMediaTransportControlsSessionManager` — wrong tool
-   (session-scoped, misses non-SMTC apps) and would force a versioned
-   `net8.0-windows10.x` TFM. Keep the plain `net8.0-windows` TFM.
-4. **Display/power**: `SC_MONITORPOWER 2` to a dedicated message-only window
-   (not `HWND_BROADCAST`) to blank; wake via `SendInput` relative mouse nudge
-   (`SC_MONITORPOWER -1` is unreliable since Win8). Sleep via WinForms
-   `Application.SetSuspendState` (handles the shutdown-privilege enable).
+3. **Media transport**: `SendInput` with `VK_MEDIA_*` remains the system-wide
+   mechanism for play/pause toggle, next, previous, and stop. Dedicated Play
+   and Pause instead use the current
+   `GlobalSystemMediaTransportControlsSessionManager` session and
+   `TryPlayAsync`/`TryPauseAsync`, with every WinRT await and the overall call
+   bounded to about two seconds. Integrator measurements against Spotify and
+   YouTube found
+   `APPCOMMAND_MEDIA_PLAY` produced Paused→Playing, Playing→Paused,
+   Paused→Playing when delivered exactly like the app: it toggles despite its
+   dedicated name. Repeated SMTC calls remained Playing→Playing and
+   Paused→Paused, confirming absolute behavior. If there is no current session,
+   SMTC rejects the verb, or the call fails/times out, return failure and WARN;
+   do not send an appcommand because it can invert the requested intent. The WinRT
+   projection is compiled by the current versioned
+   `net10.0-windows10.0.17763.0` TFM.
+4. **Display/power**: DDC/CI VCP `0xD6` is primary for each accepting physical
+   display. Only when no display accepts DDC/CI, use `SC_MONITORPOWER 2` to a
+   dedicated message-only window (not `HWND_BROADCAST`) to blank globally;
+   wake via `SendInput` relative mouse nudge (`SC_MONITORPOWER -1` is
+   unreliable since Win8). Mixed setups leave unsupported panels on. Sleep
+   uses WinForms `Application.SetSuspendState`.
 5. **Overlay HUD**: `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE |
    WS_EX_TOOLWINDOW` via `CreateParams`, `ShowWithoutActivation => true`,
    `WM_MOUSEACTIVATE => MA_NOACTIVATE`. Per-pixel alpha via
@@ -54,6 +67,10 @@ re-deciding or picking footgun variants.
   pitfalls listed as review checkpoints; zero NuGets except QRCoder.
 - **Harder**: hand-rolled CoreAudio interop is the hairiest piece (~4 COM
   interfaces) — S2-2 review must check ref-counting and thread marshalling.
+- **Dedicated Play/Pause limitation**: non-SMTC apps cannot receive these
+  absolute verbs; the failure is clearly logged. This preserves intent instead
+  of risking a toggle. A wedged session cannot indefinitely block the IPC
+  receive loop.
 - **Rollback**: each choice has a named fallback (TcpListener WS, NAudio
   CoreAudioApi subset) that swaps behind the same component interface without
   touching the protocol or UI.

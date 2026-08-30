@@ -1,6 +1,7 @@
 # S0-3 spike: commission an uncertified matter.js bridge with Google Home
 
-**Status**: prepared — awaiting human hardware run
+**Status**: completed 2026-07-26 for pairing/persistence; Speaker and transport
+UX validation moved to the current product E2E checklist
 **Spike code**: `bridge/spike/pairing-spike.ts` (throwaway; see BACKLOG S0-3, ADR-002)
 
 ## Purpose

@@ -1,72 +1,79 @@
-# Public-launch checklist
+# Public-launch checklist — 0.5.0
 
-Gate list for taking the repository public and announcing it. Ordered:
-blockers first, then strongly-recommended, then post-launch. Compiled
-2026-08-23 against current community-standards practice (GitHub community
-profile items; the distribution patterns of the most-adopted Windows OSS
-apps — PowerToys, ShareX, Files — GitHub Releases + installer + portable +
-checksums, winget as the developer-facing channel).
+Do not tag, publish, or announce 0.5.0 until every blocker is checked with
+evidence from the exact release candidate. Historical 0.3/0.4 evidence does
+not satisfy a 0.5.0 row.
 
-## Blockers — do not flip the repo public before these
+## Release blockers
 
-- [x] **Icon half of the CSA trademark review — resolved 2026-08-23**: the
-  tray icon is now an original ship's-helm glyph (owner picked candidate A;
-  the certification-mark drawing is archived, unshipped, in
-  `Ui/TrayIcons.cs`). Remaining:
-- [ ] **Name half of the CSA review (NOTICE).** "MatterHelm" contains
-  "Matter", used descriptively for protocol compatibility (as matter.js,
-  python-matter-server, HA Matter Hub do). Non-affiliation language is in
-  README/NOTICE. Give it a final look against the CSA brand guidelines —
-  a human/legal call, though the descriptive-use position is the ecosystem
-  norm.
-- [x] **Repo history scan — clean 2026-08-23.** `gitleaks detect` over the
-  full history: **89 commits, ~3.03 MB scanned, no leaks found.** (Re-run
-  immediately before flipping public if more history has landed by then.)
-- [ ] **Hardware E2E pass** (`docs/e2e-log.md`) — needs the human (phone +
-  Google Home app + Nest hub). The checklist is prepared and pointed at the
-  **v0.3.0 release build** (the one running on the HTPC), with sections
-  added for everything shipped since it was written: distribution
-  (installer + portable + checksums), macros/system commands, overlay
-  theme/opacity, repeat-command behaviour.
+- [ ] **Documentation/version gate:** README, `[Unreleased]` changelog,
+  user/distribution guides, BLUEPRINT §§2.2–2.3, ADR status/supersession,
+  backlog, E2E and this checklist agree with the final code. Set version/date
+  only at tag time.
+- [ ] **Windows floor re-check:** copy the final `TargetFramework` values from
+  both C# projects into README/user/distribution docs and record them here.
+  Documentation pass value: `net10.0-windows10.0.17763.0`; concurrent source
+  work means the integrator must re-check it.
+- [ ] **Bridge merge gate:** run `cd bridge; npm.cmd run verify`; expected
+  inventory is 391 tests. Documentation sandbox evidence is alternate runner
+  391/391, but standard Vitest startup hit `spawn EPERM`; paste a clean standard
+  summary here: **PLACEHOLDER**.
+- [ ] **App merge gate:** run
+  `& 'C:\Program Files\dotnet\dotnet.exe' test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release`;
+  expected inventory is 720 tests. Documentation sandbox result was 674 pass /
+  46 fail from invalid `HttpListener` handles and downstream timeouts; paste a
+  clean normal-environment summary here: **PLACEHOLDER**.
+- [ ] **Protocol parity:** verify exact-v4 frame union/fields in
+  `bridge/src/ipc/protocol.ts`, `app/MatterHelm/Sidecar/Protocol.cs`, and
+  BLUEPRINT §2.3; focused parity tests green.
+- [ ] **Exact artifacts:** build and retain names/hashes for
+  `MatterHelm-Setup-<version>.exe`,
+  `matterhelm-v<version>-win-x64.zip`, and `SHA256SUMS.txt`. Confirm the zip
+  includes app files, sidecar, `LICENSE`, `NOTICE`, and `README-dist.md`.
+- [ ] **0.4.x upgrade:** run `docs/e2e-log.md` against an existing installed
+  copy with old custom commands. Confirm config/fabric retention, default
+  retained/both-edge migration, reset opt-in, new Play/Pause and Power
+  meanings, and protocol-v4 matching-sidecar startup.
+- [ ] **Fresh first run/pairing:** unpaired menu shows **Pair with Google
+  Home…** (starts/persists bridge) and hides **Enable bridge**. Validate
+  gray/amber/blue/green/red states and fresh pairing on real Google/Nest
+  hardware.
+- [ ] **0.5.0 behavior hardware pass:** complete every non-destructive row in
+  `docs/e2e-log.md`, including retained switches, SMTC success/safe failure,
+  custom reset, all Power modes, DDC mixed-monitor policy, mDNS selection and
+  factory-reset auto-re-pair flow.
+- [ ] **Updater:** exercise installed and portable updates with the exact
+  assets; hash mismatch must fail safely. Confirm daily/manual checks remain
+  consent-gated.
+- [ ] **Clean-machine smoke:** installer and portable run without preinstalled
+  Node/.NET and without admin rights; firewall guidance is accurate.
+- [ ] **Security/release hygiene:** `npm audit`, dependency/license review,
+  secret scan of current full history, and privacy-scrubbed diagnostics export
+  pass on the final tree.
+- [ ] **Trademark/name review:** human/legal confirmation that MatterHelm name,
+  NOTICE, README non-affiliation wording, and original helm icon are acceptable.
 
-## Strongly recommended before announcing
+## Strongly recommended before announcement
 
-- [x] **Dependabot** — `.github/dependabot.yml` keeps npm, NuGet, and GitHub
-  Actions current with grouped weekly PRs (works while private; the alert
-  *feed* needs the repo setting enabled in Settings → Advanced Security).
-- [ ] Enable the rest in **repo settings** (these are UI toggles, not files;
-  several require the repo to be public or GitHub Advanced Security):
-  Discussions (Q&A + Show-and-tell), Dependabot alerts + security updates,
-  secret scanning + push protection, branch protection on `main`
-  (require CI green; CODEOWNERS review).
-- [x] **Release hygiene — proven by v0.3.0 (2026-08-23)**: the tag published
-  `MatterHelm-Setup-0.3.0.exe` + `matterhelm-v0.3.0-win-x64.zip` +
-  `SHA256SUMS.txt` with generated notes. Remaining, and the single biggest
-  first-run friction: **code-signing** (an OV cert or Azure Trusted
-  Signing) to stop the SmartScreen prompt - a purchase decision, not a
-  code change.
-- [ ] **README screenshots/GIF** — settings window, overlay flash, Home-app
-  tiles. The single highest-leverage README improvement not yet done
-  (needs curated captures of the real UI).
-- [x] **Repo topics + description — set 2026-08-23** (9 topics: matter,
-  matter-protocol, google-home, home-automation, smart-home, windows,
-  tray-application, htpc, dotnet). Still to set when public: the website
-  field (user-guide link).
+- [ ] Capture current Settings, overlay, pairing and Home-tile screenshots.
+- [ ] Enable Discussions, Dependabot/security alerts, secret scanning/push
+  protection, and `main` branch protection as available.
+- [ ] Record installer/portable sizes and rerun ADR-007 CPU/private-memory/cold
+  start budgets on the release artifacts.
+- [ ] Decide code-signing path or explicitly accept the documented SmartScreen
+  warning for this release.
+
+## Already present (must still be spot-checked)
+
+- [x] MIT `LICENSE`, trademark/third-party `NOTICE`, `CONTRIBUTING`, `SECURITY`,
+  Contributor Covenant, `SUPPORT`, issue forms, PR template, and CODEOWNERS.
+- [x] CI/release workflows, installer + portable packaging, checksums,
+  Dependabot, measured resource budgets, and local privacy-scrubbed diagnostics.
+- [x] Original helm tray icon and non-affiliation language.
 
 ## Post-launch
 
-- [ ] **winget manifest** (`winget-pkgs` PR) once the first public installer
-  release exists — the standard developer-facing install channel.
-- [ ] Watch items already in BACKLOG: Google test-VID commissioning-policy
-  changes, Matter 1.6 DeviceLoadStatus, IPv6 privacy-address spike.
-- [ ] Issue triage cadence + `good first issue` labels once traffic exists.
-
-## Already in place (verified 2026-08-23)
-
-MIT LICENSE · NOTICE (trademark + third-party) · README (features, install,
-verify, docs map, build-from-source) · CONTRIBUTING · SECURITY (private
-advisories) · Contributor Covenant CoC · SUPPORT · issue forms + PR template
-· CODEOWNERS · Keep-a-Changelog · CI on 3 jobs with coverage gates ·
-tag-triggered release workflow (portable zip + installer + SHA256SUMS) ·
-791 automated tests · measured resource budgets (ADR-007) · privacy-scrubbed
-diagnostics export · docs with zero references to private/external projects.
+- [ ] Submit a winget manifest after the first public installer release.
+- [ ] Monitor Google test-VID policy, Matter/matter.js changes, controller
+  reconnect behavior, and upstream resolution of ADR-010.
+- [ ] Establish issue triage cadence and label approachable issues.

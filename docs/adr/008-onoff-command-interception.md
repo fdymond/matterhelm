@@ -1,9 +1,14 @@
 # ADR-008: dispatch plug actions from OnOff commands, not attribute changes
 
-- **Status**: accepted
+- **Status**: accepted; momentary/reset semantics superseded by ADR-012
 - **Date**: 2026-08-16
 - **Story**: S8-1 (owner-directed: "is there any alternative to using on/off
   switch logic to trigger functionality?")
+
+The command-interception decision remains binding. ADR-012 explicitly
+supersedes this ADR's former all-momentary reset scheduler, its 300-ms default,
+and the S8-4 rule that all built-ins/custom endpoints share identical both-edge
+semantics.
 
 ## Context
 
@@ -42,9 +47,10 @@ Alternatives considered and rejected, in the same pass:
   supported by matter.js, but Google does not surface them (re-verified
   2026-08-02, `docs/routines.md`). Stays in the icebox pending Google release
   notes.
-- **Both-edge dispatch with no reset** (every OnOff flip fires the action).
-  Halves the traffic but forces the user to alternate "turn on"/"turn off" by
-  voice, which fails goal G1.
+- **Both-edge dispatch with no reset** was rejected at the time. ADR-012 later
+  adopted it for Next, Previous, and retained custom commands after controller
+  echo evidence showed state retention was safer than timed reset. Play/Pause
+  instead gives the two edges distinct meanings.
 
 ## Decision
 
@@ -55,14 +61,14 @@ Dispatch On/Off **plug** actions from the command invocation.
   cluster features and conformance are unchanged — overriding `on()`/`off()`
   to notify an observer registered per Matter endpoint id. matter.js types stay
   behind the adapter; the observer contract is plain data.
-- `matter/bridge.ts` wires every plug (the momentary transport buttons, every
-  ADR-004 custom command, and the stateful power switch) to that observer via
-  `makePlugCommandHandler`, and **deletes** the attribute-change dispatch path
-  for plugs — keeping both would double-fire each press. The reset scheduler is
-  armed and cancelled by the command too.
-- The auto-reset window is now **presentation only** (it returns the Home app
-  tile to `off` so a press looks like a press). Its default stays 300 ms and it
-  stays configurable; dispatch no longer depends on it.
+- `matter/bridge.ts` wires every plug to that observer and **deletes** the
+  attribute-change dispatch path for plugs — keeping both would double-fire.
+  Current per-endpoint mapping is defined by ADR-012: retained Play/Pause,
+  Next/Previous, reversible Power and default custom commands; next-tick-reset
+  irreversible Power; configurable reset only for opted-in custom commands.
+- The global reset window now applies only to custom commands whose
+  `resetAfterActivation` is true. Its default is 0 ms (next tick), and dispatch
+  never depends on the reset.
 - The **Speaker endpoint is deliberately excluded**. Its state is written
   locally by the tray app and read back, which is exactly what the
   `EchoSuppressor` exists for; attribute observation is the right model there,
@@ -74,15 +80,14 @@ Dispatch On/Off **plug** actions from the command invocation.
   identity, ids, VID/PID and the `uniqueId` seed are byte-identical, so no
   re-pairing.
 
-This amends BLUEPRINT §2.2's "Momentary semantics" paragraph.
+This command-source decision is incorporated in BLUEPRINT §2.2. ADR-012 is
+the authority for endpoint state/reset semantics.
 
 ## Consequences
 
-- **Easier**: repeated identical commands work — by voice, by routine, and by
-  app tile. The reset window becomes a UX knob rather than a correctness
-  dependency, so it can be tuned freely. One subscription report per press
-  instead of two. Local reset writes invoke no command, so they cannot echo
-  back as a press — no suppression logic needed on the plug path.
+- **Easier**: repeated identical commands reach the command observer. Local
+  reset writes invoke no command, so they cannot echo back as a press; no
+  suppression logic is needed on the plug path.
 - **Harder**: the product now depends on a matter.js *behavior override*, a
   deeper API surface than the public event subscriptions it replaces. If
   matter.js changes the `on()`/`off()` delegation contract, transport silently
@@ -97,7 +102,7 @@ This amends BLUEPRINT §2.2's "Momentary semantics" paragraph.
   Google-side, not bridge-tunable. Only real hardware can decide this; rows are
   in `docs/e2e-log.md`.
 
-## Amendment 2026-08-16 (S8-4): momentary endpoints dispatch on Off too
+## Superseded amendment 2026-08-16 (S8-4): momentary endpoints dispatched on Off too
 
 The watch item resolved on real hardware the same day, in a sharper form than
 predicted: the Home app's tile is a **toggle over Google's own state model**,
@@ -108,16 +113,10 @@ to toggle off manually before the next press worked (owner-reported;
 re-typing the device to "Switch" in the Home app changes the icon only, not
 the toggle semantics).
 
-Decision: a momentary endpoint is stateless, so **any** OnOff command a
-controller sends it is a button press — `mapping/actions.ts` now dispatches
-the momentary built-ins and custom commands on both `On` and `Off`
-(`clusterWriteToAction` became total; the stateful `power` endpoint keeps its
-distinct on/off meanings). This is only safe because of this ADR's core
-change: the auto-reset is a local attribute write that never reaches the
-command observer, so an observed `Off` is always controller-sent, never our
-own reset echo. Pre-ADR-008 this fix was impossible — the reset echo and the
-controller's Off were indistinguishable on the attribute-change path.
-
-Consequence: voice "turn **off** HTPC Next" now also presses next. That reads
-as intent (the phrase names the device) and is the price of taps that always
-fire; documented in the user guide.
+Historical decision: every then-momentary built-in/custom endpoint dispatched
+both On and Off. ADR-012 supersedes that shared policy. Current behavior is:
+Play/Pause maps On to Play and Off to Pause; Next/Previous and retained custom
+commands dispatch on both edges; reset-enabled custom commands dispatch only
+On; reversible Power maps each edge to its direction; irreversible Power
+dispatches only Off. The core safety fact remains: local attribute writes never
+reach the command observer.
