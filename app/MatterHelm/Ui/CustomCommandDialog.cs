@@ -35,7 +35,8 @@ public sealed class CustomCommandDialog : Form
     private const int LaunchActionIndex = 1;
     private const int KeySequenceActionIndex = 2;
     private const int SystemActionIndex = 3;
-    private const int SequenceMacroActionIndex = 4;
+    private const int MouseMoveActionIndex = 4;
+    private const int SequenceMacroActionIndex = 5;
 
     private readonly SettingsViewModel _vm;
     private readonly string? _originalKey;
@@ -55,6 +56,10 @@ public sealed class CustomCommandDialog : Form
     private readonly TableLayoutPanel _sequenceRow;
     private readonly ComboBox _systemCombo;
     private readonly TableLayoutPanel _systemRow;
+    private readonly ComboBox _mouseTargetCombo;
+    private readonly NumericUpDown _mouseX;
+    private readonly NumericUpDown _mouseY;
+    private readonly TableLayoutPanel _mouseRow;
     private readonly ListBox _stepsList;
     private readonly Button _editStepButton;
     private readonly Button _removeStepButton;
@@ -134,6 +139,7 @@ public sealed class CustomCommandDialog : Form
         _actionTypeCombo.Items.Add("Launch a program");
         _actionTypeCombo.Items.Add("Key sequence");
         _actionTypeCombo.Items.Add("System command");
+        _actionTypeCombo.Items.Add("Move the mouse");
         _actionTypeCombo.Items.Add("Command sequence (macro)");
         _actionTypeCombo.SelectedIndexChanged += (_, _) => OnActionTypeChanged();
         AddRow(grid, "Action", _actionTypeCombo);
@@ -203,6 +209,21 @@ public sealed class CustomCommandDialog : Form
         _systemCombo.SelectedIndex = 0;
         _systemRow = SubGrid(grid);
         AddRow(_systemRow, "Command", _systemCombo);
+
+        _mouseTargetCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(240) };
+        foreach ((_, string label) in SettingsViewModel.MouseTargetChoices)
+        {
+            _mouseTargetCombo.Items.Add(label);
+        }
+
+        _mouseTargetCombo.SelectedIndex = 0;
+        _mouseTargetCombo.SelectedIndexChanged += (_, _) => UpdateMouseCoordinateVisibility();
+        _mouseX = CoordinateEditor();
+        _mouseY = CoordinateEditor();
+        _mouseRow = SubGrid(grid);
+        AddRow(_mouseRow, "Target", _mouseTargetCombo);
+        AddRow(_mouseRow, "X", _mouseX);
+        AddRow(_mouseRow, "Y", _mouseY);
 
         // S8-3 macro editor: ordered step list + add/edit/remove/reorder.
         // Steps open SequenceStepDialog (the non-sequence action types plus a
@@ -292,6 +313,17 @@ public sealed class CustomCommandDialog : Form
                     0,
                     SettingsViewModel.SystemCommandChoices.ToList().FindIndex(c => c.Command == system.Command));
                 break;
+            case MouseMoveActionConfig mouseMove:
+            {
+                _actionTypeCombo.SelectedIndex = MouseMoveActionIndex;
+                MouseMoveEditorState state = MouseMoveEditorState.FromAction(mouseMove);
+                _mouseTargetCombo.SelectedIndex = Math.Max(
+                    0,
+                    SettingsViewModel.MouseTargetChoices.ToList().FindIndex(c => c.Target == state.Target));
+                _mouseX.Value = state.X;
+                _mouseY.Value = state.Y;
+                break;
+            }
             case SequenceActionConfig sequence:
                 _actionTypeCombo.SelectedIndex = SequenceMacroActionIndex;
                 _steps.AddRange(sequence.Steps);
@@ -301,8 +333,7 @@ public sealed class CustomCommandDialog : Form
                 _actionTypeCombo.SelectedIndex = MediaKeyActionIndex;
                 if (existing?.Action is MediaKeyActionConfig mediaKey)
                 {
-                    int index = SettingsViewModel.MediaKeyChoices.ToList().FindIndex(c => c.Key == mediaKey.KeyName);
-                    _mediaKeyCombo.SelectedIndex = Math.Max(0, index);
+                    _mediaKeyCombo.SelectedIndex = MediaKeyIndex(mediaKey.KeyName);
                 }
 
                 break;
@@ -349,15 +380,25 @@ public sealed class CustomCommandDialog : Form
 
     private bool IsSystemAction => _actionTypeCombo.SelectedIndex == SystemActionIndex;
 
+    private bool IsMouseMoveAction => _actionTypeCombo.SelectedIndex == MouseMoveActionIndex;
+
     private bool IsMacroAction => _actionTypeCombo.SelectedIndex == SequenceMacroActionIndex;
 
     private void OnActionTypeChanged()
     {
-        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction && !IsSystemAction && !IsMacroAction;
+        _mediaKeyRow.Visible = !IsLaunchAction && !IsKeySequenceAction && !IsSystemAction && !IsMouseMoveAction && !IsMacroAction;
         _launchRows.Visible = IsLaunchAction;
         _sequenceRow.Visible = IsKeySequenceAction;
         _systemRow.Visible = IsSystemAction;
+        _mouseRow.Visible = IsMouseMoveAction;
         _macroRow.Visible = IsMacroAction;
+        UpdateMouseCoordinateVisibility();
+        if (IsMouseMoveAction)
+        {
+            _resetAfterActivationCheck.Checked = false;
+        }
+
+        _resetAfterActivationCheck.Enabled = !IsMouseMoveAction;
         _captureToggle.Checked = false; // leaving the row always disarms capture
         Revalidate();
     }
@@ -534,8 +575,12 @@ public sealed class CustomCommandDialog : Form
             {
                 Command = SettingsViewModel.SystemCommandChoices[Math.Max(0, _systemCombo.SelectedIndex)].Command,
             },
+            MouseMoveActionIndex => new MouseMoveEditorState(
+                SettingsViewModel.MouseTargetChoices[Math.Max(0, _mouseTargetCombo.SelectedIndex)].Target,
+                decimal.ToInt32(_mouseX.Value),
+                decimal.ToInt32(_mouseY.Value)).ToAction(),
             SequenceMacroActionIndex => new SequenceActionConfig { Steps = [.. _steps] },
-            _ => new MediaKeyActionConfig { KeyName = SettingsViewModel.MediaKeyChoices[Math.Max(0, _mediaKeyCombo.SelectedIndex)].Key },
+            _ => new MediaKeyActionConfig { KeyName = MediaKeyFromIndex(_mediaKeyCombo.SelectedIndex) },
         };
         Result = new CustomCommandConfig
         {
@@ -552,6 +597,44 @@ public sealed class CustomCommandDialog : Form
     /// <summary>Canonical form of a sequence the validator already accepted (case-insensitive input, canonical casing out — the config stores canonical only).</summary>
     private static string CanonicalSequence(string sequence) =>
         KeyChord.TryParse(sequence, out ParsedKeyChord? chord, out _) ? chord.Canonical : sequence;
+
+    /// <summary>Pure media-key editor mapping used by initialization and UI round-trip tests.</summary>
+    internal static int MediaKeyIndex(MediaKeyName key) =>
+        Math.Max(0, SettingsViewModel.MediaKeyChoices.ToList().FindIndex(choice => choice.Key == key));
+
+    /// <summary>Pure inverse of <see cref="MediaKeyIndex"/>; an unselected combo uses its first choice.</summary>
+    internal static MediaKeyName MediaKeyFromIndex(int index) =>
+        SettingsViewModel.MediaKeyChoices[Math.Max(0, index)].Key;
+
+    private static NumericUpDown CoordinateEditor() => new()
+    {
+        Minimum = int.MinValue,
+        Maximum = int.MaxValue,
+        Width = 120,
+        ThousandsSeparator = true,
+    };
+
+    private void UpdateMouseCoordinateVisibility()
+    {
+        bool visible = IsMouseMoveAction
+            && SettingsViewModel.MouseTargetChoices[Math.Max(0, _mouseTargetCombo.SelectedIndex)].Target == MouseTarget.Custom;
+        _mouseX.Enabled = visible;
+        _mouseY.Enabled = visible;
+    }
+
+    /// <summary>Pure editor mapping shared by initialization, OK, and UI round-trip tests.</summary>
+    internal readonly record struct MouseMoveEditorState(MouseTarget Target, int X, int Y)
+    {
+        internal static MouseMoveEditorState FromAction(MouseMoveActionConfig action) =>
+            new(action.Target, action.X ?? 0, action.Y ?? 0);
+
+        internal MouseMoveActionConfig ToAction() => new()
+        {
+            Target = Target,
+            X = Target == MouseTarget.Custom ? X : null,
+            Y = Target == MouseTarget.Custom ? Y : null,
+        };
+    }
 
     /// <summary>Logical (96-dpi) pixels → device pixels; see SettingsWindow's DPI note.</summary>
     private int S(int logical) => LogicalToDeviceUnits(logical);

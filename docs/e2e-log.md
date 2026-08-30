@@ -26,7 +26,7 @@ that will be released, using a Google/Nest Matter hub and Google Home app.
 |---|---|---|---|
 | `cd bridge; npm.cmd run verify` | Typecheck, lint/format and all 391 bridge tests pass with zero warnings | Docs sandbox: type/lint/format pass; standard Vitest startup `spawn EPERM`; alternate native-loader runner 391/391. **Integrator clean standard run required.** | |
 | `& 'C:\Program Files\dotnet\dotnet.exe' test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release` | App builds and all 720 discovered tests pass with zero warnings | Docs sandbox: 674 passed, 46 failed (`HttpListener` invalid handle/downstream timeouts). **Integrator clean run required.** | |
-| Compare `bridge/src/ipc/protocol.ts` with `app/MatterHelm/Sidecar/Protocol.cs` and BLUEPRINT §2.3 | Message revision 4, handshake protocol 1, same strict frame union/fields | | |
+| Compare `bridge/src/ipc/protocol.ts` with `app/MatterHelm/Sidecar/Protocol.cs` and BLUEPRINT §2.3 | Message revision 5, handshake protocol 1, same strict frame union/fields including custom `on` | | |
 | Build release artifacts and verify `SHA256SUMS.txt` | Installer and portable hashes match | | |
 
 ## Upgrade from 0.4.x
@@ -41,8 +41,8 @@ its old config without `resetAfterActivation`. Record its key and action.
 | Tick **Reset the switch after it runs**, save, then send On | Only On runs; tile returns to Off after Tap reset delay (0 = next tick); local reset does not run again | | |
 | Exercise existing Play/Pause tile | State is retained: On requests Play, Off requests Pause; no automatic reset | | |
 | Exercise existing Power tile in each configured mode | Behavior matches the Power matrix below; topology/pairing remains intact | | |
-| Inspect startup/IPC logs | Matching bundled sidecar connects at `v:4`; no migration action is requested from the user | | |
-| In an isolated test setup, attempt a known-stale sidecar peer | Exact-v4 parser rejects it and logs a version mismatch; current tray/sidecar still connect when launched together | | |
+| Inspect startup/IPC logs | Matching bundled sidecar connects at `v:5`; no migration action is requested from the user | | |
+| In an isolated test setup, attempt a known-stale sidecar peer | Exact-v5 parser rejects it and logs a version mismatch; current tray/sidecar still connect when launched together | | |
 
 ## Distribution and updater paths
 
@@ -77,7 +77,8 @@ its old config without `resetAfterActivation`. Record its key and action.
 | With Spotify paused and exposed through SMTC, turn Play/Pause On twice | First and repeated On request Play; playback never pauses; log identifies SMTC success | | |
 | With Spotify playing, turn Play/Pause Off twice | First and repeated Off request Pause; playback never resumes; log identifies SMTC success | | |
 | Repeat absolute Play/Pause against YouTube in a browser with a current SMTC session | On=Play and Off=Pause; no toggle inversion | | |
-| Use a player with no usable SMTC session | Request fails and a warning names no current/rejected/timed-out session; no appcommand/media toggle is sent | | |
+| Focus Kodi while Chrome owns a stale paused SMTC session; send Pause | Kodi receives Pause; Chrome is untouched; log says different owner and unverifiable rather than short-circuiting | | |
+| Send the same dedicated Pause to focused sessionless Kodi twice within two seconds, then once after | Immediate repeat is logged/suppressed; the later command is delivered with the documented toggle-risk warning | | |
 | Transition Next On→Off→On at natural speed | Next fires once per transition; switch retains each state; no auto-reset | | |
 | Transition Previous On→Off→On | Previous fires once per transition; switch retains each state | | |
 | Fire rapid commands and click through the overlay | One in-place HUD, no stack/flicker/focus theft; clicks pass through | | |

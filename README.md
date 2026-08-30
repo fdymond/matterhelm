@@ -152,10 +152,12 @@ You'll get tiles for **HTPC Speaker**, **HTPC Play Pause**, **HTPC Next**,
 > "Hey Google, set HTPC Speaker volume to 40 %"
 > "Hey Google, turn on HTPC Play Pause"
 
-Play/Pause On requests Play and Off requests Pause through the current Windows
-media session. If no usable session is available or rejects/times out, the
-request fails and is logged; MatterHelm deliberately sends no appcommand
-fallback because measured appcommands can toggle and invert intent. Next and
+Play/Pause On requests Play and Off requests Pause in the focused program
+first. MatterHelm verifies or falls back through a Windows media session only
+when its owner matches the focused app; a different app's stale session cannot
+suppress or prove the command. If focused delivery fails, the current session
+becomes the absolute fallback target. Sessionless players such as Kodi remain
+usable but explicitly unverifiable. Next and
 Previous retain their displayed state and fire once on either user transition.
 
 For natural phrasing like *"pause the HTPC"*, set up Google Home routines —

@@ -268,6 +268,37 @@ public static class BridgeHostTests
         }
 
         [Fact]
+        public void ConfigChangeReconcilesRetainedMouseCapturesAgainstEnabledMouseCommands()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"), "config.json");
+            var executor = new ReleaseRecordingExecutor();
+            var config = new Config(path, (_, _) => { });
+            config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "park-mouse",
+                    Name = "Park Mouse",
+                    Action = new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+                },
+            ];
+            Assert.True(config.Save());
+            using var host = new BridgeHost(
+                config,
+                executor,
+                new SidecarSpec("unused.exe", [], Path.GetTempPath()),
+                log: (_, _) => { });
+            var external = new Config(path, (_, _) => { });
+            external.Current.Commands.Custom[0].Enabled = false;
+            Assert.True(external.Save());
+
+            config.Reload();
+
+            Assert.Equal(["park-mouse"], executor.MouseReconciliations[0]);
+            Assert.Empty(executor.MouseReconciliations[1]);
+        }
+
+        [Fact]
         public void PowerRoutingUsesTheCapturedSessionPolicyWhenLiveConfigChanges()
         {
             var executor = new ReleaseRecordingExecutor();
@@ -321,6 +352,8 @@ public static class BridgeHostTests
 
             public int ReleaseCalls { get; private set; }
 
+            public List<HashSet<string>> MouseReconciliations { get; } = [];
+
             public IReadOnlyList<(string Name, object? Value)> Calls => _calls;
 
             public bool Execute(string name, object? value = null)
@@ -335,11 +368,48 @@ public static class BridgeHostTests
                 return true;
             }
 
+            public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
+                MouseReconciliations.Add([.. activeCommandKeys]);
+
             public VolumeState GetVolumeState() => new(50, false);
 
             public void Dispose()
             {
             }
+        }
+    }
+
+    public sealed class CustomActionRouting
+    {
+        [Theory]
+        [InlineData(true, true)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        public void MouseMoveDispatcherCarriesCommandKeyConfigAndEdgeToExecutor(bool on, bool executorResult)
+        {
+            var action = new MouseMoveActionConfig { Target = MouseTarget.Custom, X = -5, Y = 10 };
+            string? verb = null;
+            object? payload = null;
+
+            (bool ok, string pill, string? error) = BridgeHost.RouteMouseMoveAction(
+                "park-mouse",
+                action,
+                on,
+                (name, value) =>
+                {
+                    verb = name;
+                    payload = value;
+                    return executorResult;
+                });
+
+            Assert.Equal(executorResult, ok);
+            Assert.Equal(executorResult ? on ? "mouse moved" : "mouse restored" : "failed", pill);
+            Assert.Equal("mouseMove", verb);
+            MouseMoveRequest request = Assert.IsType<MouseMoveRequest>(payload);
+            Assert.Equal("park-mouse", request.CommandKey);
+            Assert.Same(action, request.Action);
+            Assert.Equal(on, request.On);
+            Assert.Equal(executorResult, error is null);
         }
     }
 
@@ -556,7 +626,7 @@ public static class BridgeHostTests
         public async Task ActionFrameExecutesFlashesOverlayAndAcksOkThenDisableGoesGray()
         {
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -564,7 +634,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive setVolume 25");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -593,7 +663,7 @@ public static class BridgeHostTests
         public async Task DedicatedTransportActionExecutesTheMatchingAbsoluteVerb(string verb)
         {
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"{{verb}}"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"{{verb}}"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -607,12 +677,12 @@ public static class BridgeHostTests
         {
             _executor.NextResult = false;
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":false,"error":"action failed: volume 25 %"}"""),
+                    $$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":false,"error":"action failed: volume 25 %"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack with the intent text");
 
@@ -631,14 +701,14 @@ public static class BridgeHostTests
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":4,"type":"state","volume":55,"muted":false}"""),
+                () => _log.ContainsMessage("""recv {"v":5,"type":"state","volume":55,"muted":false}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the on-connect state snapshot");
 
             _executor.RaiseVolumeChanged(new VolumeState(61, true));
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":4,"type":"state","volume":61,"muted":true}"""),
+                () => _log.ContainsMessage("""recv {"v":5,"type":"state","volume":61,"muted":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the volume-change state frame");
         }
@@ -651,11 +721,11 @@ public static class BridgeHostTests
             // read-back right after a command must be swallowed; a genuinely
             // different change must still publish.
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -665,7 +735,7 @@ public static class BridgeHostTests
             _executor.RaiseVolumeChanged(new VolumeState(40, false));
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage("""recv {"v":4,"type":"state","volume":40,"muted":false}"""),
+                () => _log.ContainsMessage("""recv {"v":5,"type":"state","volume":40,"muted":false}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the genuine volume-change state frame");
 
@@ -673,7 +743,7 @@ public static class BridgeHostTests
             // to land before asserting it never does.
             await Task.Delay(250);
             Assert.False(
-                _log.ContainsMessage("""recv {"v":4,"type":"state","volume":26,"muted":false}"""),
+                _log.ContainsMessage("""recv {"v":5,"type":"state","volume":26,"muted":false}"""),
                 "the ±1 echo of the commanded volume must be suppressed");
         }
 
@@ -681,7 +751,7 @@ public static class BridgeHostTests
         public async Task PairingFrameSurfacesWithPayloadAndFlashesTheOverlay()
         {
             using var host = CreateHost(NodeClientSpec(
-                """{"v":4,"type":"pairing","qrPayload":"MT:TEST","manualCode":"1111-222-3333"}"""));
+                """{"v":5,"type":"pairing","qrPayload":"MT:TEST","manualCode":"1111-222-3333"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -708,7 +778,7 @@ public static class BridgeHostTests
         public async Task MissingAdvertisementProducesErrorOverlayLogAndFaultedTrayState()
         {
             using var host = CreateHost(NodeClientSpec(
-                """{"v":4,"type":"matterStatus","commissioned":false,"advertisement":"missing"}"""));
+                """{"v":5,"type":"matterStatus","commissioned":false,"advertisement":"missing"}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -736,7 +806,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"stop-media"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"stop-media","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -744,7 +814,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive mediaStop");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -772,7 +842,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"abs-key"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"abs-key","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -797,7 +867,7 @@ public static class BridgeHostTests
             ];
             _executor.State = new VolumeState(45, false);
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"volume-nudge"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"volume-nudge","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -824,11 +894,11 @@ public static class BridgeHostTests
         {
             _executor.State = new VolumeState(42, false);
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setMuted","value":true}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"setMuted","value":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -854,7 +924,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -862,7 +932,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the launch request");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -885,7 +955,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"paste-plain"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"paste-plain","on":true}"""));
             host.SetEnabled(true);
 
             // The executor seam receives the PARSED chord (records compare by
@@ -897,7 +967,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the parsed Ctrl+Shift+V chord");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -906,6 +976,116 @@ public static class BridgeHostTests
                 // ADR-004: the overlay flashes the command's display name.
                 Assert.Contains(new OverlayContent("Google Home → Paste Plain", "Ctrl+Shift+V sent", false), _overlay);
             }
+        }
+
+        [Fact]
+        public async Task CustomMouseMoveActionDispatchesKeyTargetAndProtocolEdge()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "park-mouse",
+                    Name = "Park Mouse",
+                    Action = new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"park-mouse","on":true}"""));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Any(call => call.Name == "mouseMove"),
+                TimeSpan.FromSeconds(10),
+                "executor to receive the mouseMove request");
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the ok ack");
+
+            (string name, object? value) = Assert.Single(_executor.Calls);
+            Assert.Equal("mouseMove", name);
+            MouseMoveRequest request = Assert.IsType<MouseMoveRequest>(value);
+            Assert.Equal("park-mouse", request.CommandKey);
+            Assert.Equal(MouseTarget.BottomRight, request.Action.Target);
+            Assert.True(request.On);
+        }
+
+        [Fact]
+        public async Task CustomMouseProtocolPreservesOffBeforeOnRepeatedOnAndMultipleCommandEdges()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "park-mouse",
+                    Name = "Park Mouse",
+                    Action = new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+                },
+                new CustomCommandConfig
+                {
+                    Key = "park-left",
+                    Name = "Park Left",
+                    Action = new MouseMoveActionConfig { Target = MouseTarget.BottomLeft },
+                },
+            ];
+            string[] frames =
+            [
+                "{\"v\":5,\"type\":\"action\",\"id\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"custom\",\"key\":\"park-mouse\",\"on\":false}",
+                "{\"v\":5,\"type\":\"action\",\"id\":\"00000000-0000-4000-8000-000000000002\",\"name\":\"custom\",\"key\":\"park-mouse\",\"on\":true}",
+                "{\"v\":5,\"type\":\"action\",\"id\":\"00000000-0000-4000-8000-000000000003\",\"name\":\"custom\",\"key\":\"park-mouse\",\"on\":true}",
+                "{\"v\":5,\"type\":\"action\",\"id\":\"00000000-0000-4000-8000-000000000004\",\"name\":\"custom\",\"key\":\"park-left\",\"on\":true}",
+                "{\"v\":5,\"type\":\"action\",\"id\":\"00000000-0000-4000-8000-000000000005\",\"name\":\"custom\",\"key\":\"park-left\",\"on\":false}",
+            ];
+            using var host = CreateHost(NodeClientSpec(frames));
+            host.SetEnabled(true);
+
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Count == frames.Length,
+                TimeSpan.FromSeconds(10),
+                "executor to receive every custom mouse edge");
+
+            MouseMoveRequest[] requests = _executor.Calls
+                .Select(call => Assert.IsType<MouseMoveRequest>(call.Value))
+                .ToArray();
+            Assert.Equal(
+                [false, true, true, true, false],
+                requests.Select(request => request.On));
+            Assert.Equal(
+                ["park-mouse", "park-mouse", "park-mouse", "park-left", "park-left"],
+                requests.Select(request => request.CommandKey));
+        }
+
+        [Fact]
+        public async Task CustomMouseOffEdgeIsPreservedAcrossSidecarRestart()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "park-mouse",
+                    Name = "Park Mouse",
+                    Action = new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec(
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"park-mouse","on":false}"""));
+
+            host.SetEnabled(true);
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Count == 1,
+                TimeSpan.FromSeconds(10),
+                "first sidecar session edge");
+            host.SetEnabled(false);
+            host.SetEnabled(true);
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Count == 2,
+                TimeSpan.FromSeconds(10),
+                "restarted sidecar session edge");
+
+            Assert.All(
+                _executor.Calls,
+                call => Assert.False(Assert.IsType<MouseMoveRequest>(call.Value).On));
         }
 
         [Fact]
@@ -923,7 +1103,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"lock-pc"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"lock-pc","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -931,7 +1111,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the lock verb");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
 
@@ -965,7 +1145,7 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time","on":true}"""));
             host.SetEnabled(true);
 
             var expectedChord = new ParsedKeyChord(
@@ -975,7 +1155,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "executor to receive the macro's final chord step");
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok (started) ack");
 
@@ -1025,8 +1205,8 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"slow-macro"}""",
-                """{"v":4,"type":"action","id":"7f9be2e6-9d0a-4f7e-9a76-1a2b3c4d5e70","name":"setVolume","value":25}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"slow-macro","on":true}""",
+                """{"v":5,"type":"action","id":"7f9be2e6-9d0a-4f7e-9a76-1a2b3c4d5e70","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -1059,7 +1239,7 @@ public static class BridgeHostTests
                 },
             ];
             var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"shutdown-macro"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"shutdown-macro","on":true}"""));
             host.SetEnabled(true);
             await TestSupport.WaitUntilAsync(
                 () => host.RunningMacroCount == 1,
@@ -1118,7 +1298,7 @@ public static class BridgeHostTests
             ];
             _executor.NextResult = false; // every executor call fails
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-time","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
@@ -1173,12 +1353,12 @@ public static class BridgeHostTests
         public async Task UnknownCustomKeyNacksWithAReasonAndNeverHitsTheExecutor()
         {
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"no-such-key"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"no-such-key","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: no-such-key"}"""),
+                    $$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: no-such-key"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack naming the unknown key");
 
@@ -1204,12 +1384,12 @@ public static class BridgeHostTests
                 },
             ];
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode"}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"custom","key":"movie-mode","on":true}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
                 () => _log.ContainsMessage(
-                    $$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: movie-mode"}"""),
+                    $$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":false,"error":"unknown or disabled custom command: movie-mode"}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the fail ack for the disabled command");
 
@@ -1227,7 +1407,7 @@ public static class BridgeHostTests
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.Contains("WARN", "\"v\" must be the integer 4"),
+                () => _log.Contains("WARN", "\"v\" must be the integer 5"),
                 TimeSpan.FromSeconds(10),
                 "the v1 frame to be rejected with the version reason");
 
@@ -1239,11 +1419,11 @@ public static class BridgeHostTests
         {
             using var counters = new CounterCapture();
             using var host = CreateHost(NodeClientSpec(
-                $$"""{"v":4,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
+                $$"""{"v":5,"type":"action","id":"{{ActionId}}","name":"setVolume","value":25}"""));
             host.SetEnabled(true);
 
             await TestSupport.WaitUntilAsync(
-                () => _log.ContainsMessage($$"""recv {"v":4,"type":"ack","id":"{{ActionId}}","ok":true}"""),
+                () => _log.ContainsMessage($$"""recv {"v":5,"type":"ack","id":"{{ActionId}}","ok":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the ok ack");
             await TestSupport.WaitUntilAsync(
@@ -1526,8 +1706,8 @@ public static class BridgeHostTests
                 "const ws = new WebSocket('ws://localhost:' + p + '/');" +
                 "ws.addEventListener('message', (e) => console.log(JSON.stringify({ level: 30, msg: 'recv ' + e.data })));" +
                 "ws.addEventListener('open', () => {" +
-                "ws.send(JSON.stringify({ v: 4, type: 'hello', token: t, protocol: 1 }));" +
-                "ws.send(JSON.stringify({ v: 4, type: 'matterStatus', commissioned: true, advertisement: 'notApplicable' }));" +
+                "ws.send(JSON.stringify({ v: 5, type: 'hello', token: t, protocol: 1 }));" +
+                "ws.send(JSON.stringify({ v: 5, type: 'matterStatus', commissioned: true, advertisement: 'notApplicable' }));" +
                 string.Concat(framesAfterHello.Select(frame => $"ws.send('{frame}');")) +
                 "});" +
                 "process.stdin.resume();" +

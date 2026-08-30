@@ -23,7 +23,7 @@ not satisfy a 0.5.0 row.
   expected inventory is 720 tests. Documentation sandbox result was 674 pass /
   46 fail from invalid `HttpListener` handles and downstream timeouts; paste a
   clean normal-environment summary here: **PLACEHOLDER**.
-- [ ] **Protocol parity:** verify exact-v4 frame union/fields in
+- [ ] **Protocol parity:** verify exact-v5 frame union/fields in
   `bridge/src/ipc/protocol.ts`, `app/MatterHelm/Sidecar/Protocol.cs`, and
   BLUEPRINT §2.3; focused parity tests green.
 - [ ] **Exact artifacts:** build and retain names/hashes for

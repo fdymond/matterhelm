@@ -37,9 +37,10 @@ lifecycle status; **blue** = healthy and awaiting pairing; **green** = paired
 and connected; **red** = crash/restart loop or commissionable advertisement
 missing.
 
-Play/Pause is retained: On requests Play and Off requests Pause through the
-current Windows media session. If no usable session exists, the request fails
-and is logged; no toggle-prone appcommand fallback is sent. Next/Previous
+Play/Pause is retained: On requests Play and Off requests Pause in the focused
+program first. Windows media-session checks/fallback are ownership-aware, so a
+different app's session cannot suppress or prove the command. Sessionless
+players are delivered to but explicitly unverifiable. Next/Previous
 retain state and fire on either user transition.
 Power is reversible for displays-off, pause-plus-displays-off, and screensaver
 modes; sleep fires once on Off and promptly returns the tile to On. Custom

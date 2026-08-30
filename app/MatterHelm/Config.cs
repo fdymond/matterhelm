@@ -45,12 +45,38 @@ public enum MediaKeyName
     Pause,
 }
 
+/// <summary>A virtual-desktop target for a <c>mouseMove</c> custom action.</summary>
+[JsonConverter(typeof(MouseTargetJsonConverter))]
+public enum MouseTarget
+{
+    /// <summary>Bottom-right pixel of the complete virtual desktop.</summary>
+    BottomRight,
+
+    /// <summary>Bottom-left pixel of the complete virtual desktop.</summary>
+    BottomLeft,
+
+    /// <summary>Top-right pixel of the complete virtual desktop.</summary>
+    TopRight,
+
+    /// <summary>Top-left pixel of the complete virtual desktop.</summary>
+    TopLeft,
+
+    /// <summary>Centre of the complete virtual desktop.</summary>
+    Center,
+
+    /// <summary>Explicit virtual-desktop coordinates, clamped into its bounds.</summary>
+    Custom,
+}
+
+/// <summary>Camel-case JSON converter for <see cref="MouseTarget"/>.</summary>
+internal sealed class MouseTargetJsonConverter() : JsonStringEnumConverter<MouseTarget>(JsonNamingPolicy.CamelCase);
+
 /// <summary>
 /// What a custom command does when its endpoint fires (ADR-004 §1, extended
 /// by S7-1 and S8-3). Executed by the tray app only — the sidecar never sees
 /// actions. The wire form is polymorphic on <c>type</c>
 /// (<c>mediaKey</c> | <c>launch</c> | <c>keySequence</c> | <c>delay</c> |
-/// <c>sequence</c>).
+/// <c>sequence</c> | <c>mouseMove</c>).
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(MediaKeyActionConfig), "mediaKey")]
@@ -59,6 +85,7 @@ public enum MediaKeyName
 [JsonDerivedType(typeof(SystemActionConfig), "system")]
 [JsonDerivedType(typeof(DelayActionConfig), "delay")]
 [JsonDerivedType(typeof(SequenceActionConfig), "sequence")]
+[JsonDerivedType(typeof(MouseMoveActionConfig), "mouseMove")]
 public abstract class CustomActionConfig;
 
 /// <summary>The functional command a <c>system</c> custom action performs (S8-5).</summary>
@@ -130,6 +157,24 @@ public sealed class KeySequenceActionConfig : CustomActionConfig
 {
     /// <summary>The chord in <see cref="KeyChord"/> grammar, canonical form (e.g. <c>Ctrl+Shift+V</c>).</summary>
     public required string Sequence { get; set; }
+}
+
+/// <summary>
+/// Custom action moving the pointer to a virtual-desktop preset or explicit
+/// coordinates. Retained-switch ON captures then moves; OFF restores.
+/// </summary>
+public sealed class MouseMoveActionConfig : CustomActionConfig
+{
+    /// <summary>Named virtual-desktop target, or <see cref="MouseTarget.Custom"/>.</summary>
+    public required MouseTarget Target { get; set; }
+
+    /// <summary>Explicit virtual-desktop X coordinate; required only for a custom target.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? X { get; set; }
+
+    /// <summary>Explicit virtual-desktop Y coordinate; required only for a custom target.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Y { get; set; }
 }
 
 /// <summary>
@@ -782,7 +827,15 @@ public sealed class Config
         {
             if (resetAfterActivation.ValueKind is JsonValueKind.True or JsonValueKind.False)
             {
-                command.ResetAfterActivation = resetAfterActivation.GetBoolean();
+                bool reset = resetAfterActivation.GetBoolean();
+                if (reset && command.Action is MouseMoveActionConfig)
+                {
+                    _log("WARN", $"config.json \"{where}.resetAfterActivation\" cannot be true for a mouseMove action; using retained-switch behavior.");
+                }
+                else
+                {
+                    command.ResetAfterActivation = reset;
+                }
             }
             else
             {
@@ -877,6 +930,45 @@ public sealed class Config
                 return new KeySequenceActionConfig { Sequence = chord.Canonical };
             }
 
+            case "mouseMove":
+            {
+                if (!allowSequence)
+                {
+                    _log("WARN", $"config.json \"{where}\": mouseMove cannot be used inside a sequence because retained On/Off edge semantics belong to the command endpoint; entry dropped.");
+                    return null;
+                }
+
+                MouseTarget? target =
+                    action.TryGetProperty("target", out JsonElement targetElement) && targetElement.ValueKind == JsonValueKind.String
+                        ? ParseMouseTarget(targetElement.GetString())
+                        : null;
+                if (target is null)
+                {
+                    _log("WARN", $"config.json \"{where}.target\" must be one of bottomRight/bottomLeft/topRight/topLeft/center/custom; entry dropped.");
+                    return null;
+                }
+
+                var mouseMove = new MouseMoveActionConfig { Target = target.Value };
+                if (target == MouseTarget.Custom)
+                {
+                    if (!action.TryGetProperty("x", out JsonElement x)
+                        || x.ValueKind != JsonValueKind.Number
+                        || !x.TryGetInt32(out int xValue)
+                        || !action.TryGetProperty("y", out JsonElement y)
+                        || y.ValueKind != JsonValueKind.Number
+                        || !y.TryGetInt32(out int yValue))
+                    {
+                        _log("WARN", $"config.json \"{where}\" custom mouse coordinates x/y must both be integers; entry dropped.");
+                        return null;
+                    }
+
+                    mouseMove.X = xValue;
+                    mouseMove.Y = yValue;
+                }
+
+                return mouseMove;
+            }
+
             case "system":
             {
                 SystemCommandName? command =
@@ -959,7 +1051,7 @@ public sealed class Config
             }
 
             default:
-                _log("WARN", $"config.json \"{where}.type\" is not a known action type (mediaKey/launch/keySequence/system/delay/sequence); entry dropped.");
+                _log("WARN", $"config.json \"{where}.type\" is not a known action type (mediaKey/launch/keySequence/system/delay/sequence/mouseMove); entry dropped.");
                 return null;
         }
     }
@@ -990,6 +1082,17 @@ public sealed class Config
         "volumeDown" => MediaKeyName.VolumeDown,
         "play" => MediaKeyName.Play,
         "pause" => MediaKeyName.Pause,
+        _ => null,
+    };
+
+    private static MouseTarget? ParseMouseTarget(string? wireName) => wireName switch
+    {
+        "bottomRight" => MouseTarget.BottomRight,
+        "bottomLeft" => MouseTarget.BottomLeft,
+        "topRight" => MouseTarget.TopRight,
+        "topLeft" => MouseTarget.TopLeft,
+        "center" => MouseTarget.Center,
+        "custom" => MouseTarget.Custom,
         _ => null,
     };
 
