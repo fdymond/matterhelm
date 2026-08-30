@@ -167,15 +167,19 @@ executor profile (see CLAUDE.md for orchestration mechanics).
   self-signed-certificate handling, graceful degradation, and an ADR — it would
   be the product's first outbound network integration. Caveat: bridge state
   reflects ANY streaming source (Sync Box, a game, either PC), not one app.
-- **P-8** (park half superseded by S11-2 Part A; true hiding remains open):
-  MatterHelm now has a retained **Move the mouse** action with virtual-screen
-  presets, clamped coordinates, and ON-move/OFF-restore behavior. Truly
-  INVISIBLE remains deliberately out of scope: `ShowCursor(false)` only affects the calling
-  process, so a system-wide hide needs `SetSystemCursor` with a blank cursor
-  plus `SystemParametersInfo(SPI_SETCURSORS)` to restore — which must be
-  released on OFF, on app exit AND on crash, or the user is left with no
-  cursor at all. If true hiding is picked up, add a watchdog,
-  restore-on-exit/crash path, and a tray-menu escape hatch.
+- **P-8** (CLOSED 2026-08-30 — will not implement): system-wide cursor HIDING.
+  The park half shipped in 0.6.0 as the mouse-move command category. The
+  hiding half (SetSystemCursor with a blank cursor) was implemented and then
+  REMOVED at the owner's direction: "do not hide the cursor as this as
+  described can be breaking". Rationale stands on the record — a crash, kill
+  or failed restore while the system cursors are blanked leaves the machine
+  with no visible pointer, and the mitigations (restore-on-exit, a startup
+  marker file, a tray escape hatch) reduce but do not eliminate that risk.
+  Measured constraint for anyone revisiting this: Windows CLAMPS the cursor to
+  the virtual desktop, so a pointer cannot be parked off-screen — requested
+  (5000,5000) landed at (1600,1000) and (-500,-500) at (0,0) on a 1600x1000
+  desktop. Parking in a corner is therefore the only non-invasive option; a
+  top corner keeps it clear of the control bar most players draw at the bottom.
 - **P-9 superseded by S11-2/S11-3 (measured 2026-08-30):** Kodi receives
   focused `WM_APPCOMMAND` transport commands even though it publishes no
   Windows media session. Audio-peak evidence was `0.0230 → 0.0001 → 0.0230`.
