@@ -109,7 +109,7 @@ export function clusterWriteToAction(write: ClusterWrite, id: string): ActionFra
       if (write.resetAfterActivation && !write.on) {
         return null;
       }
-      return { v, type: "action", id, name: "custom", key: write.key };
+      return { v, type: "action", id, name: "custom", key: write.key, on: write.on };
     }
   }
 }
