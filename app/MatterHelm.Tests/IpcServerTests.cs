@@ -10,6 +10,7 @@ namespace MatterHelm.Tests;
 /// <see cref="ClientWebSocket"/> on an ephemeral loopback port: handshake,
 /// round-trips, and every close-on-invalid path from BLUEPRINT §2.3.
 /// </summary>
+[Collection(IpcListenerSuite.Name)]
 public sealed class IpcServerTests
 {
     private const string Token = "test-session-token-0123456789";
