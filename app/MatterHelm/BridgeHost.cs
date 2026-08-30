@@ -34,6 +34,11 @@ public interface IActionExecutor : IDisposable
     /// <summary>Clears any display-off keep-awake hold without waking the displays. Never throws.</summary>
     bool ReleaseDisplayKeepAwake();
 
+    /// <summary>Invalidates retained pointer captures that no longer belong to enabled mouse commands.</summary>
+    void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys)
+    {
+    }
+
     /// <summary>Reads the current volume/mute; throws <see cref="InvalidOperationException"/> when no audio endpoint exists.</summary>
     VolumeState GetVolumeState();
 }
@@ -69,6 +74,10 @@ public sealed class ActionExecutorAdapter : IActionExecutor
 
     /// <inheritdoc />
     public bool ReleaseDisplayKeepAwake() => _executor.ReleaseDisplayKeepAwake();
+
+    /// <inheritdoc />
+    public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
+        _executor.ReconcileMouseMoves(activeCommandKeys);
 
     /// <inheritdoc />
     public void Dispose()
@@ -422,6 +431,7 @@ public sealed class BridgeHost : IDisposable
         _lifecycleQueue = new SerialActionQueue(ex => _log("ERROR", $"bridge: lifecycle operation failed: {ex.Message}"));
         _executor.VolumeChanged += OnVolumeChanged;
         _config.Changed += OnConfigChanged;
+        _executor.ReconcileMouseMoves(EnabledMouseMoveKeys(config.Current));
     }
 
     /// <summary>The derived tray state changed. May fire on any thread; <c>TrayContext.SetState</c> marshals internally.</summary>
@@ -851,6 +861,7 @@ public sealed class BridgeHost : IDisposable
 
     private void OnConfigChanged(object? sender, ConfigChangedEventArgs e)
     {
+        _executor.ReconcileMouseMoves(UnchangedMouseMoveKeys(e.OldConfig, e.NewConfig));
         bool leftDisplayMode = IsDisplayPowerAction(e.OldConfig.PowerOffAction)
             && !IsDisplayPowerAction(e.NewConfig.PowerOffAction);
         if (leftDisplayMode)
@@ -1339,20 +1350,23 @@ public sealed class BridgeHost : IDisposable
             return (false, "failed", $"unknown or disabled custom command: {frame.Key}");
         }
 
-        return ExecuteCustomAction(frame.Key, command.Action);
+        return ExecuteCustomAction(frame.Key, command.Action, frame.On);
     }
 
     /// <summary>
     /// Executes one custom action — a command's own action or one sequence
     /// step (S8-3). Instant sequences (no delay steps) run inline on the IPC
-    /// receive loop so their ack reports the real outcome; a sequence with
-    /// delays is handed to a background macro runner instead (S8-6) — the
-    /// receive loop is the WebSocket read loop, so blocking it would freeze
-    /// EVERY later frame (a 10 s macro would stall volume commands behind it
-    /// and hold app shutdown hostage). Its ack means "started"; the outcome
-    /// arrives via log + overlay when the macro finishes.
+    /// connection's serial action worker so their ack reports the real outcome;
+    /// the WebSocket receive loop remains free to queue later frames. A sequence
+    /// with delays is handed to a background macro runner instead (S8-6), so a
+    /// long macro does not stall later actions on that worker or hold shutdown
+    /// hostage. Its ack means "started"; the outcome arrives via log + overlay
+    /// when the macro finishes.
     /// </summary>
-    private (bool Ok, string Pill, string? Error) ExecuteCustomAction(string commandKey, CustomActionConfig action)
+    private (bool Ok, string Pill, string? Error) ExecuteCustomAction(
+        string commandKey,
+        CustomActionConfig action,
+        bool on = true)
     {
         switch (action)
         {
@@ -1372,6 +1386,8 @@ public sealed class BridgeHost : IDisposable
             }
             case KeySequenceActionConfig keySequence:
                 return ExecuteKeySequence(commandKey, keySequence.Sequence);
+            case MouseMoveActionConfig mouseMove:
+                return RouteMouseMoveAction(commandKey, mouseMove, on, _executor.Execute);
             case SystemActionConfig system:
                 return ExecuteSystemCommand(system.Command);
             case DelayActionConfig:
@@ -1384,6 +1400,19 @@ public sealed class BridgeHost : IDisposable
             default:
                 return (false, "failed", $"unsupported action type for custom command: {commandKey}");
         }
+    }
+
+    /// <summary>Routes the <c>mouseMove</c> config variant through the executor seam.</summary>
+    internal static (bool Ok, string Pill, string? Error) RouteMouseMoveAction(
+        string commandKey,
+        MouseMoveActionConfig action,
+        bool on,
+        Func<string, object?, bool> execute)
+    {
+        bool moved = execute("mouseMove", new MouseMoveRequest(commandKey, action, on));
+        return moved
+            ? (true, on ? "mouse moved" : "mouse restored", null)
+            : (false, "failed", $"could not move or restore the mouse for {commandKey} (see the app log)");
     }
 
     /// <summary>Runs a sequence's steps in order, stopping at the first failure (error carries the 1-based step number).</summary>
@@ -1605,6 +1634,31 @@ public sealed class BridgeHost : IDisposable
     /// <summary>The enabled custom command with wire key <paramref name="key"/>, or null (a disabled command is deliberately not found — its endpoint should not exist).</summary>
     private CustomCommandConfig? FindCustomCommand(string key) =>
         _config.Current.Commands.Custom.FirstOrDefault(c => c.Enabled && c.Key == key);
+
+    private static HashSet<string> EnabledMouseMoveKeys(BridgeConfig config) =>
+        config.Commands.Custom
+            .Where(command => command.Enabled && command.Action is MouseMoveActionConfig)
+            .Select(command => command.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static HashSet<string> UnchangedMouseMoveKeys(BridgeConfig before, BridgeConfig after)
+    {
+        Dictionary<string, MouseMoveActionConfig> oldActions = before.Commands.Custom
+            .Where(command => command.Enabled && command.Action is MouseMoveActionConfig)
+            .ToDictionary(
+                command => command.Key,
+                command => (MouseMoveActionConfig)command.Action,
+                StringComparer.Ordinal);
+        return after.Commands.Custom
+            .Where(command => command.Enabled && command.Action is MouseMoveActionConfig)
+            .Where(command => oldActions.TryGetValue(command.Key, out MouseMoveActionConfig? oldAction)
+                && command.Action is MouseMoveActionConfig newAction
+                && oldAction.Target == newAction.Target
+                && oldAction.X == newAction.X
+                && oldAction.Y == newAction.Y)
+            .Select(command => command.Key)
+            .ToHashSet(StringComparer.Ordinal);
+    }
 
     /// <summary>Human-readable command line for the overlay/ack ("volume 40 %", "mute", a custom command's display name, …).</summary>
     private string DescribeIntent(ActionFrame frame) => frame switch

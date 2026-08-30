@@ -87,9 +87,10 @@ Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
   is retained (On=Play, Off=Pause), Next/Previous retain state and fire on
   either transition, Power is reversible except for irreversible modes such as
   sleep, and custom commands retain/fire both edges unless reset is opted in.
-- Dedicated Play/Pause uses SMTC for absolute verbs. No appcommand fallback is
-  sent because measured Spotify and YouTube behavior toggles and can invert
-  intent.
+- Play, Pause, and Play/Pause use ADR-013's ownership-aware focused-first
+  route. Session fallback is absolute and owner-pinned; different-app session
+  state cannot suppress or verify focused delivery. Sessionless focused
+  players are delivered to but explicitly unverifiable.
 
 ## Sources
 

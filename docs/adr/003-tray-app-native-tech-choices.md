@@ -2,8 +2,8 @@
 
 - **Status**: accepted
 - **Date**: 2026-07-26
-- **Amended**: 2026-08-30 by S10-31 (dedicated Play/Pause only)
-- **Story**: pre-Sprint-2 (integrator feasibility research, 2026-07-26); S10-31
+- **Amended**: 2026-08-30 by S10-31 and ADR-013/S11-3
+- **Story**: pre-Sprint-2 (integrator feasibility research, 2026-07-26); S10-31; S11-2; S11-3
 
 ## Context
 
@@ -27,19 +27,23 @@ re-deciding or picking footgun variants.
    thread, and register `IMMNotificationClient` to re-acquire the endpoint on
    default-device change.
 3. **Media transport**: `SendInput` with `VK_MEDIA_*` remains the system-wide
-   mechanism for play/pause toggle, next, previous, and stop. Dedicated Play
-   and Pause instead use the current
-   `GlobalSystemMediaTransportControlsSessionManager` session and
-   `TryPlayAsync`/`TryPauseAsync`, with every WinRT await and the overall call
-   bounded to about two seconds. Integrator measurements against Spotify and
+   mechanism for next, previous, and stop. Play, Pause, and Play/Pause first
+   send bounded `WM_APPCOMMAND` to the captured foreground HWND. The tray
+   resolves that window's PID/executable/AUMID and compares it with every
+   current session's `SourceAppUserModelId`; only a same-app session may
+   short-circuit or verify focused delivery. Integrator measurements against Spotify and
    YouTube found
    `APPCOMMAND_MEDIA_PLAY` produced Paused→Playing, Playing→Paused,
    Paused→Playing when delivered exactly like the app: it toggles despite its
    dedicated name. Repeated SMTC calls remained Playing→Playing and
-   Paused→Paused, confirming absolute behavior. If there is no current session,
-   SMTC rejects the verb, or the call fails/times out, return failure and WARN;
-   do not send an appcommand because it can invert the requested intent. The WinRT
-   projection is compiled by the current versioned
+   Paused→Paused, confirming absolute behavior. Therefore every session
+   fallback uses `TryPlayAsync`/`TryPauseAsync`, including a Play/Pause desired
+   state computed before focused delivery; a fallback toggle is forbidden.
+   A different-app session is ignored after successful focused delivery, but
+   becomes the intended target if focused delivery itself fails. The captured
+   session owner is pinned across action and verification, and the whole route
+   has one three-second cancellation deadline. Sessionless focused delivery is
+   acknowledged as unverifiable, not playback-verified. The WinRT projection is compiled by the current versioned
    `net10.0-windows10.0.17763.0` TFM.
 4. **Display/power**: DDC/CI VCP `0xD6` is primary for each accepting physical
    display. Only when no display accepts DDC/CI, use `SC_MONITORPOWER 2` to a
@@ -67,10 +71,12 @@ re-deciding or picking footgun variants.
   pitfalls listed as review checkpoints; zero NuGets except QRCoder.
 - **Harder**: hand-rolled CoreAudio interop is the hairiest piece (~4 COM
   interfaces) — S2-2 review must check ref-counting and thread marshalling.
-- **Dedicated Play/Pause limitation**: non-SMTC apps cannot receive these
-  absolute verbs; the failure is clearly logged. This preserves intent instead
-  of risking a toggle. A wedged session cannot indefinitely block the IPC
-  receive loop.
+- **Focused-player limitation**: non-SMTC apps such as Kodi receive the
+  appcommand but cannot be verified. Kodi's measured Pause behavior is a
+  toggle; immediate identical dedicated verbs to the same process are
+  suppressed for two seconds, but later repeats can still invert playback.
+  Logs and UI documentation distinguish delivery from verified state. A
+  wedged session cannot exceed the route's three-second deadline.
 - **Rollback**: each choice has a named fallback (TcpListener WS, NAudio
   CoreAudioApi subset) that swaps behind the same component interface without
   touching the protocol or UI.

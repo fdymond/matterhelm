@@ -14,8 +14,8 @@ Google Home app → Automations → **+ New** → *When I say to Google Assistan
 
 | You say ("Hey Google, …") | Routine action | Shipped meaning |
 |---|---|---|
-| "play the HTPC" / "resume the HTPC" | Turn **on** *HTPC Play Pause* | Requests absolute Play through the current SMTC session; fails/logs if none is usable |
-| "pause the HTPC" | Turn **off** *HTPC Play Pause* | Requests absolute Pause through the current SMTC session; fails/logs if none is usable |
+| "play the HTPC" / "resume the HTPC" | Turn **on** *HTPC Play Pause* | Sends Play to the focused app; same-owner SMTC verifies/falls back, while sessionless delivery is logged unverifiable |
+| "pause the HTPC" | Turn **off** *HTPC Play Pause* | Sends Pause to the focused app; avoid repeated Pause for Kodi because its appcommand toggles |
 | "next on the HTPC" / "skip this track" | Change *HTPC Next* to its other state | Next fires on either user transition and retains the new state |
 | "back one on the HTPC" | Change *HTPC Previous* to its other state | Previous fires on either user transition and retains the new state |
 | "movie time" | Activate a custom command endpoint (e.g. *Movie Mode*), optionally plus lights | Retained custom commands fire on either transition by default |

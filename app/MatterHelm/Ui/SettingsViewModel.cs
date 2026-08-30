@@ -199,6 +199,17 @@ public sealed class SettingsViewModel
         (MediaKeyName.Pause, "Pause (dedicated)"),
     ];
 
+    /// <summary>Friendly labels for mouse targets, in <see cref="MouseTarget"/> declaration order.</summary>
+    public static IReadOnlyList<(MouseTarget Target, string Label)> MouseTargetChoices { get; } =
+    [
+        (MouseTarget.BottomRight, "Bottom right"),
+        (MouseTarget.BottomLeft, "Bottom left"),
+        (MouseTarget.TopRight, "Top right"),
+        (MouseTarget.TopLeft, "Top left"),
+        (MouseTarget.Center, "Centre"),
+        (MouseTarget.Custom, "Custom coordinates"),
+    ];
+
     /// <summary>Friendly labels for the S8-5 system commands, in <see cref="SystemCommandName"/> declaration order.</summary>
     public static IReadOnlyList<(SystemCommandName Command, string Label)> SystemCommandChoices { get; } =
     [
@@ -346,6 +357,13 @@ public sealed class SettingsViewModel
             {
                 errors.Add(new SettingsValidationError("custom-commands", $"\"{command.Key}\": {actionError}"));
             }
+
+            if (command.ResetAfterActivation && command.Action is MouseMoveActionConfig)
+            {
+                errors.Add(new SettingsValidationError(
+                    "custom-commands",
+                    $"\"{command.Key}\": Move mouse must remain a retained switch so Off can restore the pointer."));
+            }
         }
 
         return errors;
@@ -361,6 +379,10 @@ public sealed class SettingsViewModel
     {
         LaunchActionConfig launch => ValidateLaunchPath(launch.Path),
         KeySequenceActionConfig keySequence => ValidateKeySequence(keySequence.Sequence),
+        MouseMoveActionConfig when !allowSequence =>
+            "Move mouse cannot be used inside a sequence because it needs the command endpoint's On/Off edge.",
+        MouseMoveActionConfig { Target: MouseTarget.Custom, X: null } => "Custom mouse target needs an X coordinate.",
+        MouseMoveActionConfig { Target: MouseTarget.Custom, Y: null } => "Custom mouse target needs a Y coordinate.",
         DelayActionConfig delay when delay.Ms is < DelayActionConfig.MinMs or > DelayActionConfig.MaxMs =>
             $"Delay must be {DelayActionConfig.MinMs}–{DelayActionConfig.MaxMs} ms.",
         SequenceActionConfig when !allowSequence => "A sequence cannot contain another sequence.",
@@ -442,6 +464,9 @@ public sealed class SettingsViewModel
         MediaKeyActionConfig mediaKey => $"Media key: {MediaKeyChoices.First(c => c.Key == mediaKey.KeyName).Label.ToLowerInvariant()}",
         LaunchActionConfig launch => $"Launch: {Path.GetFileName(launch.Path)}",
         KeySequenceActionConfig keySequence => $"Key sequence: {keySequence.Sequence}",
+        MouseMoveActionConfig mouseMove => mouseMove.Target == MouseTarget.Custom
+            ? $"Move mouse: {mouseMove.X},{mouseMove.Y}"
+            : $"Move mouse: {MouseTargetChoices.First(c => c.Target == mouseMove.Target).Label.ToLowerInvariant()}",
         SystemActionConfig system =>
             $"System: {SystemCommandChoices.First(c => c.Command == system.Command).Label.ToLowerInvariant()}",
         DelayActionConfig delay => $"Wait: {delay.Ms} ms",

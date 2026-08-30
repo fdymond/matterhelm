@@ -36,21 +36,21 @@ function sendAction(name, value) {
   const id = crypto.randomUUID();
   const frame =
     value === undefined
-      ? { v: 4, type: 'action', id, name }
-      : { v: 4, type: 'action', id, name, value };
+      ? { v: 5, type: 'action', id, name }
+      : { v: 5, type: 'action', id, name, value };
   send(frame);
   log(30, `stub-sent ${name} ${id}`);
 }
 
-function sendCustom(key) {
+function sendCustom(key, on) {
   const id = crypto.randomUUID();
-  send({ v: 4, type: 'action', id, name: 'custom', key });
+  send({ v: 5, type: 'action', id, name: 'custom', key, on });
   log(30, `stub-sent custom ${id}`);
 }
 
 ws.addEventListener('open', () => {
   log(30, 'stub: connected; sending hello');
-  send({ v: 4, type: 'hello', token, protocol: 1 });
+  send({ v: 5, type: 'hello', token, protocol: 1 });
   // The stub models a COMMISSIONED bridge, so it must report matterStatus:
   // since S10-12 the tray only reaches Connected (green) once a matterStatus
   // frame arrives — without it the demo would sit on Running (amber) forever.
@@ -59,7 +59,7 @@ ws.addEventListener('open', () => {
   setTimeout(
     () =>
       send({
-        v: 4,
+        v: 5,
         type: 'matterStatus',
         commissioned: true,
         advertisement: 'notApplicable',
@@ -69,10 +69,10 @@ ws.addEventListener('open', () => {
   setTimeout(() => sendAction('setVolume', 37), 300);
   setTimeout(() => sendAction('setMuted', false), 800);
   setTimeout(() => sendAction('playPause'), 1300);
-  setTimeout(() => sendCustom('demo-note'), 1550);
+  setTimeout(() => sendCustom('demo-note', true), 1550);
   setTimeout(() => {
     send({
-      v: 4,
+      v: 5,
       type: 'pairing',
       qrPayload: 'MT:STUB-DEMO-PAYLOAD',
       manualCode: '3497-011-2332',

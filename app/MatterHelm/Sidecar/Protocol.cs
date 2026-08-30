@@ -58,10 +58,10 @@ public sealed record BareActionFrame(Guid Id, BareActionName Name) : ActionFrame
 /// <summary>
 /// <c>custom</c> (protocol v2, ADR-004 §3): a user-defined endpoint
 /// fired; <paramref name="Key"/> is its stable kebab-case slug — the config
-/// key, the Matter endpoint id, and the wire identifier. Carries no
-/// <c>value</c> field.
+/// key, the Matter endpoint id, and the wire identifier. <paramref name="On"/>
+/// is the actual retained-switch edge added in protocol v5.
 /// </summary>
-public sealed record CustomActionFrame(Guid Id, string Key) : ActionFrame(Id);
+public sealed record CustomActionFrame(Guid Id, string Key, bool On) : ActionFrame(Id);
 
 /// <summary><c>setVolume</c>; <paramref name="Value"/> is an integer 0-100 (percent, not 0-254).</summary>
 public sealed record SetVolumeFrame(Guid Id, int Value) : ActionFrame(Id);
@@ -178,16 +178,16 @@ public sealed class SidecarParseResult
 /// </summary>
 public static class Protocol
 {
-    /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). Version 3 adds Matter lifecycle and advertisement health; only this exact value parses.</summary>
-    public const int Version = 4;
+    /// <summary>Per-message revision carried in <c>v</c>; additive evolution only (see protocol.ts). Version 5 adds the custom retained edge; only this exact value parses.</summary>
+    public const int Version = 5;
 
-    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v4 — no breaking field changes.</summary>
+    /// <summary>Breaking-change counter carried in <c>hello.protocol</c>; bumps require an ADR. Unchanged by v5 — the custom edge is additive.</summary>
     public const int HandshakeProtocol = 1;
 
     private static readonly string[] _helloKeys = ["v", "type", "token", "protocol"];
     private static readonly string[] _bareActionKeys = ["v", "type", "id", "name"];
     private static readonly string[] _valueActionKeys = ["v", "type", "id", "name", "value"];
-    private static readonly string[] _customActionKeys = ["v", "type", "id", "name", "key"];
+    private static readonly string[] _customActionKeys = ["v", "type", "id", "name", "key", "on"];
     private static readonly string[] _pairingKeys = ["v", "type", "qrPayload", "manualCode"];
     private static readonly string[] _matterStatusKeys = ["v", "type", "commissioned", "advertisement"];
 
@@ -373,7 +373,9 @@ public static class Protocol
             case "custom":
             {
                 string key = "";
-                err = RequireString(obj, "key", ref key);
+                bool on = false;
+                err = RequireString(obj, "key", ref key)
+                    ?? RequireBool(obj, "on", ref on);
                 if (err is not null)
                 {
                     return SidecarParseResult.Fail(err);
@@ -387,7 +389,7 @@ public static class Protocol
                         $"\"key\" must be a kebab-case slug of at most {CommandKey.MaxLength} characters");
                 }
 
-                return SidecarParseResult.Ok(new CustomActionFrame(id, key));
+                return SidecarParseResult.Ok(new CustomActionFrame(id, key, on));
             }
 
             default:

@@ -32,7 +32,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | ID | Story | Acceptance criteria | Size | Deps | Agent |
 |---|---|---|---|---|---|
 | S2-1 ✅ (pulled forward of S1-5: protocol + env contracts were already fixed; chaos-tested vs stub children) | `Sidecar/`: `SidecarSupervisor` (spawn node/SEA exe, env token, restart backoff, stdin tether, stdout→log) + `IpcServer` (loopback WS, hello/auth, close on invalid frame) + `Protocol.cs` typed records | Protocol unit tests; chaos demo: kill sidecar → auto-restart with backoff logged; wrong token → socket closed | L | S0-5, S1-5 | impl (Fable) |
-| S2-2 ✅ (later amended by S10-31) | Initial `ActionExecutor`/media keys/CoreAudio/display power; dedicated Play/Pause now uses SMTC without an intent-inverting appcommand fallback | Manual demo: each action works on real media; volume observation fires state updates | M | S0-5 | impl (Fable) |
+| S2-2 ✅ (historical; amended by S10-31 and ADR-013/S11-3) | Initial `ActionExecutor`/media keys/CoreAudio/display power; current media route is ownership-aware focused-first with absolute SMTC fallback | Manual demo: each action works on real media; volume observation fires state updates | M | S0-5 | impl (Fable) |
 | S2-3 ✅ (historical overlay; superseded by S10-19) | Initial click-through HUD; current UI is static MatterHelm header plus one command/result pill or volume bar | Manual demo incl. rapid-fire updates without flicker; never steals focus or blocks clicks | M | S0-5 | impl (Sonnet) |
 | S2-4 ✅ (historical tray model; blue added by ADR-011, contextual menu by S10-23) | Pairing window + tray/menu/config foundation | Manual pairing and name checks carried to hardware E2E | M | S2-1 | impl (Sonnet) |
 | S2-5 ✅ (mock-sidecar E2E PASS; "Hey Google" hop deferred to hardware E2E) | Wire it: IpcServer actions → executor → overlay flash → ack; state publisher (volume/mute on connect + on change) | **Exit demo evidence**: "Hey Google…" pauses real media; overlay flashes; Home-app slider tracks local volume change | M | S2-1, S2-2, S2-3, S2-4 | impl (Fable) |
@@ -136,9 +136,17 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S10-26..28 ✅ | Deep review (3 sweeps + adversarial verification) and remediation: bridge backpressure/expectation rollback/transactional construction, app lifecycle serialization/macro hygiene/font disposal/keep-awake release/retention rollover, docs realignment | shipped in 0.4.4; bridge 375, app 689 | L | — | integrator |
 | S10-29 ✅ reverted | Attempted timing-based trailing-Off suppression | Reverted by owner decision; timing cannot distinguish controller intent from echo | S | S10-28 | integrator |
 | S10-30 ✅ | Retained switch state: Play/Pause distinct edges, Next/Previous both-edge, reversible/momentary Power split; ADR-012 | Protocol/mapping/app parity and behavior tests | M | S10-29 | integrator |
-| S10-31 ✅ | Absolute dedicated Play/Pause through the current SMTC session; no appcommand fallback because it can invert intent; amend ADR-003 | Spotify/YouTube toggle evidence recorded; focused tests | M | S10-30 | integrator |
+| S10-31 ✅ (historical; amended by ADR-013/S11-3) | Established absolute SMTC verbs after Spotify/YouTube appcommand toggling measurements; current route adds ownership-aware focused delivery without reintroducing a session toggle | Spotify/YouTube toggle evidence recorded; focused tests | M | S10-30 | integrator |
 | S10-32 ✅ | Custom commands retained/both-edge by default with opt-in reset-after-activation; reset default 0; amend ADR-012 | Config/env/UI/mapping parity and tests | M | S10-30 | integrator |
 | S10-35 ✅ (clean standard-suite + hardware verdict remain release gates, not documentation work) | 0.5.0 documentation truth pass across public docs, blueprint, ADRs, backlog, E2E and launch gates | All 66 audit findings resolved; current test evidence and Windows floor recorded without inventing a green verdict | M | S10-30..32 | docs |
+
+## Sprint 11 — focused media and retained pointer actions
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S11-2 ✅ (amended by S11-3) | Focused-first Play/Pause for sessionless players plus a retained multi-monitor mouse-move custom action; ADR-013 | Focused Kodi receives appcommands; pointer presets/clamping and retained capture/restore are tested; review findings are remediated by S11-3 | M | S10-32 | integrator |
+| S11-3 ✅ | Release-blocking S11-2 remediation: ownership-aware session verification, absolute Play/Pause fallback, protocol-v5 custom edge, Kodi duplicate guard, one route deadline, mouse-capture reconciliation, macro rejection, truth-aligned docs | Kodi-focused/Chrome-session and owner-swap tests; protocol-to-executor Off/On/repeat/restart/multi-command tests; exact v5 mirror; Release build 0 warnings; targeted app 367 green; bridge 393 green with coverage thresholds under sandbox thread-pool workaround; exact full app/standard Vitest exclusions recorded in the assignment report | L | S11-2 | integrator |
+
 | P-6 🔜 | Pin postject in bridge/package.json + lockfile so SEA release builds stop fetching it ad hoc via npx (deferred from S10-26: needs synchronized lockfile change) | open | S | — | integrator |
 ## Proposed (from agent reports, integrator-triaged)
 
@@ -159,35 +167,25 @@ executor profile (see CLAUDE.md for orchestration mechanics).
   self-signed-certificate handling, graceful degradation, and an ADR — it would
   be the product's first outbound network integration. Caveat: bridge state
   reflects ANY streaming source (Sync Box, a game, either PC), not one app.
-- **P-8** (deferred by owner 2026-08-30, feasibility probed): "hide the mouse
-  cursor / park it off screen" command. Probed live on a 1600x1000 virtual
-  desktop: `SetCursorPos` to the far corner works and is instantly
-  restorable, so a retained switch (ON parks, OFF restores) is trivial. Truly
-  INVISIBLE is the harder half: `ShowCursor(false)` only affects the calling
+- **P-8** (park half superseded by S11-2 Part A; true hiding remains open):
+  MatterHelm now has a retained **Move the mouse** action with virtual-screen
+  presets, clamped coordinates, and ON-move/OFF-restore behavior. Truly
+  INVISIBLE remains deliberately out of scope: `ShowCursor(false)` only affects the calling
   process, so a system-wide hide needs `SetSystemCursor` with a blank cursor
   plus `SystemParametersInfo(SPI_SETCURSORS)` to restore — which must be
   released on OFF, on app exit AND on crash, or the user is left with no
-  cursor at all. Decide the variant (park-only vs park+blank-system-cursor)
-  when picked up; if blanking, add a watchdog/restore-on-exit path and a
-  tray-menu escape hatch.
-- **P-9** (owner report + deferral 2026-08-30): play/pause and the dedicated
-  play/pause verbs have no effect on **Kodi**. Diagnosis (high confidence):
-  Kodi does not publish a Windows media session, so the 0.5.x absolute verbs
-  find no session and now fail honestly — which presents as "nothing happens".
-  The plain media key is routed to the shell/foreground target, so Kodi only
-  sees it when focused. Probed from the LAN: no `_xbmc-jsonrpc._tcp` mDNS
-  advertisement, and 192.168.0.6:8080 did not answer, so Kodi's HTTP remote
-  control is currently disabled (or Kodi was not running).
-  Fix when picked up: Kodi's JSON-RPC API is the Kodi-native equivalent of
-  SMTC — `Player.PlayPause` takes an explicit `play: true|false` (absolute,
-  not a toggle) and `Player.GetProperties` (speed 0/1) gives true playback
-  state, both independent of window focus. Requires enabling Settings →
-  Services → Control → "Allow remote control via HTTP" (default port 8080),
-  plus host/credential config, graceful degradation when unreachable, and an
-  ADR — it would be the product's second outbound integration alongside P-7.
-  Quick confirmation available any time: press play on the HTPC and check
-  `%APPDATA%\MatterHelm\logs\app-<date>.log` for the "no media session"
-  warning that the 0.5.x media path emits.
+  cursor at all. If true hiding is picked up, add a watchdog,
+  restore-on-exit/crash path, and a tray-menu escape hatch.
+- **P-9 superseded by S11-2/S11-3 (measured 2026-08-30):** Kodi receives
+  focused `WM_APPCOMMAND` transport commands even though it publishes no
+  Windows media session. Audio-peak evidence was `0.0230 → 0.0001 → 0.0230`.
+  `APPCOMMAND_MEDIA_PLAY` is absolute in Kodi; `APPCOMMAND_MEDIA_PAUSE` is a
+  toggle, so repeating Pause can resume playback. ADR-013 keeps focused Kodi
+  working, treats unrelated sessions as unverifiable, suppresses an immediate
+  identical dedicated verb to the same unverifiable process for two seconds,
+  and documents that later/restarted repeats remain hazardous. Kodi JSON-RPC
+  remains an optional future route only if verified state-independent control
+  is required; it is no longer the prerequisite for basic focused Kodi support.
 
 - **P-5** (S7-2 merge observation): a few supervisor tests log through the
   static `Log` default directory, creating a stray `%APPDATA%\MatterHelm`

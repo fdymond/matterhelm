@@ -2,34 +2,68 @@ using Windows.Media.Control;
 
 namespace MatterHelm.Actions;
 
-/// <summary>Outcome of asking the current Windows media session to execute an absolute verb.</summary>
+/// <summary>Observable playback state of a Windows media session.</summary>
+internal enum MediaPlaybackState
+{
+    NoCurrentSession,
+    Playing,
+    Paused,
+    Other,
+}
+
+/// <summary>A current-session observation, including the app identity that owns it.</summary>
+internal sealed record MediaSessionSnapshot(MediaPlaybackState State, string? SourceAppUserModelId)
+{
+    internal static readonly MediaSessionSnapshot NoSession =
+        new(MediaPlaybackState.NoCurrentSession, null);
+
+    internal bool HasSession => SourceAppUserModelId is not null;
+}
+
+/// <summary>Outcome of asking one captured Windows media-session owner to execute a verb.</summary>
 internal enum MediaSessionActionResult
 {
     Succeeded,
     NoCurrentSession,
+    TargetChanged,
     Rejected,
 }
 
 /// <summary>Testable boundary around Windows' current SMTC media session.</summary>
 internal interface IMediaSessionController
 {
-    Task<MediaSessionActionResult> TryPlayAsync(TimeSpan timeout, CancellationToken cancellationToken);
+    Task<MediaSessionSnapshot> GetCurrentSessionAsync(TimeSpan timeout, CancellationToken cancellationToken);
 
-    Task<MediaSessionActionResult> TryPauseAsync(TimeSpan timeout, CancellationToken cancellationToken);
+    Task<MediaSessionActionResult> TryPlayAsync(
+        string expectedSourceAppUserModelId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken);
+
+    Task<MediaSessionActionResult> TryPauseAsync(
+        string expectedSourceAppUserModelId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>Testable current-session operations owned by one acquired SMTC manager.</summary>
 internal interface IMediaSessionManager
 {
-    Task<MediaSessionActionResult> TryPlayAsync(CancellationToken cancellationToken);
+    Task<MediaSessionSnapshot> GetCurrentSessionAsync(CancellationToken cancellationToken);
 
-    Task<MediaSessionActionResult> TryPauseAsync(CancellationToken cancellationToken);
+    Task<MediaSessionActionResult> TryPlayAsync(
+        string expectedSourceAppUserModelId,
+        CancellationToken cancellationToken);
+
+    Task<MediaSessionActionResult> TryPauseAsync(
+        string expectedSourceAppUserModelId,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// Executes absolute play and pause against the current Windows SMTC session.
-/// The manager acquisition is cached for this process-lifetime controller;
-/// the manager still resolves its current session separately for every verb.
+/// Reads and controls the current Windows SMTC session. Manager acquisition is
+/// cached; the manager still resolves its current session for every operation.
+/// Session actions are pinned to an expected source-app id so an owner change
+/// between observation and fallback cannot redirect the command.
 /// </summary>
 internal sealed class WindowsMediaSessionController : IMediaSessionController
 {
@@ -47,18 +81,31 @@ internal sealed class WindowsMediaSessionController : IMediaSessionController
         _requestManager = requestManager;
     }
 
-    public Task<MediaSessionActionResult> TryPlayAsync(
+    public Task<MediaSessionSnapshot> GetCurrentSessionAsync(
         TimeSpan timeout,
         CancellationToken cancellationToken) =>
-        ExecuteAsync(static (manager, token) => manager.TryPlayAsync(token), timeout, cancellationToken);
+        ExecuteAsync(static (manager, token) => manager.GetCurrentSessionAsync(token), timeout, cancellationToken);
+
+    public Task<MediaSessionActionResult> TryPlayAsync(
+        string expectedSourceAppUserModelId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            (manager, token) => manager.TryPlayAsync(expectedSourceAppUserModelId, token),
+            timeout,
+            cancellationToken);
 
     public Task<MediaSessionActionResult> TryPauseAsync(
+        string expectedSourceAppUserModelId,
         TimeSpan timeout,
         CancellationToken cancellationToken) =>
-        ExecuteAsync(static (manager, token) => manager.TryPauseAsync(token), timeout, cancellationToken);
+        ExecuteAsync(
+            (manager, token) => manager.TryPauseAsync(expectedSourceAppUserModelId, token),
+            timeout,
+            cancellationToken);
 
-    private async Task<MediaSessionActionResult> ExecuteAsync(
-        Func<IMediaSessionManager, CancellationToken, Task<MediaSessionActionResult>> execute,
+    private async Task<T> ExecuteAsync<T>(
+        Func<IMediaSessionManager, CancellationToken, Task<T>> execute,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
@@ -88,13 +135,42 @@ internal sealed class WindowsMediaSessionController : IMediaSessionController
     private sealed class WindowsMediaSessionManager(
         GlobalSystemMediaTransportControlsSessionManager manager) : IMediaSessionManager
     {
-        public Task<MediaSessionActionResult> TryPlayAsync(CancellationToken cancellationToken) =>
-            ExecuteCurrentAsync(static (session, token) => session.TryPlayAsync().AsTask(token), cancellationToken);
+        public Task<MediaSessionSnapshot> GetCurrentSessionAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            GlobalSystemMediaTransportControlsSession? session = manager.GetCurrentSession();
+            if (session is null)
+            {
+                return Task.FromResult(MediaSessionSnapshot.NoSession);
+            }
 
-        public Task<MediaSessionActionResult> TryPauseAsync(CancellationToken cancellationToken) =>
-            ExecuteCurrentAsync(static (session, token) => session.TryPauseAsync().AsTask(token), cancellationToken);
+            MediaPlaybackState state = session.GetPlaybackInfo().PlaybackStatus switch
+            {
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing => MediaPlaybackState.Playing,
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused => MediaPlaybackState.Paused,
+                _ => MediaPlaybackState.Other,
+            };
+            return Task.FromResult(new MediaSessionSnapshot(state, session.SourceAppUserModelId));
+        }
+
+        public Task<MediaSessionActionResult> TryPlayAsync(
+            string expectedSourceAppUserModelId,
+            CancellationToken cancellationToken) =>
+            ExecuteCurrentAsync(
+                expectedSourceAppUserModelId,
+                static (session, token) => session.TryPlayAsync().AsTask(token),
+                cancellationToken);
+
+        public Task<MediaSessionActionResult> TryPauseAsync(
+            string expectedSourceAppUserModelId,
+            CancellationToken cancellationToken) =>
+            ExecuteCurrentAsync(
+                expectedSourceAppUserModelId,
+                static (session, token) => session.TryPauseAsync().AsTask(token),
+                cancellationToken);
 
         private async Task<MediaSessionActionResult> ExecuteCurrentAsync(
+            string expectedSourceAppUserModelId,
             Func<GlobalSystemMediaTransportControlsSession, CancellationToken, Task<bool>> execute,
             CancellationToken cancellationToken)
         {
@@ -102,6 +178,14 @@ internal sealed class WindowsMediaSessionController : IMediaSessionController
             if (session is null)
             {
                 return MediaSessionActionResult.NoCurrentSession;
+            }
+
+            if (!string.Equals(
+                    session.SourceAppUserModelId,
+                    expectedSourceAppUserModelId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return MediaSessionActionResult.TargetChanged;
             }
 
             bool accepted = await execute(session, cancellationToken).ConfigureAwait(false);

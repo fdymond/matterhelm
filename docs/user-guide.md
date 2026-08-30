@@ -27,11 +27,11 @@ repository root.
   speech itself. All the "Hey Google, …" recognition happens on your phone
   or Nest speaker, same as any other smart-home command; MatterHelm just
   receives the resulting Matter command.
-- It is **not** a media player. Dedicated Play and Pause first address the
-  current Windows System Media Transport Controls (SMTC) session; other media
-  actions use Windows media controls. If absolute Play/Pause cannot reach a
-  usable session, the request fails and is logged. No appcommand fallback is
-  sent because measured appcommands can toggle and invert the request.
+- It is **not** a media player. Play, Pause, and Play/Pause first address the
+  focused program. MatterHelm uses Windows System Media Transport Controls
+  (SMTC) only when the session owner matches that focused app, or as the target
+  after focused delivery fails. A delivered command to an app with no session
+  is explicitly unverifiable.
 
 ## Prerequisites
 
@@ -219,9 +219,23 @@ Version 0.5.0 changes how switch state maps to actions:
 Play Pause, Next, Previous, and reversible Power modes keep the state you
 select. Play Pause uses that state directly, so turning it On always requests
 Play and turning it Off always requests Pause — it no
-longer sends the toggle media key. Play and Pause act absolutely when Windows
-has a current media session. If it does not, the request fails with a warning;
-there is deliberately no toggle-prone appcommand fallback. Next and Previous use the switch as a
+longer sends the toggle media key. Play, Pause, and Play/Pause first address
+the focused program, which lets focus-driven players such as Kodi respond.
+MatterHelm resolves the focused process/app identity and compares it with the
+session's source-app identity before using session state. It waits 400 ms, then
+checks only a session belonging to that same app. A different app's session
+cannot suppress delivery, verify it, or receive fallback after the focused
+command was delivered. If focused delivery itself fails, that current session
+is the intended fallback. All fallbacks are absolute Play/Pause operations;
+Play/Pause never sends a second toggle.
+
+For an unverifiable target, **success means only that Windows delivered the
+appcommand to the focused window**. Google receives an OK and the overlay shows
+success even if playback did not change; the log says `unverifiable`, never
+verified. Kodi publishes no session and its measured Pause appcommand toggles.
+MatterHelm suppresses an identical dedicated Play/Pause verb repeated to the
+same unverifiable process within two seconds, but the same Pause after that
+window (or after restart) can still resume Kodi. Next and Previous use the switch as a
 two-sided trigger: each user transition fires once, so On→Off skips just as
 Off→On does. Power retains state for reversible display/screensaver actions;
 actions that take the PC and bridge offline promptly return the tile to On.
@@ -347,9 +361,10 @@ click **Save** (closing the window with unsaved changes asks first).
     (momentary button)** to make only On run it and automatically return the
     tile to Off; that automatic reset does not run the action again.
     - **Media key** — one of play/pause (toggle), dedicated play, dedicated
-      pause (SMTC-absolute when a current session is usable; otherwise it fails
-      safely and logs), next, previous, stop, mute, volume up, or volume
-      down. This can expose another transport target under a different name.
+      pause, next, previous, stop, mute, volume up, or volume down. Play,
+      Pause, and Play/Pause use the focused-first, verified-session-fallback
+      route described above. This can expose another transport target under a
+      different name.
     - **Launch** — starts a program (e.g. your media center's exe) with
       optional arguments. **Browse…** picks a normal program; **Store app…**
       lists apps installed from the Microsoft Store (Spotify, Media Player,
@@ -366,6 +381,15 @@ click **Save** (closing the window with unsaved changes asks first).
       may still prompt to save), shut down, or restart. Shut down and
       restart act immediately — no confirmation on the PC — so consider
       keeping those out of easily-tapped tiles.
+    - **Move the mouse** — moves to bottom right (the classic parked
+      position), another virtual-desktop corner, the centre, or explicit X/Y
+      coordinates. Presets use the complete multi-monitor virtual desktop;
+      explicit coordinates are clamped into it so the pointer cannot be
+      stranded off-screen. This action must remain a retained switch: On
+      captures the current pointer position and moves it, while Off restores
+      the position captured by the last On. Off before any On is a successful
+      no-op. The captured position is in memory only and is lost when
+      MatterHelm exits.
     - **Command sequence (macro)** — runs several of the above in order
       from one voice command or tile tap. Build the step list with **Add…**
       (each step is a media key, launch, key sequence, system command, or a **Wait** of
@@ -588,6 +612,15 @@ office PC"* vs *"…pause the HTPC"*.
   button)**, then send On only. If one transition still produces two actions,
   check Google Home for duplicate routines and compare the two action IDs in
   MatterHelm's log; distinct IDs mean the controller sent two commands.
+- **Kodi ignores or reverses Play/Pause.** Bring Kodi to the foreground. Kodi
+  does not publish a Windows media session, so MatterHelm can deliver the
+  focused appcommand but cannot verify playback afterward. In this path Google
+  receives OK and the overlay shows success because delivery succeeded, even
+  if playback did not change. The app log calls it `unverifiable`. Kodi obeys
+  Play absolutely but treats Pause as a toggle; an identical dedicated verb is
+  suppressed only when repeated to the same process within two seconds. A
+  later Pause can resume playback, so avoid routines that send repeated Pause
+  or both retained edges when Kodi is the target.
 - **Need a clean slate.** Use [Factory reset](#factory-reset--re-pairing).
 
 ## Privacy notes

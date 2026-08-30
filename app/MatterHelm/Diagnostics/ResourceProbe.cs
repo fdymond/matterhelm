@@ -266,11 +266,11 @@ internal static partial class ResourceProbe
                 ?? throw new InvalidOperationException("resource probe sidecar has no IPC token");
             using var socket = new ClientWebSocket();
             socket.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/"), CancellationToken.None).GetAwaiter().GetResult();
-            Send(socket, $$"""{"v":4,"type":"hello","token":"{{token}}","protocol":1}""");
-            Send(socket, """{"v":4,"type":"matterStatus","commissioned":true,"advertisement":"notApplicable"}""");
+            Send(socket, $$"""{"v":5,"type":"hello","token":"{{token}}","protocol":1}""");
+            Send(socket, """{"v":5,"type":"matterStatus","commissioned":true,"advertisement":"notApplicable"}""");
             for (int i = 0; i < MacroBurstSize; i++)
             {
-                Send(socket, $$"""{"v":4,"type":"action","id":"{{Guid.NewGuid()}}","name":"custom","key":"probe-macro"}""");
+                Send(socket, $$"""{"v":5,"type":"action","id":"{{Guid.NewGuid()}}","name":"custom","key":"probe-macro","on":true}""");
             }
 
             _ = Console.In.ReadToEnd();

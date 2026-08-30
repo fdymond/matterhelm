@@ -28,6 +28,6 @@ but not yet paired").
 - BLUEPRINT §2.4 and the user-guide now incorporate this accepted state.
 - The blue state derives from the additive `matterStatus` frame (protocol v3),
   Protocol v2 shipped in 0.1.0 and v3 shipped in 0.4.2. A stale v2 sidecar
-  would never leave amber and is rejected by the current exact-v4 parser.
+  would never leave amber and is rejected by the current exact-v5 parser.
 - Tests: state derivation pinned in BridgeHostTests.StateDerivation;
   tray/tooltip behavior in TrayContextTests.

@@ -324,6 +324,22 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ValidateActionRejectsMouseMoveInsideASequence()
+    {
+        SettingsViewModel vm = NewViewModel();
+        var sequence = new SequenceActionConfig
+        {
+            Steps = [new MouseMoveActionConfig { Target = MouseTarget.BottomRight }],
+        };
+
+        string? error = vm.ValidateAction(sequence, allowSequence: true);
+
+        Assert.NotNull(error);
+        Assert.StartsWith("Step 1:", error, StringComparison.Ordinal);
+        Assert.Contains("On/Off edge", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ValidateActionRejectsAnEmptySequenceAndASummedDelayOverTheCap()
     {
         SettingsViewModel vm = NewViewModel();
@@ -370,6 +386,48 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal(
             Enum.GetValues<SystemCommandName>(),
             SettingsViewModel.SystemCommandChoices.Select(c => c.Command));
+    }
+
+    [Fact]
+    public void MouseTargetChoicesCoverEveryEnumMemberInOrder()
+    {
+        Assert.Equal(
+            Enum.GetValues<MouseTarget>(),
+            SettingsViewModel.MouseTargetChoices.Select(c => c.Target));
+    }
+
+    [Fact]
+    public void MouseMoveActionsValidateAndDescribePresetAndCoordinates()
+    {
+        SettingsViewModel vm = NewViewModel();
+        var preset = new MouseMoveActionConfig { Target = MouseTarget.BottomRight };
+        var custom = new MouseMoveActionConfig { Target = MouseTarget.Custom, X = -2500, Y = 1400 };
+
+        Assert.Null(vm.ValidateAction(preset, allowSequence: true));
+        Assert.Null(vm.ValidateAction(custom, allowSequence: true));
+        Assert.Equal("Move mouse: bottom right", SettingsViewModel.DescribeAction(preset));
+        Assert.Equal("Move mouse: -2500,1400", SettingsViewModel.DescribeAction(custom));
+        Assert.NotNull(vm.ValidateAction(
+            new MouseMoveActionConfig { Target = MouseTarget.Custom, X = 1 },
+            allowSequence: true));
+    }
+
+    [Fact]
+    public void MomentaryMouseMoveFailsAggregateEditorValidation()
+    {
+        SettingsViewModel vm = NewViewModel();
+        vm.AddCustomCommand(new CustomCommandConfig
+        {
+            Key = "park-mouse",
+            Name = "Park Mouse",
+            ResetAfterActivation = true,
+            Action = new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+        });
+
+        SettingsValidationError error = Assert.Single(vm.Validate());
+
+        Assert.Equal("custom-commands", error.SettingId);
+        Assert.Contains("retained switch", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

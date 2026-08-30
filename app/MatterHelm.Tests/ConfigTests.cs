@@ -193,6 +193,98 @@ public sealed class ConfigTests : IDisposable
         Assert.True(root.TryGetProperty("appLogLevel", out _));
     }
 
+    [Fact]
+    public void MouseMoveActionsRoundTripPresetsAndCustomCoordinates()
+    {
+        Config config = NewConfig();
+        config.Current.Commands.Custom =
+        [
+            new CustomCommandConfig
+            {
+                Key = "park-mouse",
+                Name = "Park Mouse",
+                Action = new MouseMoveActionConfig { Target = MouseTarget.BottomRight },
+            },
+            new CustomCommandConfig
+            {
+                Key = "move-mouse-custom",
+                Name = "Move Mouse Custom",
+                Action = new MouseMoveActionConfig { Target = MouseTarget.Custom, X = -2500, Y = 1400 },
+            },
+        ];
+
+        Assert.True(config.Save());
+        Config reloaded = NewConfig();
+
+        var preset = Assert.IsType<MouseMoveActionConfig>(reloaded.Current.Commands.Custom[0].Action);
+        Assert.Equal(MouseTarget.BottomRight, preset.Target);
+        Assert.Null(preset.X);
+        Assert.Null(preset.Y);
+        var custom = Assert.IsType<MouseMoveActionConfig>(reloaded.Current.Commands.Custom[1].Action);
+        Assert.Equal(MouseTarget.Custom, custom.Target);
+        Assert.Equal(-2500, custom.X);
+        Assert.Equal(1400, custom.Y);
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_path));
+        JsonElement customAction = document.RootElement.GetProperty("commands").GetProperty("custom")[1].GetProperty("action");
+        Assert.Equal("mouseMove", customAction.GetProperty("type").GetString());
+        Assert.Equal("custom", customAction.GetProperty("target").GetString());
+        Assert.Equal(-2500, customAction.GetProperty("x").GetInt32());
+        Assert.Equal(1400, customAction.GetProperty("y").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("bottomRight", MouseTarget.BottomRight)]
+    [InlineData("bottomLeft", MouseTarget.BottomLeft)]
+    [InlineData("topRight", MouseTarget.TopRight)]
+    [InlineData("topLeft", MouseTarget.TopLeft)]
+    [InlineData("center", MouseTarget.Center)]
+    public void MouseMovePresetWireNamesLoad(string wireName, MouseTarget expected)
+    {
+        File.WriteAllText(_path, $$$"""
+            {"commands":{"custom":[
+                {"key":"move-mouse","name":"Move Mouse","action":{"type":"mouseMove","target":"{{{wireName}}}"}}
+            ]}}
+            """);
+
+        var action = Assert.IsType<MouseMoveActionConfig>(
+            Assert.Single(NewConfig().Current.Commands.Custom).Action);
+
+        Assert.Equal(expected, action.Target);
+    }
+
+    [Theory]
+    [InlineData("{\"type\":\"mouseMove\",\"target\":\"custom\",\"x\":1}")]
+    [InlineData("{\"type\":\"mouseMove\",\"target\":\"custom\",\"x\":1,\"y\":1.5}")]
+    [InlineData("{\"type\":\"mouseMove\",\"target\":\"somewhere\"}")]
+    public void InvalidMouseMoveActionDropsTheEntryAndWarns(string actionJson)
+    {
+        File.WriteAllText(_path, $$$"""
+            {"commands":{"custom":[
+                {"key":"move-mouse","name":"Move Mouse","action":{{{actionJson}}}}
+            ]}}
+            """);
+
+        Assert.Empty(NewConfig().Current.Commands.Custom);
+        Assert.True(_log.Contains("WARN", "commands.custom[0].action"));
+    }
+
+    [Fact]
+    public void MouseMoveCannotLoadAsMomentaryBecauseOffMustRestore()
+    {
+        File.WriteAllText(_path, """
+            {"commands":{"custom":[
+                {"key":"park-mouse","name":"Park Mouse","resetAfterActivation":true,
+                 "action":{"type":"mouseMove","target":"bottomRight"}}
+            ]}}
+            """);
+
+        CustomCommandConfig command = Assert.Single(NewConfig().Current.Commands.Custom);
+
+        Assert.False(command.ResetAfterActivation);
+        Assert.True(_log.Contains("WARN", "using retained-switch behavior"));
+    }
+
     [Theory]
     [InlineData("topLeft", OverlayPosition.TopLeft)]
     [InlineData("middleRight", OverlayPosition.MiddleRight)]
@@ -840,6 +932,7 @@ public sealed class ConfigTests : IDisposable
         [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 5001}]}""")] // delay above per-step maximum
         [InlineData("""{"type": "sequence", "steps": [{"type": "delay", "ms": 5000}, {"type": "delay", "ms": 5000}, {"type": "delay", "ms": 1}]}""")] // summed delays over the cap
         [InlineData("""{"type": "sequence", "steps": [{"type": "mediaKey", "keyName": "bogus"}]}""")] // broken step
+        [InlineData("""{"type": "sequence", "steps": [{"type": "mouseMove", "target": "bottomRight"}]}""")] // retained edge is unavailable inside a macro
         [InlineData("""{"type": "delay", "ms": "fast"}""")] // non-numeric delay
         public void InvalidSequenceOrDelayActionDropsTheEntryAndWarns(string actionJson)
         {

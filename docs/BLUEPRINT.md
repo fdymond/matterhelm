@@ -138,9 +138,20 @@ A true Matter "tap button" (Generic Switch) exists but Google grants it
 routine-trigger grammar only — no direct voice target — so On/Off Plug-in Unit
 endpoints remain the controllable transport (research 2026-08).
 Endpoint names are user-configurable — they are the Google voice targets.
-Dedicated Play/Pause uses the current Windows SMTC session for absolute verbs;
-if no usable session exists or it rejects/times out, the tray logs failure and
-sends no appcommand because that path can toggle and invert intent. Display
+Play, Pause, and Play/Pause first send a bounded `WM_APPCOMMAND` to the
+foreground window. The tray resolves that window's PID, executable/AUMID, and
+the current SMTC session's `SourceAppUserModelId`; it may short-circuit or
+verify only when those identities belong to the same app. A different-owner
+session is unverifiable and is neither proof nor a fallback unless focused
+delivery itself failed. An unhandled focused command may fall back to the
+same-app session; a failed focused delivery may fall back to the captured
+current session. Every fallback is an absolute `TryPlayAsync`/`TryPauseAsync`
+operation (Play/Pause computes the desired state before delivery), pinned to
+the captured session owner and covered by one three-second route deadline.
+Delivered commands to sessionless players such as Kodi are acknowledged but
+logged as unverifiable. An identical dedicated verb immediately repeated to
+the same unverifiable foreground process within two seconds is suppressed;
+outside that window Kodi's toggle-like Pause remains an explicit limitation. Display
 power uses DDC/CI VCP `0xD6` for
 each accepting physical monitor. Windows global blanking is used only when no
 physical monitor accepts DDC; in a mixed setup unsupported panels are left on.
@@ -177,28 +188,30 @@ app changes.
 The token is never logged and never persisted (either side). One strict JSON
 object per message: unknown/missing fields or wrong types are rejected.
 Additive evolution bumps `v`; breaking changes bump `protocol` in `hello`.
-The current message revision is `v: 4` (dedicated `play`/`pause` were
-additive); `hello.protocol` remains `1`. UUID fields use canonical RFC 9562
+The current message revision is `v: 5` (the custom action's retained `on`
+edge is additive); `hello.protocol` remains `1`. UUID fields use canonical RFC 9562
 form. Custom keys are lowercase kebab-case slugs, at most 64 characters.
 
 Sidecar → tray app:
 ```json
-{ "v": 4, "type": "hello", "token": "…", "protocol": 1 }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "playPause" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "play" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "pause" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "next" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "previous" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "powerOn" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "powerOff" }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "setVolume", "value": 40 }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "setMuted", "value": true }
-{ "v": 4, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "custom", "key": "movie-mode" }
-{ "v": 4, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
-{ "v": 4, "type": "matterStatus", "commissioned": false, "advertisement": "visible" }
+{ "v": 5, "type": "hello", "token": "…", "protocol": 1 }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "playPause" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "play" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "pause" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "next" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "previous" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "powerOn" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "powerOff" }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "setVolume", "value": 40 }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "setMuted", "value": true }
+{ "v": 5, "type": "action", "id": "00000000-0000-0000-0000-000000000000", "name": "custom", "key": "movie-mode", "on": true }
+{ "v": 5, "type": "pairing", "qrPayload": "MT:…", "manualCode": "3497-011-2332" }
+{ "v": 5, "type": "matterStatus", "commissioned": false, "advertisement": "visible" }
 ```
 
-`setVolume.value` is an integer 0–100. `setMuted.value` is boolean.
+`setVolume.value` is an integer 0–100. `setMuted.value` and custom `on` are
+boolean. Custom `on` is the actual Matter command edge; the tray uses it for
+retained actions such as mouse On=move and Off=restore.
 `pairing.qrPayload` starts with `MT:` and `manualCode` is non-empty.
 `matterStatus.advertisement` is `checking`, `visible`, `missing`, or
 `notApplicable`; commissioned is true exactly when advertisement is
@@ -206,10 +219,10 @@ Sidecar → tray app:
 
 Tray app → sidecar:
 ```json
-{ "v": 4, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": true }
-{ "v": 4, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": false }
-{ "v": 4, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": false, "error": "optional context" }
-{ "v": 4, "type": "state", "volume": 40, "muted": false }
+{ "v": 5, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": true }
+{ "v": 5, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": false }
+{ "v": 5, "type": "ack", "id": "00000000-0000-0000-0000-000000000000", "ok": false, "error": "optional context" }
+{ "v": 5, "type": "state", "volume": 40, "muted": false }
 ```
 
 A successful ack forbids `error`; a failed ack permits an optional string.
@@ -274,7 +287,7 @@ House style: mirrors proven WinForms tray-app patterns (XML doc summaries,
 zero code imported from other repos.
 
 Concrete native techniques (WS server prefix, CoreAudio interop rules,
-SMTC-only dedicated Play/Pause with logged failure, DDC/CI-first display
+ownership-aware focused-first media routing with absolute SMTC fallback, DDC/CI-first display
 power with global blanking fallback, layered-window rules, QRCoder as the one NuGet, publish flags) are fixed by **ADR-003** —
 Sprint-2 stories implement those choices, they don't reopen them.
 

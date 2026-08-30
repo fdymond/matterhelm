@@ -1,6 +1,6 @@
 # ADR-012: retain switch state with explicit momentary exceptions
 
-- **Status**: accepted
+- **Status**: accepted; media route amended by ADR-013
 - **Date**: 2026-08-30
 - **Story**: S10-30, amended by S10-32 (owner-directed behaviour changes)
 
@@ -14,9 +14,9 @@ The attempted S10-29 temporal suppression of a trailing Off was reverted by
 owner decision because timing cannot reliably distinguish controller intent
 from an echo. Matter OnOff endpoints already carry the state needed to express
 the behavior without a suppression window. Windows appcommands labelled Play
-still toggle in measured Spotify and YouTube sessions, so absolute verbs must
-come from SMTC. Appcommands are deliberately not a fallback; failure is logged
-rather than risking an inverted request.
+toggle in measured Spotify and YouTube sessions, so any SMTC fallback must use
+an absolute verb. ADR-013 later added an ownership-aware focused appcommand
+attempt for focus-driven players while preserving absolute session fallback.
 
 ## Decision
 
@@ -26,8 +26,9 @@ binding.
 
 - Play/Pause, Next, and Previous always retain their Matter OnOff state and
   schedule no automatic write. Power retains state only for reversible actions.
-- Play/Pause is a true state switch: On emits the additive protocol-v4 `play`
-  action and Off emits `pause`. The existing `playPause` action remains valid
+- Play/Pause is a true state switch: On emits the `play` action introduced in
+  protocol v4 (carried in the current v5 frame), and Off emits `pause`. The
+  existing `playPause` action remains valid
   for custom media-key actions and older internal flows.
 - Next and Previous execute their respective action once on either controller
   transition.

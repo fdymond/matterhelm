@@ -25,6 +25,7 @@ public sealed class ActionExecutor : IDisposable
 {
     private readonly SystemVolume _systemVolume = new();
     private readonly DisplayPower _displayPower = new();
+    private readonly MouseMover _mouseMover = new();
 
     /// <summary>Volume component, exposed so callers can read state and subscribe to change events.</summary>
     public SystemVolume Volume => _systemVolume;
@@ -33,8 +34,9 @@ public sealed class ActionExecutor : IDisposable
     /// Executes the named action. <paramref name="value"/> carries the payload for value
     /// actions: <c>int</c> 0–100 for <c>setVolume</c>, <c>bool</c> for <c>setMuted</c>,
     /// <c>int</c> signed percent delta for <c>volumeStep</c>, a
-    /// <see cref="LaunchRequest"/> for <c>launch</c>, and a
-    /// <see cref="ParsedKeyChord"/> for <c>keySequence</c>. Beyond the protocol names,
+    /// <see cref="LaunchRequest"/> for <c>launch</c>, a
+    /// <see cref="ParsedKeyChord"/> for <c>keySequence</c>, and an internal
+    /// mouse-move request for <c>mouseMove</c>. Beyond the protocol names,
     /// <c>play</c>/<c>pause</c> are the dedicated protocol verbs; the
     /// custom-command ops include <c>mediaStop</c>, <c>muteToggle</c>,
     /// <c>volumeStep</c>, <c>launch</c>, and <c>keySequence</c>.
@@ -78,6 +80,10 @@ public sealed class ActionExecutor : IDisposable
                     return AppLaunch.Start(request);
                 case "keySequence" when value is ParsedKeyChord chord:
                     return KeyChord.Press(chord);
+                case "mouseMove" when value is MouseMoveRequest request:
+                    return request.On
+                        ? _mouseMover.Move(request.CommandKey, request.Action)
+                        : _mouseMover.Restore(request.CommandKey);
                 // These are the display primitives; BridgeHost.RoutePowerAction
                 // selects them or sleep/screensaver from the configured behavior.
                 case "powerOn":
@@ -127,6 +133,10 @@ public sealed class ActionExecutor : IDisposable
 
     /// <summary>Clears the display keep-awake hold without waking the displays.</summary>
     public bool ReleaseDisplayKeepAwake() => _displayPower.ReleaseKeepAwake();
+
+    /// <summary>Invalidates retained pointer captures for removed, disabled, or retyped commands.</summary>
+    public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
+        _mouseMover.Reconcile(activeCommandKeys);
 
     /// <summary>Disposes the volume observer and the display-power window.</summary>
     public void Dispose()
