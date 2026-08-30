@@ -1,4 +1,4 @@
-# ADR-005: Bump to net10.0-windows; modernization baseline
+# ADR-005: Bump to .NET 10 Windows; modernization baseline
 
 - **Status**: accepted
 - **Date**: 2026-07-28
@@ -16,7 +16,10 @@ C# 14 (`field`), and `JsonSchemaExporter`.
 
 ## Decision
 
-1. **TFM**: both C# projects move to `net10.0-windows` (S4-0). CI's
+1. **TFM**: both C# projects use
+   `net10.0-windows10.0.17763.0`. The explicit Windows API floor supports the
+   WinRT/SMTC projection while allowing Windows 10 version 1809 and later.
+   CI's
    setup-dotnet moves to `10.0.x`. WinForms trimming remains forbidden;
    publish flags from ADR-003 item 7 unchanged.
 2. **Modernization baseline** (S4-4 refactor applies; new code follows now):

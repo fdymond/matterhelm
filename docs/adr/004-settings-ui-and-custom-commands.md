@@ -1,6 +1,7 @@
 # ADR-004: Settings window + configurable/custom commands (protocol v2)
 
-- **Status**: accepted
+- **Status**: accepted; schema/UI amended by shipped follow-ups and custom
+  reset semantics superseded by ADR-012
 - **Date**: 2026-07-28
 - **Story**: owner direction (post-S2); implemented by S4-1…S4-4
 
@@ -30,20 +31,30 @@ side can be built by parallel stories without drift.
   "power":     { "name": "HTPC Power",    "enabled": true },
   "custom": [
     { "key": "movie-mode", "name": "Movie Mode", "enabled": true,
+      "resetAfterActivation": false,
       "action": { "type": "launch", "path": "C:\\...\\kodi.exe", "args": "" } },
     { "key": "stop-media", "name": "HTPC Stop", "enabled": true,
+      "resetAfterActivation": true,
       "action": { "type": "mediaKey", "keyName": "stop" } }
   ]
 }
 ```
 
 Custom action types (executor-side, tray app only — the sidecar never
-executes anything): `mediaKey` (`keyName`: `playPause|next|previous|stop|mute|volumeUp|volumeDown`),
-`launch` (`path` + `args`, started detached, never elevated, path must
-exist at save time), and — added by S7-1 — `keySequence`
-(`{"type":"keySequence","sequence":"Ctrl+Shift+V"}`; grammar
-`[Ctrl+][Alt+][Shift+][Win+]<Key>`, canonicalized on save, injected via
-SendInput). `key` is a unique kebab-case slug (validated), the
+executes anything) now are:
+
+- `mediaKey`, whose `keyName` is
+  `playPause|next|previous|stop|mute|volumeUp|volumeDown|play|pause`;
+- `launch` (`path` + `args`, detached and never elevated; path must exist at
+  save time);
+- `keySequence` (`sequence`, canonicalized from
+  `[Ctrl+][Alt+][Shift+][Win+]<Key>` and injected via SendInput);
+- `system`, whose `command` is
+  `startScreenSaver|stopScreenSaver|displaysOff|displaysOn|sleep|hibernate|lock|closeForegroundProgram|shutdown|restart`;
+- `delay` (`milliseconds` 1–5000), permitted as a sequence step; and
+- `sequence` (`steps`, at most 16, no nesting, total delay at most 10 seconds).
+
+`key` is a unique kebab-case slug (validated), the
 Matter endpoint id, and the wire identifier — **renaming a command's display
 name never changes its `key`**, so re-pairing isn't needed for renames.
 
@@ -55,8 +66,10 @@ needs names + which endpoints exist, never what they do):
 
 ```json
 { "speaker": {"name": "...", "enabled": true}, "playPause": {...},
-  "next": {...}, "previous": {...}, "power": {...},
-  "custom": [ {"key": "movie-mode", "name": "Movie Mode"} ] }
+  "next": {...}, "previous": {...},
+  "power": {"name": "...", "enabled": true, "momentary": false},
+  "custom": [ {"key": "movie-mode", "name": "Movie Mode",
+                "resetAfterActivation": false} ] }
 ```
 
 Disabled built-ins are present with `enabled:false` (the bridge omits the
@@ -71,8 +84,9 @@ shimming — no shipped users; both sides land together.
   satisfied and drift stays detectable).
 - New action variant, both parsers: `{ v: 2, type: "action", id: uuid,
   name: "custom", key: <kebab-case slug ≤ 64> }`. Custom endpoints are
-  momentary OnOff plugs; their auto-reset off-echo maps to null exactly like
-  built-in momentaries.
+  OnOff plugs. ADR-012 later supersedes this paragraph's momentary default:
+  they retain state and dispatch both edges unless `resetAfterActivation` is
+  true, in which case only On dispatches and the local Off reset is inert.
 - `protocol.ts` and `Protocol.cs` change in the same pair of stories; S4-R
   re-verifies mirror parity.
 
@@ -80,17 +94,19 @@ shimming — no shipped users; both sides land together.
 
 One resizable window (not modal), Fluent-informed within WinForms limits:
 - **Left nav**: categories — General (bridge enable, IPC port, log level),
-  Devices & Commands (built-in endpoint names + enable toggles, custom
-  command list with add/edit/remove/enable), Overlay (toggle + preview
-  button), Advanced (mDNS interface, storage dir display, config
-  open/reload, factory-reset placeholder until S3-2).
+  Devices (bridge name, built-in endpoint names/enables, Power policy and tap
+  reset delay), Custom devices (add/edit/remove/enable), Overlay (toggle,
+  placement/theme/opacity + preview), and Advanced (mDNS interface, VID/PID,
+  read-only identity seed/storage, diagnostics, config open/reload, factory
+  reset).
 - **Search box top**: filters visible settings across all categories by
   label/description substring; matching category auto-selected, non-matching
   controls hidden; clearing restores.
-- Edits stage into a working copy; **Save** persists via `Config.Save()` +
-  fires the existing `Changed` machinery (port/name/endpoint changes take
-  effect on next bridge enable — the window says so inline); **Cancel**
-  discards. Validation inline (port range, slug uniqueness, path exists).
+- Edits stage into a working copy; **Save** persists via `Config.Save()` and
+  fires the existing `Changed` machinery. A restart-requiring save restarts an
+  enabled bridge immediately. Closing with staged changes prompts to save or
+  discard; there is no persistent Cancel button. Validation is inline (port
+  range, slug uniqueness, path exists).
 - Reachable from tray menu ("Settings…" replaces "Device names…"/"Open
   config", which move inside the window's Advanced page).
 - Theme: follows the app's light/dark rendering used by TrayIcons; system
@@ -101,8 +117,9 @@ One resizable window (not modal), Fluent-informed within WinForms limits:
 
 - **Easier**: all options editable without touching JSON; commands become a
   product feature; endpoint identity survives renames (stable keys).
-- **Harder**: protocol v2 must land atomically across both sides (S4-1/S4-2
-  in lockstep, S4-R parity check); Config gains a migration path.
+- **Harder**: protocol v2 had to land atomically across both sides (S4-1/S4-2
+  in lockstep, S4-R parity check); Config gained a migration path. Protocol v2
+  is historical shipped behavior; the current exact parser revision is v4.
 - **Risk**: Google Home has to tolerate bridged endpoints appearing/
   disappearing on re-enable (matter.js supports dynamic bridged endpoints —
   ECOSYSTEMS confirms bridge support; validated at E2E).

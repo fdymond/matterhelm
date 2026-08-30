@@ -5,6 +5,11 @@ independently verifiable stories; explicit contracts between parallel work;
 evidence-based acceptance. Process weight is deliberately minimal — everything
 here exists to raise code quality, not to perform ceremony.
 
+> The sprint descriptions are a historical delivery plan, not the current
+> product specification. BLUEPRINT §§2.2–2.3, accepted ADRs, and the user guide
+> define shipped behavior; later Sprint 10 work replaced the early momentary
+> switch model with ADR-012 retained/resettable semantics.
+
 ## Method
 
 - **Iterations**: 4 short sprints (0–3), each ending in something demonstrable.
@@ -43,7 +48,7 @@ here exists to raise code quality, not to perform ceremony.
 | Lint/format | ESLint (+ Prettier check) | 0 warnings |
 | Unit tests | Vitest | green; `mapping/` + `ipc/protocol` ≥ 90 % line coverage (pure logic — no excuse) |
 | Integration | Vitest + mock WS peer | protocol round-trips, reconnect, auth-reject |
-| Perf budget | manual per release | idle CPU < 0.5 %, RSS < 80 MB, cold start < 3 s |
+| Perf budget | manual per release | ADR-007/G6: idle CPU < 0.5 % both; tray private ≤ 32 MB; one sidecar process private ≤ 120 MB; cold start < 3 s |
 | E2E | manual, scripted checklist | pairing + each voice action on real Google Home hardware, results logged in `docs/e2e-log.md` |
 
 CI: GitHub Actions on push/PR — `cd bridge && npm ci && npm run verify` on
@@ -59,14 +64,15 @@ the two hardware spikes answered. **Exit demo**: a minimal OnOff virtual device
 paired with the real Google Home; documented answer to the hub question.
 
 ### Sprint 1 — the bridge, properly
-Full device model (Speaker + momentary switches + power), IPC client with auth
+Initial device model (Speaker + then-momentary switches + power), IPC client with auth
 + reconnect, pure mapping layer, persisted commissioning. All logic unit-tested
 against a **mock tray-app** WS peer. **Exit demo**: "Hey Google, set HTPC
 volume to 40 %" reaches the mock peer as `{"type":"action","name":"setVolume","value":40}`.
 
 ### Sprint 2 — the tray application (C#, in `app/`)
 The standalone product shell: sidecar supervisor (spawn/token/backoff/stdin
-tether), loopback WS server, `ActionExecutor` (SMTC play-pause/next/previous,
+tether), loopback WS server, `ActionExecutor` (current-session SMTC absolute
+Play/Pause with safe logged failure when unavailable; Windows media controls for next/previous,
 CoreAudio volume/mute with change observation, display power), click-through
 **overlay HUD** (incoming command + executed action, update-in-place flash),
 pairing-QR window, tray states/menu, config + rolling log. **Exit demo**:
@@ -77,7 +83,8 @@ overlay flashes the command; the Home-app volume slider tracks local changes.
 Node SEA packaging + `dotnet publish` self-contained app, one `build.ps1`
 producing a single dist folder, crash/restart chaos pass, unpair/factory-reset
 flow, user guide, version 0.1.0. **Exit demo**: clean machine → copy dist →
-enable bridge → pair → control, no dev tools involved.
+choose **Pair with Google Home…** (which starts the unpaired bridge) → pair →
+control, no dev tools involved.
 
 The story-level backlog with sizes, dependencies, and suggested agent/model per
 story lives in [`../BACKLOG.md`](../BACKLOG.md).

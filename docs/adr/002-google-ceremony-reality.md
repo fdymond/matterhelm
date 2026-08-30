@@ -1,6 +1,6 @@
 # ADR-002: Google-side prerequisites — Nest hub required, test-VID Developer Console setup required
 
-- **Status**: accepted
+- **Status**: accepted; momentary endpoint policy superseded by ADR-012
 - **Date**: 2026-07-26
 - **Story**: pre-S0-3 (integrator feasibility research, 2026-07-26)
 
@@ -41,11 +41,12 @@ not voice-actionable targets the way On/Off endpoints are.
 - README/RESEARCH wording "no Google developer account, no ceremony" is
   corrected to "no cloud, no OAuth server, no paid certification — one-time
   free Developer Console registration required".
-- Momentary transport endpoints **stay On/Off Plug-in Units** (voice targets
-  are a core goal, G1). S0-4's spike is extended: additionally commission one
-  **Generic Switch** endpoint and record how the Home app/routines surface it.
-  If it proves strictly better for routines, a follow-up story may add Generic
-  Switch endpoints alongside (not replacing) the On/Off ones.
+- Transport endpoints **stay On/Off Plug-in Units** (voice targets are a core
+  goal, G1). The former momentary/auto-reset choice in this bullet is
+  superseded by ADR-012: Play/Pause, Next, and Previous retain state; only
+  opted-in custom commands and irreversible Power actions reset. Generic
+  Switch remains unsuitable as a replacement because it is a controller event
+  source/routine starter, not a voice/tile target.
 
 ## Consequences
 

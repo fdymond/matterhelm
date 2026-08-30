@@ -18,8 +18,8 @@ repository root.
 - It is a small always-on tray app that stays running in your Windows
   notification area and:
   - runs a tiny local **bridge** that speaks the Matter protocol on your
-    home network, so Google Home sees your PC as up to six devices (a
-    speaker plus a handful of switches);
+    home network, so Google Home sees up to five enabled built-in devices
+    plus one device for every enabled custom command;
   - **executes every command itself** on the PC — there's no cloud service
     in the middle translating "pause" into a keypress; the app does that
     directly with Windows APIs (media keys, system volume, display power).
@@ -27,16 +27,19 @@ repository root.
   speech itself. All the "Hey Google, …" recognition happens on your phone
   or Nest speaker, same as any other smart-home command; MatterHelm just
   receives the resulting Matter command.
-- It is **not** a media player, and doesn't talk to any specific app (Kodi,
-  a browser, etc.) — it presses the same play/pause/volume/next controls
-  Windows already exposes to your keyboard's media keys, so it works with
-  whatever is currently playing.
+- It is **not** a media player. Dedicated Play and Pause first address the
+  current Windows System Media Transport Controls (SMTC) session; other media
+  actions use Windows media controls. If absolute Play/Pause cannot reach a
+  usable session, the request fails and is logged. No appcommand fallback is
+  sent because measured appcommands can toggle and invert the request.
 
 ## Prerequisites
 
 Before you install anything, make sure you have:
 
-1. **Windows 11** on the PC that will run MatterHelm (the HTPC itself).
+1. **Windows 10 version 1809 (build 17763) or later**, x64, on the PC that
+   will run MatterHelm. The shipped target is
+   `net10.0-windows10.0.17763.0`.
 2. A **Google Nest hub device** — a Nest Hub, Nest Mini, Nest Audio, Nest
    Wifi Pro, or Google TV Streamer — on the **same Wi-Fi/LAN** as the PC.
    A phone alone is not enough: Google requires a hub device to act as the
@@ -142,6 +145,26 @@ Until the GitHub repository becomes public, release checks return
 read the repository. The token is used only in memory for GitHub requests and
 is never saved, logged, or displayed. Normal public releases require no token.
 
+### Upgrading from 0.4.x
+
+Version 0.5.0 changes how switch state maps to actions:
+
+- Existing custom commands do not contain the new `resetAfterActivation`
+  field, so they load as retained switches and execute on either user
+  transition. Edit a command in **Settings → Custom devices** and check
+  **Reset the switch after it runs (momentary button)** if it should execute
+  only when turned On and then return to Off.
+- **Play Pause** is now a retained state switch: On requests absolute Play and
+  Off requests absolute Pause. It no longer auto-resets or treats both states
+  as the same toggle request.
+- **Power** now models awake state. Reversible modes use Off to engage and On
+  to reverse; pause-plus-displays-off never resumes playback. Sleep fires once
+  on Off and the tile promptly returns to On.
+- Local IPC message revision moved to v4. The tray and sidecar ship together,
+  so no user action is required. A stale sidecar left running from another
+  copy is rejected and logs a version mismatch; exit the other copy and start
+  the matching package.
+
 ## Enabling the bridge and pairing
 
 > **The setup guide does this for you.** On a fresh install a **Welcome**
@@ -188,35 +211,41 @@ is never saved, logged, or displayed. Normal public releases require no token.
 | Google Home device | What it does on the PC |
 |---|---|
 | **HTPC Speaker** | System volume (voice "set … volume to 40 %" or the app's slider) and mute (voice "mute …" or the tile's power button) |
-| **HTPC Play Pause** | Toggles play/pause on whatever is currently playing (same as your keyboard's media key) |
-| **HTPC Next** / **HTPC Previous** | Skip to next/previous track |
-| **HTPC Power** | A stateful toggle whose Off and On behavior follows the configured power action (table below) |
+| **HTPC Play Pause** | A true state switch: On sends dedicated Play; Off sends dedicated Pause |
+| **HTPC Next** / **HTPC Previous** | Skip to next/previous track on either switch transition |
+| **HTPC Power** | A stateful awake/asleep toggle for reversible actions; irreversible actions use a momentary Off command (table below) |
 | Any custom command you've added | Whatever you configured it to do — see below |
 
-The transport controls (Play Pause/Next/Previous) show up as switches that
-flip briefly to "on" and snap back — that's expected (Google
-doesn't currently expose a plain "button" concept for locally-paired
-devices with a direct voice target), it isn't a bug. How long the tile
-stays "on" is the **Tap reset delay** setting (Devices); the
-default is 0 — snap back immediately — and it's purely cosmetic either
-way, the command always fires. Raise it if you prefer seeing the tile
-light up briefly. HTPC Power is different: it remains a normal stateful
-On/Off toggle.
+Play Pause, Next, Previous, and reversible Power modes keep the state you
+select. Play Pause uses that state directly, so turning it On always requests
+Play and turning it Off always requests Pause — it no
+longer sends the toggle media key. Play and Pause act absolutely when Windows
+has a current media session. If it does not, the request fails with a warning;
+there is deliberately no toggle-prone appcommand fallback. Next and Previous use the switch as a
+two-sided trigger: each user transition fires once, so On→Off skips just as
+Off→On does. Power retains state for reversible display/screensaver actions;
+actions that take the PC and bridge offline promptly return the tile to On.
 
-Because these commands are stateless buttons, **any** on/off command fires
-them: tapping the tile always works no matter which state the Home app
-happens to display (Google's shown state can lag the bridge), and saying
-"turn **off** HTPC Next" presses it just like "turn on" would. Only HTPC
-Power keeps distinct on/off meanings.
+Custom commands also keep state and fire once on either user transition by
+default. In a custom command's editor, enable **Reset the switch after it runs
+(momentary button)** if you need a one-shot button instead. Then only On runs
+the command, and the tile resets to Off after **Tap reset delay**; the
+automatic reset never runs the command again.
 
 The **Power off behavior** setting defines both halves of that toggle:
 
-| Configured action | Power Off | Power On |
-|---|---|---|
-| **Displays off** | Powers compatible displays off in hardware through DDC/CI, without telling Windows that the screens are off | Restores DDC/CI-managed displays, sends a harmless net-zero mouse nudge, and releases any fallback keep-awake hold |
-| **Pause, then displays off** | Presses play/pause, then uses the same DDC/CI-first display handling | Restores the displays and releases any fallback hold |
-| **Start screensaver** | Starts the screensaver configured in Windows | Stops the running screensaver |
-| **Sleep** | Suspends the PC | No action; a sleeping PC cannot receive the remote command |
+| Configured action | Power Off | Power On | Automatic reset |
+|---|---|---|---|
+| **Displays off** | Powers compatible displays off in hardware through DDC/CI, without telling Windows that the screens are off | Restores DDC/CI-managed displays, sends a harmless net-zero mouse nudge, and releases any fallback keep-awake hold | No; state is retained |
+| **Pause, then displays off** | Sends dedicated Pause, then uses the same DDC/CI-first display handling | Restores the displays and releases any fallback hold; playback remains paused | No; state is retained |
+| **Start screensaver** | Starts the screensaver configured in Windows | Stops the running screensaver | No; state is retained |
+| **Sleep** | Dispatches sleep once | No action | Yes; the tile is promptly written back to On without dispatching another action |
+
+The Sleep reset is deliberately independent of **Tap reset delay**, which is
+only for custom commands. MatterHelm queues the local On write immediately
+after dispatching sleep so it has the best chance to publish the awake/default
+state before Windows suspends the app. When the PC wakes later, another Power
+Off command can therefore run sleep again.
 
 For **Displays off**, MatterHelm first sends VESA DDC/CI power mode to every
 physical monitor that accepts it. This switches the display hardware off while
@@ -300,24 +329,27 @@ Right-click the tray icon → **Settings…** opens a single window with a
 search box and a left-hand list of categories. Changes are staged until you
 click **Save** (closing the window with unsaved changes asks first).
 
-- **General** — the bridge's IPC port (only matters if 39531 collides with
-  something else on your PC), the sidecar's log detail level, and this
-  app's own log detail level (applies immediately, no restart).
-- **Devices** — rename or disable any of the five built-in
-  devices, choose whether Power uses displays off, pause then displays off,
-  the Windows screensaver, or sleep, tune how quickly a tapped
-  command's switch snaps back to "off" in Google Home (default 0 =
-  immediately; purely cosmetic), and manage **custom commands**:
+- **General** — **Enable bridge**, the bridge's IPC port (only matters if
+  39531 collides with something else on your PC), the sidecar's log detail
+  level, and this app's own log detail level (applies immediately, no restart).
+- **Devices** — edit the **Bridge name**, rename or disable any of the five
+  built-in devices, choose whether Power uses displays off, pause then displays
+  off, the Windows screensaver, or sleep, and set the reset delay used by custom
+  commands that opt into momentary behavior (default 0 = immediately).
+- **Custom devices** — manage custom commands:
   - **Add…** creates a new command, which becomes its own Google Home
-    device once you save and re-pair (new devices need a config reload of
-    the bridge, which happens automatically the next time it starts).
+    device once you save. Saving a topology-changing edit restarts an enabled
+    bridge immediately; Google Home may still require factory reset/re-pairing
+    before it discovers an added or removed endpoint.
   - Each custom command needs a unique key (used internally, not shown to
-    Google) and one action:
+    Google) and one action. By default its switch retains state and either
+    transition runs the action once. Check **Reset the switch after it runs
+    (momentary button)** to make only On run it and automatically return the
+    tile to Off; that automatic reset does not run the action again.
     - **Media key** — one of play/pause (toggle), dedicated play, dedicated
-      pause (absolute — "play" never pauses and vice versa), next, previous,
-      stop, mute, volume up, or volume down (the same ones the built-ins
-      use, if you want a second speaker/transport device under a different
-      name).
+      pause (SMTC-absolute when a current session is usable; otherwise it fails
+      safely and logs), next, previous, stop, mute, volume up, or volume
+      down. This can expose another transport target under a different name.
     - **Launch** — starts a program (e.g. your media center's exe) with
       optional arguments. **Browse…** picks a normal program; **Store app…**
       lists apps installed from the Microsoft Store (Spotify, Media Player,
@@ -348,8 +380,8 @@ click **Save** (closing the window with unsaved changes asks first).
     Google Home (its tile disappears from Home the next time the bridge
     restarts).
 - **Overlay** — the small on-screen pop-up that flashes briefly whenever a
-  command arrives ("Google Home → Volume" with a fill bar, or a pill like
-  "play/pause pressed"). Toggle it, choose which screen corner/edge it
+  command arrives. Its header is always **MatterHelm**; below it is one
+  command/result pill or a volume fill bar. Toggle it, choose which screen corner/edge it
   appears at, pick its theme (follows the Windows light/dark setting by
   default, or force light/dark), set its opacity (100 = solid, lower =
   see-through), and use **Preview** to see a sample without waiting for a
@@ -363,7 +395,12 @@ click **Save** (closing the window with unsaved changes asks first).
     unplugged or renamed is shown as **(not detected)**; choose Auto or a
     detected adapter to replace it.
   - **Matter storage** — read-only, shows where the pairing data lives (see
-    [Factory reset](#factory-reset--re-pairing)).
+     [Factory reset](#factory-reset--re-pairing)).
+  - **Vendor ID (VID)** / **Product ID (PID)** — the Matter identifiers that
+    must match the Google Home Developer Console integration. Saving a change
+    requires a fresh pairing.
+  - **Device identity seed** — read-only stable endpoint identity for this
+    install. It is shown for clone/collision troubleshooting.
   - **Config file** / **Config folder** — opens `config.json` or its folder
     directly, for anyone who wants to hand-edit it (the app also does this
     safely through the UI).
@@ -543,6 +580,14 @@ office PC"* vs *"…pause the HTPC"*.
   could not bind, commonly because another program already uses the configured
   port. The bridge stays disabled; check the app log, then choose a free IPC
   port in Settings → General and save.
+- **A command fires twice.** MatterHelm does not run an action from its own
+  automatic reset. For a normal retained custom switch, however, both user
+  transitions intentionally fire once, so a routine that sends On and then
+  Off runs it twice. Change the routine to send one transition, or edit the
+  custom command and enable **Reset the switch after it runs (momentary
+  button)**, then send On only. If one transition still produces two actions,
+  check Google Home for duplicate routines and compare the two action IDs in
+  MatterHelm's log; distinct IDs mean the controller sent two commands.
 - **Need a clean slate.** Use [Factory reset](#factory-reset--re-pairing).
 
 ## Privacy notes

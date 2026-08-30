@@ -37,15 +37,17 @@ npm test -- -t "volume"                   # tests matching a name
 ```
 
 Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
-(Sprint 0/2 stories) builds with
+builds with
 `dotnet build app/MatterHelm/MatterHelm.csproj -c Release`
 (warnings-as-errors). This product is fully standalone (ADR-001): never
 reference, read config from, or depend on code outside this repository.
 
-**Pre-Sprint-0 state**: `bridge/package.json` deps are intentionally empty
-(story S0-1 installs and pins them), so `npm ci`/`verify` fail until S0-1
-lands; `app/` is empty until S0-5 creates the csproj. That is expected — don't
-"fix" it outside those stories.
+**Current state**: both applications are implemented and ship together.
+`npm run verify` and the .NET build/test commands are live merge gates; a
+failure is actionable unless the story report demonstrates a specific
+environment or concurrent-work limitation. The C# projects currently target
+`net10.0-windows10.0.17763.0`; re-read the project at release time before
+stating the Windows floor in public documentation.
 
 ## Architecture invariants (enforced in review)
 

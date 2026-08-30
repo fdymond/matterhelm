@@ -4,6 +4,11 @@ Goal: make the HTPC a controllable device in the Google Home ecosystem
 ("Hey Google…" from speakers/app, routines) with strong preference for **local,
 self-hosted, low-ceremony** routes. Research conducted 2026-07-26.
 
+> **Historical research record.** The route comparison below preserves what
+> was believed in July 2026. Its zero-ceremony, Windows-11-only, and
+> default-momentary claims are superseded by the addenda and current
+> BLUEPRINT/user guide.
+
 ## Routes evaluated
 
 | Route | Maturity (mid-2026) | Windows/.NET fit | What it actually delivers | Local vs cloud | Long-term risk |
@@ -72,10 +77,24 @@ Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
    no confirmed real-world sighting for bridged endpoints — S0-3 must verify
    voice + slider explicitly before Sprint 1 leans on it.
 
+## Addendum 2026-08-30 (0.5.0 shipped model)
+
+- The app target supports Windows 10 version 1809 (build 17763) and later,
+  x64; it is not Windows-11-only.
+- The bridge publishes five optional built-ins plus one endpoint per enabled
+  custom command, not a fixed maximum of six.
+- ADR-012 supersedes default momentary transport/custom switches. Play/Pause
+  is retained (On=Play, Off=Pause), Next/Previous retain state and fire on
+  either transition, Power is reversible except for irreversible modes such as
+  sleep, and custom commands retain/fire both edges unless reset is opted in.
+- Dedicated Play/Pause uses SMTC for absolute verbs. No appcommand fallback is
+  sent because measured Spotify and YouTube behavior toggles and can invert
+  intent.
+
 ## Sources
 
 - Google Home Developers — [Supported Matter clusters](https://developers.home.google.com/matter/clusters) · [Supported device types](https://developers.home.google.com/matter/supported-devices) · [Matter release notes](https://developers.home.google.com/matter/release-notes) · [Virtual-device codelab](https://developers.home.google.com/codelabs/matter-device-virtual)
-- [matter.js](https://github.com/project-chip/matter.js/) · [matter-node.js-examples](https://www.npmjs.com/package/@project-chip/matter-node.js-examples) · [matterjs-server](https://github.com/matter-js/matterjs-server) · [python-matter-server (archived; Windows unsupported)](https://github.com/matter-js/python-matter-server)
+- [matter.js](https://github.com/matter-js/matter.js/) · [matter-node.js-examples](https://www.npmjs.com/package/@project-chip/matter-node.js-examples) · [matterjs-server](https://github.com/matter-js/matterjs-server) · [python-matter-server (archived; Windows unsupported)](https://github.com/matter-js/python-matter-server)
 - Home Assistant — [HA Matter Hub](https://riddix.github.io/home-assistant-matter-hub/) · [Exposing HA entities as Matter devices](https://smarthomescene.com/guides/exposing-home-assistant-entities-as-matter-devices/) · [Google Assistant via HA Cloud](https://www.home-assistant.io/cloud/google_assistant/)
 - Google cloud route — [Smart home Actions migration](https://developers.home.google.com/cloud-to-cloud/project/migration) · [OAuth 2.0 server requirement](https://developers.home.google.com/cloud-to-cloud/project/authorization) · [Local Home SDK](https://developers.home.google.com/local-home/overview) · [Conversational Actions sunset](https://developers.google.com/assistant/ca-sunset)
 - [assistant-relay archived](https://github.com/greghesp/assistant-relay/releases) · [Shanocast](https://github.com/rgerganov/shanocast) · [Matter Casting (Amazon docs, for contrast)](https://developer.amazon.com/docs/fire-tv/overview-of-matter-casting.html)
