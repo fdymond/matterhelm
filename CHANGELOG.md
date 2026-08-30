@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
+## [0.7.0] — 2026-08-31
+
+### Added
+- **Mouse movement inside command sequences.** A custom command's macro can
+  now include a mouse step, offered in the sequence editor with the same
+  target picker as the standalone command. Each step is a one-shot absolute
+  move — there is no implicit restore, so add a second step if you want the
+  pointer put back. Macro steps cannot disturb the position a standalone
+  retained mouse command returns to.
+
+### Fixed
+- **Media commands no longer miss the player after a screensaver.** Starting
+  the screensaver now records which window had focus, and stopping it hands
+  focus back. Previously a fullscreen player left unfocused by the screensaver
+  would be skipped, and the command hit a background app or failed. Focus
+  restoration validates the window handle, its process id and process name
+  before acting — handles are recycled, and focusing an unrelated app would be
+  worse than doing nothing — and a refusal by Windows is logged rather than
+  reported as success.
+
+> **Limitation.** Dismissing the screensaver yourself with the mouse or
+> keyboard does not run MatterHelm's stop path, so nothing triggers the focus
+> restore. It applies when the screensaver is turned off through Google Home.
+> Displays-off modes are unaffected: they never take focus away.
+
+
 ## [0.6.0] — 2026-08-30
 
 ### Added
