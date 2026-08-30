@@ -211,7 +211,7 @@ beside it, then start it — a fresh identity is minted.
 
 ```bash
 cd bridge && npm ci && npm run verify        # sidecar: lint + types + 393 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 774 tests
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 803 tests
 ./build.ps1                                  # dist/: portable folder, SEA sidecar
 ```
 
