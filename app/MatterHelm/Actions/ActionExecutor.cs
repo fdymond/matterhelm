@@ -16,6 +16,16 @@ public enum DisplayPowerOffPath
 /// <summary>Outcome of a display-off request, including the path needed for truthful UI feedback.</summary>
 public readonly record struct DisplayPowerOffResult(bool Ok, DisplayPowerOffPath Path);
 
+/// <summary>One action outcome with a truthful reason when execution failed.</summary>
+public readonly record struct ActionExecutionResult(bool Ok, string? Error)
+{
+    /// <summary>A successful action.</summary>
+    public static ActionExecutionResult Success => new(true, null);
+
+    /// <summary>Creates a failed action with user/log-safe diagnostic detail.</summary>
+    public static ActionExecutionResult Failure(string error) => new(false, error);
+}
+
 /// <summary>
 /// Single dispatch point mapping protocol action names onto Windows side effects.
 /// Never throws: every failure is logged and reported as <c>false</c> so the caller
@@ -121,6 +131,29 @@ public sealed class ActionExecutor : IDisposable
         }
     }
 
+    /// <summary>Executes one action and preserves a specific failure reason for macro/ack reporting.</summary>
+    public ActionExecutionResult ExecuteDetailed(string name, object? value = null)
+    {
+        try
+        {
+            return name switch
+            {
+                "playPause" => MediaKeys.PlayPauseDetailed(),
+                "play" or "mediaPlay" => MediaKeys.PlayDetailed(),
+                "pause" or "mediaPause" => MediaKeys.PauseDetailed(),
+                _ => Execute(name, value)
+                    ? ActionExecutionResult.Success
+                    : ActionExecutionResult.Failure($"action '{name}' failed (see the app log)"),
+            };
+        }
+        catch (Exception ex)
+        {
+            string error = $"action '{name}' failed: {ex.Message}";
+            Log.Error($"ActionExecutor: {error}");
+            return ActionExecutionResult.Failure(error);
+        }
+    }
+
     /// <summary>Executes display-off and retains the concrete path in the result.</summary>
     public DisplayPowerOffResult ExecuteDisplaysOff()
     {
@@ -169,7 +202,14 @@ public sealed class ActionExecutor : IDisposable
     internal static bool StopScreenSaver(ScreensaverFocusMemory focus, Func<bool> stop)
     {
         bool stopped = stop();
-        return stopped && focus.Restore();
+        if (stopped)
+        {
+            // Dismissal is the action contract. Focus restoration is a
+            // best-effort enhancement whose own WARN must never nack/abort it.
+            _ = focus.Restore();
+        }
+
+        return stopped;
     }
 
     /// <summary>Disposes the volume observer and the display-power window.</summary>

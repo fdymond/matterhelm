@@ -225,9 +225,13 @@ MatterHelm resolves the focused process/app identity and compares it with the
 session's source-app identity before using session state. It waits 400 ms, then
 checks only a session belonging to that same app. A different app's session
 cannot suppress delivery, verify it, or receive fallback after the focused
-command was delivered. If focused delivery itself fails, that current session
-is the intended fallback. All fallbacks are absolute Play/Pause operations;
-Play/Pause never sends a second toggle.
+command was delivered. If delivery to a specific focused window fails, only a
+session owned by that same focused app is an eligible fallback; MatterHelm
+fails honestly instead of sending Play/Pause to another app. A failed delivery
+with no focused target may still use the captured current session. When the
+focused window times out specifically, MatterHelm waits 200 ms and retries the
+appcommand once; ordinary refusals are not retried. All session fallbacks are
+absolute Play/Pause operations; Play/Pause never sends a second toggle.
 
 For an unverifiable target, **success means only that Windows delivered the
 appcommand to the focused window**. Google receives an OK and the overlay shows
@@ -269,10 +273,15 @@ custom **Stop screensaver** command, it first stops the saver, verifies that
 the handle is still a real window owned by the same process, restores it if it
 is minimized, and asks Windows to make it foreground. If normal activation is
 refused, MatterHelm retries while temporarily attached to the current
-foreground thread's input queue. The log records the target and successful
-route at INFO, or the validation/Windows-refusal reason at WARN. The capture is
-consumed after that attempt, replaced by a later start, and cleared when the
-bridge is disabled or MatterHelm exits; it is never saved across restarts.
+foreground thread's input queue. Immediately after a saver closes Windows may
+briefly have no foreground input queue, so MatterHelm revalidates the captured
+HWND/PID/process name and retries every 100 ms for up to 1.5 seconds. The log
+records the target and successful route at INFO, or the final
+validation/Windows-refusal reason at WARN. Dismissing the screensaver remains
+successful even when this best-effort focus restore is refused, so a macro
+continues to its next step. The capture is consumed after that bounded attempt,
+replaced by a later start, and cleared when the bridge is disabled or
+MatterHelm exits; it is never saved across restarts.
 
 This does **not** run when you dismiss the screensaver yourself with the mouse
 or keyboard: MatterHelm receives no stop command, so it cannot restore the
@@ -414,8 +423,9 @@ click **Save** (closing the window with unsaved changes asks first).
       no-op. The captured position is in memory only and is lost when
       MatterHelm exits.
     - **Command sequence (macro)** — runs several of the above in order
-      from one voice command or tile tap. Build the step list with **Add…**, or
-      **Add mouse move…** for the same target picker described above. Each
+      from one voice command or tile tap. Build the step list with **Add…**,
+      then choose the step type from its dropdown. **Mouse move** uses the
+      same target picker described above. Each
       step is a media key, launch, key sequence, system command, mouse move,
       or a **Wait** of 1–5000 ms for pacing between steps; up to 16 steps are
       allowed, with waits summing to at most 10 s. Reorder with Up/Down and
@@ -649,6 +659,14 @@ office PC"* vs *"…pause the HTPC"*.
   suppressed only when repeated to the same process within two seconds. A
   later Pause can resume playback, so avoid routines that send repeated Pause
   or both retained edges when Kodi is the target.
+- **A key sequence logs `SendInput ... injected 0/N events (Win32 error 5)`.**
+  If the target app is running elevated, Windows elevation/UIPI restrictions
+  are the likely cause. `SendInput` returning zero and `GetLastError` reporting
+  error 5 do not prove UIPI specifically, but the actionable remedy is to run
+  the target app non-elevated (for example, clear **Run this program as an
+  administrator** for Philips Hue Sync); do not elevate MatterHelm as a
+  workaround. MatterHelm logs the exact key sequence, injected/expected event
+  counts, and Win32 error to help diagnose the failure.
 - **Need a clean slate.** Use [Factory reset](#factory-reset--re-pairing).
 
 ## Privacy notes

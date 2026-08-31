@@ -548,6 +548,45 @@ public sealed class PairingWindow : Form
     }
 
     /// <inheritdoc />
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+
+        // The handle now has its final DPI/fonts, but the form is not visible
+        // yet. Settle and center here so remote/slow sessions never paint the
+        // stale CenterScreen bounds for one frame.
+        if (StartPosition == FormStartPosition.CenterScreen)
+        {
+            PerformLayout();
+            Size preferredSize = GetPreferredSize(Size.Empty);
+            Rectangle workingArea = Screen.FromRectangle(Bounds).WorkingArea;
+            SetBounds(
+                workingArea.Left + ((workingArea.Width - preferredSize.Width) / 2),
+                workingArea.Top + ((workingArea.Height - preferredSize.Height) / 2),
+                preferredSize.Width,
+                preferredSize.Height,
+                BoundsSpecified.All);
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+
+        // Defensive fallback for a host that changes Size from its Shown event.
+        // The production path is already settled and centered in OnLoad before
+        // visibility, so this normally leaves Location unchanged.
+        if (StartPosition == FormStartPosition.CenterScreen)
+        {
+            Rectangle workingArea = Screen.FromRectangle(Bounds).WorkingArea;
+            Location = new Point(
+                workingArea.Left + ((workingArea.Width - Width) / 2),
+                workingArea.Top + ((workingArea.Height - Height) / 2));
+        }
+    }
+
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (disposing)

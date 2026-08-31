@@ -23,6 +23,15 @@ public interface IActionExecutor : IDisposable
     /// <summary>Executes one named action (the protocol action names, plus <c>"sleep"</c> for the power mapping). Never throws; <c>false</c> = failure.</summary>
     bool Execute(string name, object? value = null);
 
+    /// <summary>Executes one action while preserving a truthful failure reason for an ack or macro step.</summary>
+    ActionExecutionResult ExecuteDetailed(string name, object? value = null)
+    {
+        bool ok = Execute(name, value);
+        return ok
+            ? ActionExecutionResult.Success
+            : ActionExecutionResult.Failure($"action '{name}' failed (see the app log)");
+    }
+
     /// <summary>
     /// Executes display-off while retaining whether DDC/CI or Windows
     /// blanking actually completed. The default keeps existing test/external
@@ -70,6 +79,14 @@ public sealed class ActionExecutorAdapter : IActionExecutor
     /// <inheritdoc />
     public bool Execute(string name, object? value = null) =>
         name == "sleep" ? DisplayPower.Sleep() : _executor.Execute(name, value);
+
+    /// <inheritdoc />
+    public ActionExecutionResult ExecuteDetailed(string name, object? value = null) =>
+        name == "sleep"
+            ? Execute(name, value)
+                ? ActionExecutionResult.Success
+                : ActionExecutionResult.Failure("Windows refused the sleep request (see the app log)")
+            : _executor.ExecuteDetailed(name, value);
 
     /// <inheritdoc />
     public DisplayPowerOffResult ExecuteDisplaysOff() => _executor.ExecuteDisplaysOff();
@@ -391,11 +408,11 @@ public sealed class BridgeHost : IDisposable
     private BridgeState _state = BridgeState.Disabled;
     private bool _disposed;
 
-    /// <summary>Cancels in-flight background-macro delay waits on dispose (S8-6), so app exit never waits out a macro.</summary>
-    private readonly CancellationTokenSource _macroCts = new();
+    /// <summary>Cancellation belongs to one enabled bridge session and is replaced before the next session starts.</summary>
+    private CancellationTokenSource _macroCts = new();
     private readonly Lock _macroGate = new();
     private readonly HashSet<Task> _macroTasks = [];
-    private bool _macrosStopping;
+    private bool _macrosStopping = true;
 
     // Volume echo dead-band state (guarded by _gate; see the constants above).
     private int? _lastCommandedVolume;
@@ -528,6 +545,7 @@ public sealed class BridgeHost : IDisposable
         IpcServer? stoppingServer = null;
         SidecarSupervisor? stoppingSupervisor = null;
         bool releaseDisplayKeepAwake = false;
+        bool stopMacroSession = false;
         bool startFailed = false;
         lock (_gate)
         {
@@ -542,17 +560,21 @@ public sealed class BridgeHost : IDisposable
                 // release is idempotent and this closes the safety path even
                 // if a prior stop only partially completed.
                 releaseDisplayKeepAwake = !enabled;
+                stopMacroSession = !enabled;
             }
             else if (enabled)
             {
+                BeginMacroSession();
                 if (!StartLocked())
                 {
                     startFailed = true;
+                    stopMacroSession = true;
                 }
             }
             else
             {
                 releaseDisplayKeepAwake = true;
+                stopMacroSession = true;
                 stoppingSupervisor = _supervisor;
                 stoppingServer = _server;
                 _supervisor = null;
@@ -563,14 +585,20 @@ public sealed class BridgeHost : IDisposable
             }
         }
 
+        Task[] macroTasks = stopMacroSession ? CancelMacroSession() : [];
+        stoppingSupervisor?.Stop();
+        stoppingServer?.Dispose();
+        DrainMacroSession(macroTasks);
+
+        // The IPC worker and every macro that could capture focus for this
+        // session are now drained. Clearing earlier would let a straggling
+        // start-screensaver action repopulate stale state after disable.
         if (releaseDisplayKeepAwake)
         {
             _ = _executor.ReleaseDisplayKeepAwake();
             _executor.ClearScreensaverFocusCapture();
         }
 
-        stoppingSupervisor?.Stop();
-        stoppingServer?.Dispose();
         if (startFailed && _config.Current.BridgeEnabled)
         {
             _config.Current.BridgeEnabled = false;
@@ -585,7 +613,6 @@ public sealed class BridgeHost : IDisposable
     public void Dispose()
     {
         _lifecycleQueue.Complete();
-        Task[] macroTasks;
         lock (_lifecycleGate)
         {
             lock (_gate)
@@ -596,25 +623,11 @@ public sealed class BridgeHost : IDisposable
                 }
             }
 
-            lock (_macroGate)
-            {
-                _macrosStopping = true;
-                macroTasks = [.. _macroTasks];
-            }
-
-            _macroCts.Cancel();
             SetEnabledCore(false);
             lock (_gate)
             {
                 _disposed = true;
             }
-        }
-
-        if (macroTasks.Length > 0 && !Task.WaitAll(macroTasks, MacroShutdownWait))
-        {
-            _log(
-                "WARN",
-                $"bridge: {macroTasks.Count(task => !task.IsCompleted)} macro task(s) did not stop within {MacroShutdownWait.TotalSeconds:0.#} s; shutdown continues.");
         }
 
         _macroCts.Dispose();
@@ -1264,7 +1277,7 @@ public sealed class BridgeHost : IDisposable
     }
 
     /// <summary>Executes one action frame: ok + success pill + optional failure detail for the ack (null = the generic "action failed: {intent}").</summary>
-    private (bool Ok, string Pill, string? Error) ExecuteFrame(ActionFrame frame) => frame switch
+    internal (bool Ok, string Pill, string? Error) ExecuteFrame(ActionFrame frame) => frame switch
     {
         SetVolumeFrame v => (_executor.Execute("setVolume", v.Value), $"volume set to {v.Value} %", null),
         SetMutedFrame m => (_executor.Execute("setMuted", m.Value), m.Value ? "muted" : "unmuted", null),
@@ -1514,7 +1527,47 @@ public sealed class BridgeHost : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return (false, "failed", "macro cancelled (shutting down)");
+            return (false, "failed", "macro cancelled (bridge session stopped)");
+        }
+    }
+
+    /// <summary>Installs a fresh macro lifetime before a bridge session can accept actions.</summary>
+    internal void BeginMacroSession()
+    {
+        CancellationTokenSource previous;
+        lock (_macroGate)
+        {
+            previous = _macroCts;
+            _macroCts = new CancellationTokenSource();
+            _macrosStopping = false;
+        }
+
+        previous.Dispose();
+    }
+
+    /// <summary>Closes the active macro lifetime and snapshots all work that disable must drain.</summary>
+    private Task[] CancelMacroSession()
+    {
+        CancellationTokenSource cancellation;
+        Task[] tasks;
+        lock (_macroGate)
+        {
+            _macrosStopping = true;
+            cancellation = _macroCts;
+            tasks = [.. _macroTasks];
+        }
+
+        cancellation.Cancel();
+        return tasks;
+    }
+
+    private void DrainMacroSession(Task[] tasks)
+    {
+        if (tasks.Length > 0 && !Task.WaitAll(tasks, MacroShutdownWait))
+        {
+            _log(
+                "WARN",
+                $"bridge: {tasks.Count(task => !task.IsCompleted)} macro task(s) did not stop within {MacroShutdownWait.TotalSeconds:0.#} s; shutdown continues.");
         }
     }
 
@@ -1600,7 +1653,9 @@ public sealed class BridgeHost : IDisposable
             return (false, "failed", $"invalid key sequence for custom command {commandKey}: {parseError}");
         }
 
-        return (_executor.Execute("keySequence", chord), $"{chord.Canonical} sent", null);
+        return DescribeExecution(
+            _executor.ExecuteDetailed("keySequence", chord),
+            $"{chord.Canonical} sent");
     }
 
     /// <summary>
@@ -1610,32 +1665,44 @@ public sealed class BridgeHost : IDisposable
     /// </summary>
     private (bool Ok, string Pill, string? Error) ExecuteSystemCommand(SystemCommandName command) => command switch
     {
-        SystemCommandName.StartScreenSaver => (_executor.Execute("startScreenSaver"), "screensaver started", null),
-        SystemCommandName.StopScreenSaver => (_executor.Execute("stopScreenSaver"), "screensaver dismissed", null),
-        SystemCommandName.DisplaysOff => (_executor.Execute("powerOff"), "displays off", null),
-        SystemCommandName.DisplaysOn => (_executor.Execute("powerOn"), "displays woken", null),
-        SystemCommandName.Sleep => (_executor.Execute("sleep"), "sleeping", null),
-        SystemCommandName.Hibernate => (_executor.Execute("hibernate"), "hibernating", null),
-        SystemCommandName.Lock => (_executor.Execute("lock"), "workstation locked", null),
-        SystemCommandName.CloseForegroundProgram => (_executor.Execute("closeForeground"), "close sent to focused program", null),
-        SystemCommandName.Shutdown => (_executor.Execute("shutdown"), "shutting down", null),
-        SystemCommandName.Restart => (_executor.Execute("restart"), "restarting", null),
+        SystemCommandName.StartScreenSaver => ExecuteDetailed("startScreenSaver", "screensaver started"),
+        SystemCommandName.StopScreenSaver => ExecuteDetailed("stopScreenSaver", "screensaver dismissed"),
+        SystemCommandName.DisplaysOff => ExecuteDetailed("powerOff", "displays off"),
+        SystemCommandName.DisplaysOn => ExecuteDetailed("powerOn", "displays woken"),
+        SystemCommandName.Sleep => ExecuteDetailed("sleep", "sleeping"),
+        SystemCommandName.Hibernate => ExecuteDetailed("hibernate", "hibernating"),
+        SystemCommandName.Lock => ExecuteDetailed("lock", "workstation locked"),
+        SystemCommandName.CloseForegroundProgram => ExecuteDetailed("closeForeground", "close sent to focused program"),
+        SystemCommandName.Shutdown => ExecuteDetailed("shutdown", "shutting down"),
+        SystemCommandName.Restart => ExecuteDetailed("restart", "restarting"),
         _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
     };
 
     private (bool Ok, string Pill, string? Error) ExecuteMediaKey(MediaKeyName keyName) => keyName switch
     {
-        MediaKeyName.PlayPause => (_executor.Execute("playPause"), "play/pause pressed", null),
-        MediaKeyName.Next => (_executor.Execute("next"), "next track", null),
-        MediaKeyName.Previous => (_executor.Execute("previous"), "previous track", null),
-        MediaKeyName.Stop => (_executor.Execute("mediaStop"), "stop pressed", null),
-        MediaKeyName.Mute => (_executor.Execute("muteToggle"), "mute toggled", null),
-        MediaKeyName.VolumeUp => (_executor.Execute("volumeStep", VolumeStepPercent), $"volume up {VolumeStepPercent} %", null),
-        MediaKeyName.VolumeDown => (_executor.Execute("volumeStep", -VolumeStepPercent), $"volume down {VolumeStepPercent} %", null),
-        MediaKeyName.Play => (_executor.Execute("mediaPlay"), "play pressed", null),
-        MediaKeyName.Pause => (_executor.Execute("mediaPause"), "pause pressed", null),
+        MediaKeyName.PlayPause => ExecuteDetailed("playPause", "play/pause pressed"),
+        MediaKeyName.Next => ExecuteDetailed("next", "next track"),
+        MediaKeyName.Previous => ExecuteDetailed("previous", "previous track"),
+        MediaKeyName.Stop => ExecuteDetailed("mediaStop", "stop pressed"),
+        MediaKeyName.Mute => ExecuteDetailed("muteToggle", "mute toggled"),
+        MediaKeyName.VolumeUp => ExecuteDetailed("volumeStep", $"volume up {VolumeStepPercent} %", VolumeStepPercent),
+        MediaKeyName.VolumeDown => ExecuteDetailed("volumeStep", $"volume down {VolumeStepPercent} %", -VolumeStepPercent),
+        MediaKeyName.Play => ExecuteDetailed("mediaPlay", "play pressed"),
+        MediaKeyName.Pause => ExecuteDetailed("mediaPause", "pause pressed"),
         _ => throw new ArgumentOutOfRangeException(nameof(keyName), keyName, null),
     };
+
+    private (bool Ok, string Pill, string? Error) ExecuteDetailed(
+        string name,
+        string successPill,
+        object? value = null) =>
+        DescribeExecution(_executor.ExecuteDetailed(name, value), successPill);
+
+    private static (bool Ok, string Pill, string? Error) DescribeExecution(
+        ActionExecutionResult result,
+        string successPill) => result.Ok
+            ? (true, successPill, null)
+            : (false, "failed", result.Error ?? "action failed without a diagnostic reason");
 
     /// <summary>
     /// The resulting volume level (and muted flag) a successful

@@ -1,8 +1,8 @@
 # ADR-013: focused-first media routing and retained mouse movement
 
-- **Status**: accepted, amended by S11-3, S11-5, and S11-6
+- **Status**: accepted, amended by S11-3, S11-5, S11-6, and S11-8
 - **Date**: 2026-08-30
-- **Story**: S11-2 (owner-directed), S11-3 release remediation, S11-5 macro mouse steps, S11-6 screensaver focus restoration
+- **Story**: S11-2 (owner-directed), S11-3 release remediation, S11-5 macro mouse steps, S11-6 screensaver focus restoration, S11-8 field remediation
 
 ## Context
 
@@ -33,16 +33,24 @@ SMTC-only media routing or a key-only custom frame.
   foreground app. A different or unresolved owner is unverifiable: it cannot
   suppress delivery, prove success, or receive fallback after a successfully
   delivered focused command.
-- When focused delivery fails (including no foreground window), the captured
-  current session is the intended fallback even if it belongs to another app.
-  Pin the action to its captured `SourceAppUserModelId`; an owner change before
-  or after the action fails verification instead of redirecting or proving it.
+- When delivery was aimed at a specific foreground window and fails, only a
+  captured session owned by that same foreground app is an intended fallback.
+  A different-owner session is never actioned. When no foreground target could
+  be captured, the captured current session remains the intended fallback.
+  Pin every fallback to its captured `SourceAppUserModelId`; an owner change
+  before or after the action fails verification instead of redirecting or
+  proving it.
+- Treat Win32 `ERROR_TIMEOUT` from the focused `WM_APPCOMMAND` as a transient
+  just-restored-window condition: wait 200 ms and retry once with another
+  one-second `SendMessageTimeoutW`. Do not retry other delivery failures. Cover
+  the route with a four-second cancellation deadline; the worst synchronous
+  timeout path remains inside the IPC worker's five-second shutdown drain.
 - Compute Play/Pause's desired state before delivery and use absolute
   `TryPlayAsync`/`TryPauseAsync` for every SMTC fallback. Never use a session
   toggle after sending a focused toggle.
-- Cover the complete route with one three-second cancellation deadline. This
-  stays below the IPC serial worker's five-second shutdown drain budget while
-  retaining two 400 ms observation windows and bounded WinRT calls.
+- Bound session reads/actions to one second and retain the 400 ms observation
+  interval. Together with the appcommand retry policy, the complete route
+  remains bounded by the four-second cancellation deadline described above.
 - A delivered focused command without a matching session is an acknowledged,
   explicitly unverifiable delivery. It does not claim playback changed. To
   limit Kodi's toggle-like Pause hazard without dropping Kodi support, suppress
@@ -75,8 +83,14 @@ SMTC-only media routing or a key-only custom frame.
   capture and validate that the HWND still exists and still belongs to the
   captured PID and process name. Restore a minimized window, try
   `SetForegroundWindow`, then retry while the action thread is attached to the
-  current foreground thread's input queue. Log a titled INFO outcome on
-  success and a reasoned WARN on stale identity or Windows refusal.
+  current foreground thread's input queue. If activation remains unavailable,
+  revalidate identity and retry every 100 ms for up to 1.5 seconds. Log a
+  titled INFO outcome on success and one reasoned WARN after stale identity or
+  final Windows refusal.
+- Amend S11-6's action contract: successfully closing the screensaver (or
+  finding none running) is success even if focus restoration is refused.
+  Restoration is a best-effort enhancement and its failure cannot nack Power
+  On or abort a command sequence.
 - Clear screensaver focus state after every restore attempt, on bridge
   disable, and on app exit. Do not persist window handles across sessions.
   Display-off routes have no focus side effect and therefore own no such state.
@@ -86,8 +100,10 @@ SMTC-only media routing or a key-only custom frame.
 - Kodi continues receiving focused Play/Pause even though it cannot be
   verified through SMTC. The log, user guide, and success UI are explicit that
   acknowledgement means delivery, not observed playback change.
-- Chrome or another background session can no longer suppress or verify a Kodi
-  command. It remains reachable when focused delivery genuinely fails.
+- Chrome, Spotify, or another background session can no longer suppress,
+  verify, or receive fallback for a Kodi-targeted command. A failed Kodi
+  delivery succeeds only through a Kodi-owned session; otherwise it fails with
+  the target/fallback reason.
 - The two-second guard makes immediate repeated dedicated verbs idempotent for
   unverifiable targets. Residual limitation: Kodi Pause can still resume
   playback when the same dedicated Pause is sent again after the window, after
@@ -108,3 +124,6 @@ SMTC-only media routing or a key-only custom frame.
   custom screensaver commands already converge on the same executor verbs.
   A user-driven mouse/keyboard dismissal bypasses those stop verbs, so focus
   cannot be restored in that case; the user guide states this limitation.
+- S11-8 is app-local and requires no sidecar or IPC revision. Macro errors now
+  carry executor diagnostics rather than reusing success-pill copy, so logs and
+  failed acknowledgements describe the actual failed operation.

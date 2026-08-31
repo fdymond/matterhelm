@@ -30,23 +30,35 @@ internal interface IForegroundWindowNative
     bool AttachThreadInput(uint attachThreadId, uint attachToThreadId, bool attach);
 }
 
+/// <summary>Testable wait boundary for bounded foreground-restore retries.</summary>
+internal interface IFocusRestoreDelay
+{
+    void Wait(TimeSpan delay);
+}
+
 /// <summary>
 /// Remembers the foreground window displaced by a MatterHelm-started
-/// screensaver and validates its identity before one best-effort restore.
+/// screensaver and validates its identity before a bounded best-effort restore.
 /// State is process-local and deliberately never persisted.
 /// </summary>
 internal sealed partial class ScreensaverFocusMemory
 {
+    private const int RestoreRetryCount = 15;
+    private static readonly TimeSpan RestoreRetryInterval = TimeSpan.FromMilliseconds(100);
+
     private readonly Lock _gate = new();
     private readonly IForegroundWindowNative _native;
+    private readonly IFocusRestoreDelay _delay;
     private readonly Action<string, string> _log;
     private CapturedWindow? _capture;
 
     internal ScreensaverFocusMemory(
         IForegroundWindowNative? native = null,
-        Action<string, string>? log = null)
+        Action<string, string>? log = null,
+        IFocusRestoreDelay? delay = null)
     {
         _native = native ?? new WindowsForegroundWindowNative();
+        _delay = delay ?? new ThreadFocusRestoreDelay();
         _log = log ?? WriteLog;
     }
 
@@ -97,7 +109,8 @@ internal sealed partial class ScreensaverFocusMemory
 
     /// <summary>
     /// Validates and consumes the capture, restoring a minimized target before
-    /// foreground activation. No prior capture is a successful no-op.
+    /// foreground activation. Transient Windows activation refusals are retried
+    /// for up to 1.5 seconds. No prior capture is a successful no-op.
     /// </summary>
     internal bool Restore()
     {
@@ -114,39 +127,38 @@ internal sealed partial class ScreensaverFocusMemory
             return true;
         }
 
-        if (!_native.IsWindow(captured.Window))
+        string refusalReason = "Windows refused foreground activation";
+        for (int retry = 0; retry <= RestoreRetryCount; retry++)
         {
-            return Refuse(captured, "the captured HWND is no longer a window");
+            RestoreAttemptOutcome outcome = TryRestore(captured, out refusalReason);
+            if (outcome == RestoreAttemptOutcome.Succeeded)
+            {
+                return true;
+            }
+
+            if (outcome == RestoreAttemptOutcome.PermanentRefusal)
+            {
+                return Refuse(captured, refusalReason);
+            }
+
+            if (retry == RestoreRetryCount)
+            {
+                break;
+            }
+
+            if (retry == 0)
+            {
+                _log(
+                    "INFO",
+                    $"screensaver focus: foreground activation is temporarily unavailable; retrying for up to {RestoreRetryCount * RestoreRetryInterval.TotalMilliseconds:0} ms.");
+            }
+
+            _delay.Wait(RestoreRetryInterval);
         }
 
-        uint currentProcessId = _native.GetWindowProcessId(captured.Window);
-        if (currentProcessId != captured.ProcessId)
-        {
-            return Refuse(
-                captured,
-                $"the HWND now belongs to process {currentProcessId} instead of {captured.ProcessId}");
-        }
-
-        string? currentProcessName = _native.GetProcessName(currentProcessId);
-        if (!string.Equals(currentProcessName, captured.ProcessName, StringComparison.OrdinalIgnoreCase))
-        {
-            return Refuse(
-                captured,
-                $"process identity changed from '{captured.ProcessName}' to '{currentProcessName ?? "unresolved"}'");
-        }
-
-        if (_native.IsMinimized(captured.Window))
-        {
-            _native.RestoreWindow(captured.Window);
-        }
-
-        if (_native.SetForegroundWindow(captured.Window))
-        {
-            _log("INFO", $"screensaver focus: restored {Describe(captured)} with SetForegroundWindow.");
-            return true;
-        }
-
-        return RestoreWithAttachedInput(captured);
+        return Refuse(
+            captured,
+            $"{refusalReason} after {RestoreRetryCount + 1} attempts over {RestoreRetryCount * RestoreRetryInterval.TotalMilliseconds:0} ms");
     }
 
     /// <summary>Invalidates any capture at a bridge/app lifecycle boundary.</summary>
@@ -165,31 +177,77 @@ internal sealed partial class ScreensaverFocusMemory
         }
     }
 
-    private bool RestoreWithAttachedInput(CapturedWindow captured)
+    private RestoreAttemptOutcome TryRestore(CapturedWindow captured, out string refusalReason)
+    {
+        if (!_native.IsWindow(captured.Window))
+        {
+            refusalReason = "the captured HWND is no longer a window";
+            return RestoreAttemptOutcome.PermanentRefusal;
+        }
+
+        uint currentProcessId = _native.GetWindowProcessId(captured.Window);
+        if (currentProcessId != captured.ProcessId)
+        {
+            refusalReason = $"the HWND now belongs to process {currentProcessId} instead of {captured.ProcessId}";
+            return RestoreAttemptOutcome.PermanentRefusal;
+        }
+
+        string? currentProcessName = _native.GetProcessName(currentProcessId);
+        if (!string.Equals(currentProcessName, captured.ProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            refusalReason = $"process identity changed from '{captured.ProcessName}' to '{currentProcessName ?? "unresolved"}'";
+            return RestoreAttemptOutcome.PermanentRefusal;
+        }
+
+        if (_native.IsMinimized(captured.Window))
+        {
+            _native.RestoreWindow(captured.Window);
+        }
+
+        if (_native.SetForegroundWindow(captured.Window))
+        {
+            refusalReason = "";
+            return RestoreSucceeded(captured, "SetForegroundWindow");
+        }
+
+        return RestoreWithAttachedInput(captured, out refusalReason);
+    }
+
+    private RestoreAttemptOutcome RestoreWithAttachedInput(
+        CapturedWindow captured,
+        out string refusalReason)
     {
         nint foreground = _native.GetForegroundWindow();
         if (foreground == 0)
         {
-            return Refuse(captured, "SetForegroundWindow was refused and no current foreground input queue exists for fallback");
+            refusalReason = "SetForegroundWindow was refused and no current foreground input queue exists for fallback";
+            return RestoreAttemptOutcome.RetryableRefusal;
         }
 
         uint foregroundThreadId = _native.GetWindowThreadId(foreground);
         uint currentThreadId = _native.GetCurrentThreadId();
         if (foregroundThreadId == 0 || currentThreadId == 0)
         {
-            return Refuse(captured, "SetForegroundWindow was refused and a fallback thread id could not be resolved");
+            refusalReason = "SetForegroundWindow was refused and a fallback thread id could not be resolved";
+            return RestoreAttemptOutcome.RetryableRefusal;
         }
 
         if (foregroundThreadId == currentThreadId)
         {
-            return _native.SetForegroundWindow(captured.Window)
-                ? RestoreSucceeded(captured, "SetForegroundWindow retry on the foreground input thread")
-                : Refuse(captured, "Windows refused SetForegroundWindow on both activation attempts");
+            if (_native.SetForegroundWindow(captured.Window))
+            {
+                refusalReason = "";
+                return RestoreSucceeded(captured, "SetForegroundWindow retry on the foreground input thread");
+            }
+
+            refusalReason = "Windows refused SetForegroundWindow on both activation attempts";
+            return RestoreAttemptOutcome.RetryableRefusal;
         }
 
         if (!_native.AttachThreadInput(currentThreadId, foregroundThreadId, attach: true))
         {
-            return Refuse(captured, "SetForegroundWindow was refused and AttachThreadInput could not attach to the current foreground thread");
+            refusalReason = "SetForegroundWindow was refused and AttachThreadInput could not attach to the current foreground thread";
+            return RestoreAttemptOutcome.RetryableRefusal;
         }
 
         bool activated;
@@ -205,15 +263,20 @@ internal sealed partial class ScreensaverFocusMemory
             }
         }
 
-        return activated
-            ? RestoreSucceeded(captured, "AttachThreadInput fallback")
-            : Refuse(captured, "Windows refused SetForegroundWindow after the AttachThreadInput fallback");
+        if (activated)
+        {
+            refusalReason = "";
+            return RestoreSucceeded(captured, "AttachThreadInput fallback");
+        }
+
+        refusalReason = "Windows refused SetForegroundWindow after the AttachThreadInput fallback";
+        return RestoreAttemptOutcome.RetryableRefusal;
     }
 
-    private bool RestoreSucceeded(CapturedWindow captured, string route)
+    private RestoreAttemptOutcome RestoreSucceeded(CapturedWindow captured, string route)
     {
         _log("INFO", $"screensaver focus: restored {Describe(captured)} with {route}.");
-        return true;
+        return RestoreAttemptOutcome.Succeeded;
     }
 
     private bool Refuse(CapturedWindow captured, string reason)
@@ -246,6 +309,18 @@ internal sealed partial class ScreensaverFocusMemory
     }
 
     private sealed record CapturedWindow(nint Window, uint ProcessId, string ProcessName, string Title);
+
+    private enum RestoreAttemptOutcome
+    {
+        Succeeded,
+        RetryableRefusal,
+        PermanentRefusal,
+    }
+
+    private sealed class ThreadFocusRestoreDelay : IFocusRestoreDelay
+    {
+        public void Wait(TimeSpan delay) => Thread.Sleep(delay);
+    }
 
     private sealed partial class WindowsForegroundWindowNative : IForegroundWindowNative
     {
