@@ -531,6 +531,7 @@ public static class BridgeHostTests
             Assert.Contains("step 1 of 2", error, StringComparison.Ordinal);
             Assert.Equal(1, calls);
         }
+
     }
 
     /// <summary>
@@ -1371,7 +1372,98 @@ public static class BridgeHostTests
 
             Assert.Equal(0, host.RunningMacroCount);
             Assert.DoesNotContain(("mediaStop", (object?)null), _executor.Calls);
-            Assert.True(_log.Contains("ERROR", "macro cancelled (shutting down)"));
+            Assert.True(_log.Contains("ERROR", "macro cancelled (bridge session stopped)"));
+        }
+
+        [Fact]
+        public async Task DelayedMacroCannotCaptureScreensaverFocusAfterDisableReturns()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "late-screensaver",
+                    Name = "Late Screensaver",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new DelayActionConfig { Ms = 3_000 },
+                            new SystemActionConfig { Command = SystemCommandName.StartScreenSaver },
+                        ],
+                    },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec());
+            host.BeginMacroSession();
+            (bool started, _, string? error) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.Parse(ActionId), "late-screensaver", On: true));
+            Assert.True(started, error);
+            await TestSupport.WaitUntilAsync(
+                () => host.RunningMacroCount == 1,
+                TimeSpan.FromSeconds(10),
+                "the delayed screensaver macro to enter its wait");
+
+            await host.QueueSetEnabled(false);
+
+            Assert.Equal(0, host.RunningMacroCount);
+            Assert.DoesNotContain(("startScreenSaver", (object?)null), _executor.Calls);
+            Assert.False(_executor.HasScreensaverFocusCapture);
+        }
+
+        [Fact]
+        public async Task ScreensaverFocusCaptureCannotSurviveADisableEnableCycle()
+        {
+            using var host = CreateHost(NodeClientSpec());
+            host.BeginMacroSession();
+            Assert.True(_executor.Execute("startScreenSaver"));
+            Assert.True(_executor.HasScreensaverFocusCapture);
+
+            await host.QueueSetEnabled(false);
+            host.BeginMacroSession();
+
+            Assert.False(_executor.HasScreensaverFocusCapture);
+        }
+
+        [Fact]
+        public async Task ReenabledBridgeRunsMacrosWithAFreshCancellationLifetime()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "fresh-session",
+                    Name = "Fresh Session",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps =
+                        [
+                            new DelayActionConfig { Ms = 500 },
+                            new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+                        ],
+                    },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec());
+            host.BeginMacroSession();
+            (bool firstStarted, _, string? firstError) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.Parse(ActionId), "fresh-session", On: true));
+            Assert.True(firstStarted, firstError);
+            await TestSupport.WaitUntilAsync(
+                () => host.RunningMacroCount == 1,
+                TimeSpan.FromSeconds(10),
+                "the first-session macro to enter its wait");
+            await host.QueueSetEnabled(false);
+            Assert.DoesNotContain(("mediaStop", (object?)null), _executor.Calls);
+
+            host.BeginMacroSession();
+            (bool secondStarted, _, string? secondError) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.Parse(ActionId), "fresh-session", On: true));
+            Assert.True(secondStarted, secondError);
+            await TestSupport.WaitUntilAsync(
+                () => _executor.Calls.Contains(("mediaStop", (object?)null)),
+                TimeSpan.FromSeconds(10),
+                "the re-enabled session macro to complete");
         }
 
         [Fact]
@@ -1429,6 +1521,36 @@ public static class BridgeHostTests
 
             // Execution stopped at step 1: the second media key never ran.
             Assert.DoesNotContain(("next", (object?)null), _executor.Calls);
+        }
+
+        [Fact]
+        public void SequenceMediaFailureCarriesTheExecutorsDiagnosticThroughCustomDispatch()
+        {
+            const string diagnostic = "target timed out; no same-owner session to fall back to";
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "resume",
+                    Name = "Resume",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps = [new MediaKeyActionConfig { KeyName = MediaKeyName.Play }],
+                    },
+                },
+            ];
+            _executor.NextDetailedResult = ActionExecutionResult.Failure(diagnostic);
+            using var host = CreateHost(NodeClientSpec());
+
+            (bool ok, string pill, string? error) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.Parse(ActionId), "resume", On: true));
+
+            Assert.False(ok);
+            Assert.Equal("failed", pill);
+            Assert.Contains("step 1 of 1 failed", error, StringComparison.Ordinal);
+            Assert.Contains(diagnostic, error, StringComparison.Ordinal);
+            Assert.Contains(("mediaPlay", (object?)null), _executor.Calls);
+            Assert.DoesNotContain("play pressed", error, StringComparison.Ordinal);
         }
 
 
@@ -1885,14 +2007,28 @@ public static class BridgeHostTests
             private readonly Lock _gate = new();
             private readonly List<(string Name, object? Value)> _calls = [];
             private int _releaseDisplayKeepAwakeCalls;
+            private bool _hasScreensaverFocusCapture;
 
             public event EventHandler<VolumeState>? VolumeChanged;
 
             public bool NextResult { get; set; } = true;
 
+            public ActionExecutionResult? NextDetailedResult { get; set; }
+
             public VolumeState State { get; set; } = new(55, false);
 
             public int ReleaseDisplayKeepAwakeCalls => Volatile.Read(ref _releaseDisplayKeepAwakeCalls);
+
+            public bool HasScreensaverFocusCapture
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _hasScreensaverFocusCapture;
+                    }
+                }
+            }
 
             public IReadOnlyList<(string Name, object? Value)> Calls
             {
@@ -1910,9 +2046,26 @@ public static class BridgeHostTests
                 lock (_gate)
                 {
                     _calls.Add((name, value));
+                    if (name == "startScreenSaver")
+                    {
+                        _hasScreensaverFocusCapture = true;
+                    }
+                    else if (name == "stopScreenSaver")
+                    {
+                        _hasScreensaverFocusCapture = false;
+                    }
                 }
 
                 return NextResult;
+            }
+
+            public ActionExecutionResult ExecuteDetailed(string name, object? value = null)
+            {
+                bool ok = Execute(name, value);
+                return NextDetailedResult
+                    ?? (ok
+                        ? ActionExecutionResult.Success
+                        : ActionExecutionResult.Failure($"action '{name}' failed (see the app log)"));
             }
 
             public VolumeState GetVolumeState() => State;
@@ -1921,6 +2074,14 @@ public static class BridgeHostTests
             {
                 Interlocked.Increment(ref _releaseDisplayKeepAwakeCalls);
                 return true;
+            }
+
+            public void ClearScreensaverFocusCapture()
+            {
+                lock (_gate)
+                {
+                    _hasScreensaverFocusCapture = false;
+                }
             }
 
             public void RaiseVolumeChanged(VolumeState state) => VolumeChanged?.Invoke(this, state);

@@ -90,7 +90,7 @@ public sealed class ScreensaverFocusMemoryTests
     [InlineData(false, 123u, "kodi", "no longer a window")]
     [InlineData(true, 999u, "kodi", "now belongs to process 999")]
     [InlineData(true, 123u, "not-kodi", "process identity changed")]
-    public void StaleCaptureIsSkippedWarnedAndCleared(
+    public void StaleCaptureIsWarnedAndClearedWithoutFailingScreensaverDismissal(
         bool isWindow,
         uint currentProcessId,
         string currentProcessName,
@@ -106,7 +106,7 @@ public sealed class ScreensaverFocusMemoryTests
 
         bool restored = ActionExecutor.StopScreenSaver(memory, () => true);
 
-        Assert.False(restored);
+        Assert.True(restored);
         Assert.Empty(native.ActivationTargets);
         Assert.Contains(logs, entry => entry.Level == "WARN"
             && entry.Message.Contains(expectedReason, StringComparison.Ordinal));
@@ -114,25 +114,54 @@ public sealed class ScreensaverFocusMemoryTests
     }
 
     [Fact]
-    public void ActivationRefusalUsesAttachFallbackAndReturnsFalseWithWarning()
+    public void ActivationRefusalIsRetriedAndWarnedWithoutFailingScreensaverDismissal()
     {
-        var native = new FakeForegroundWindowNative();
-        native.ActivationResults.Enqueue(false);
-        native.ActivationResults.Enqueue(false);
+        var native = new FakeForegroundWindowNative { ActivationDefaultResult = false };
         var logs = new List<(string Level, string Message)>();
-        var memory = new ScreensaverFocusMemory(native, (level, message) => logs.Add((level, message)));
+        var delay = new FakeFocusRestoreDelay();
+        var memory = new ScreensaverFocusMemory(
+            native,
+            (level, message) => logs.Add((level, message)),
+            delay);
         Assert.True(memory.Capture());
+        native.ProcessIdLookups.Clear();
+        native.ProcessNameLookups.Clear();
         native.ForegroundWindow = 0x222;
 
-        bool restored = ActionExecutor.StopScreenSaver(memory, () => true);
+        bool dismissed = ActionExecutor.StopScreenSaver(memory, () => true);
 
-        Assert.False(restored);
-        Assert.Equal([(44u, 55u, true), (44u, 55u, false)], native.AttachCalls);
+        Assert.True(dismissed);
+        Assert.Equal(15, delay.Waits.Count);
+        Assert.All(delay.Waits, wait => Assert.Equal(TimeSpan.FromMilliseconds(100), wait));
+        Assert.Equal(TimeSpan.FromSeconds(1.5), delay.Waits.Aggregate(TimeSpan.Zero, (sum, wait) => sum + wait));
+        Assert.Equal(16, native.IsWindowCalls);
+        Assert.Equal(Enumerable.Repeat(native.Window, 16), native.ProcessIdLookups);
+        Assert.Equal(Enumerable.Repeat(123u, 16), native.ProcessNameLookups);
+        Assert.Equal(32, native.AttachCalls.Count);
         Assert.Contains(logs, entry => entry.Level == "WARN"
             && entry.Message.Contains("Windows refused SetForegroundWindow after the AttachThreadInput fallback", StringComparison.Ordinal));
         Assert.DoesNotContain(logs, entry => entry.Level == "INFO"
             && entry.Message.Contains("restored", StringComparison.Ordinal));
         Assert.False(memory.HasCapture);
+    }
+
+    [Fact]
+    public void CapturedProcessIdentityIsRecheckedAndAnIdentityChangeStopsRetries()
+    {
+        var native = new FakeForegroundWindowNative { ActivationDefaultResult = false };
+        var delay = new FakeFocusRestoreDelay(() => native.ProcessName = "replacement");
+        var memory = new ScreensaverFocusMemory(native, (_, _) => { }, delay);
+        Assert.True(memory.Capture());
+        native.ProcessIdLookups.Clear();
+        native.ProcessNameLookups.Clear();
+        native.ForegroundWindow = 0x222;
+
+        Assert.False(memory.Restore());
+
+        Assert.Equal([TimeSpan.FromMilliseconds(100)], delay.Waits);
+        Assert.Equal([native.Window, native.Window], native.ProcessIdLookups);
+        Assert.Equal([123u, 123u], native.ProcessNameLookups);
+        Assert.Equal(2, native.ActivationTargets.Count);
     }
 
     [Fact]
@@ -157,10 +186,12 @@ public sealed class ScreensaverFocusMemoryTests
     [Fact]
     public void RefusalWithoutACurrentForegroundWindowIsWarned()
     {
-        var native = new FakeForegroundWindowNative();
-        native.ActivationResults.Enqueue(false);
+        var native = new FakeForegroundWindowNative { ActivationDefaultResult = false };
         var logs = new List<(string Level, string Message)>();
-        var memory = new ScreensaverFocusMemory(native, (level, message) => logs.Add((level, message)));
+        var memory = new ScreensaverFocusMemory(
+            native,
+            (level, message) => logs.Add((level, message)),
+            new FakeFocusRestoreDelay());
         Assert.True(memory.Capture());
         native.ForegroundWindow = 0;
 
@@ -173,17 +204,22 @@ public sealed class ScreensaverFocusMemoryTests
     [Fact]
     public void AttachFailureIsWarnedWithoutAnotherActivationAttempt()
     {
-        var native = new FakeForegroundWindowNative();
-        native.ActivationResults.Enqueue(false);
-        native.AttachResults.Enqueue(false);
+        var native = new FakeForegroundWindowNative
+        {
+            ActivationDefaultResult = false,
+            AttachDefaultResult = false,
+        };
         var logs = new List<(string Level, string Message)>();
-        var memory = new ScreensaverFocusMemory(native, (level, message) => logs.Add((level, message)));
+        var memory = new ScreensaverFocusMemory(
+            native,
+            (level, message) => logs.Add((level, message)),
+            new FakeFocusRestoreDelay());
         Assert.True(memory.Capture());
         native.ForegroundWindow = 0x222;
 
         Assert.False(memory.Restore());
 
-        Assert.Single(native.ActivationTargets);
+        Assert.Equal(16, native.ActivationTargets.Count);
         Assert.Contains(logs, entry => entry.Level == "WARN"
             && entry.Message.Contains("could not attach", StringComparison.Ordinal));
     }
@@ -202,6 +238,63 @@ public sealed class ScreensaverFocusMemoryTests
 
         Assert.Equal(2, native.ActivationTargets.Count);
         Assert.Empty(native.AttachCalls);
+    }
+
+    [Fact]
+    public void MissingForegroundQueueCanAppearDuringRetryAndRestoreThenSucceeds()
+    {
+        var native = new FakeForegroundWindowNative { ActivationDefaultResult = false };
+        var delay = new FakeFocusRestoreDelay(() =>
+        {
+            native.ForegroundWindow = 0x222;
+            native.ActivationDefaultResult = true;
+        });
+        var memory = new ScreensaverFocusMemory(native, (_, _) => { }, delay);
+        Assert.True(memory.Capture());
+        native.ForegroundWindow = 0;
+
+        Assert.True(memory.Restore());
+
+        Assert.Single(delay.Waits);
+        Assert.Equal(2, native.IsWindowCalls);
+        Assert.Equal(2, native.ActivationTargets.Count);
+    }
+
+    [Fact]
+    public void RefusedFocusRestoreDoesNotAbortASequenceAfterSuccessfulDismissal()
+    {
+        var native = new FakeForegroundWindowNative { ActivationDefaultResult = false };
+        var memory = new ScreensaverFocusMemory(
+            native,
+            (_, _) => { },
+            new FakeFocusRestoreDelay());
+        Assert.True(memory.Capture());
+        native.ForegroundWindow = 0;
+        var sequence = new SequenceActionConfig
+        {
+            Steps =
+            [
+                new SystemActionConfig { Command = SystemCommandName.StopScreenSaver },
+                new MediaKeyActionConfig { KeyName = MediaKeyName.Play },
+            ],
+        };
+        int playCalls = 0;
+
+        (bool ok, _, string? error) = BridgeHost.RunSequenceSteps(
+            "resume",
+            sequence,
+            step => step switch
+            {
+                SystemActionConfig => (
+                    ActionExecutor.StopScreenSaver(memory, () => true),
+                    "screensaver dismissed",
+                    null),
+                MediaKeyActionConfig => (++playCalls == 1, "play pressed", null),
+                _ => (false, "failed", "unexpected step"),
+            });
+
+        Assert.True(ok, error);
+        Assert.Equal(1, playCalls);
     }
 
     [Fact]
@@ -339,6 +432,16 @@ public sealed class ScreensaverFocusMemoryTests
 
         public bool IsMinimizedResult { get; set; }
 
+        public bool ActivationDefaultResult { get; set; } = true;
+
+        public bool AttachDefaultResult { get; set; } = true;
+
+        public int IsWindowCalls { get; private set; }
+
+        public List<nint> ProcessIdLookups { get; } = [];
+
+        public List<uint> ProcessNameLookups { get; } = [];
+
         public Queue<bool> ActivationResults { get; } = new();
 
         public Queue<bool> AttachResults { get; } = new();
@@ -359,11 +462,23 @@ public sealed class ScreensaverFocusMemoryTests
             return ForegroundWindow;
         }
 
-        public bool IsWindow(nint window) => IsWindowResult;
+        public bool IsWindow(nint window)
+        {
+            IsWindowCalls++;
+            return IsWindowResult;
+        }
 
-        public uint GetWindowProcessId(nint window) => ProcessId;
+        public uint GetWindowProcessId(nint window)
+        {
+            ProcessIdLookups.Add(window);
+            return ProcessId;
+        }
 
-        public string? GetProcessName(uint processId) => ProcessName;
+        public string? GetProcessName(uint processId)
+        {
+            ProcessNameLookups.Add(processId);
+            return ProcessName;
+        }
 
         public string GetWindowTitle(nint window) => Title;
 
@@ -374,7 +489,9 @@ public sealed class ScreensaverFocusMemoryTests
         public bool SetForegroundWindow(nint window)
         {
             ActivationTargets.Add(window);
-            return ActivationResults.Count == 0 || ActivationResults.Dequeue();
+            return ActivationResults.Count == 0
+                ? ActivationDefaultResult
+                : ActivationResults.Dequeue();
         }
 
         public uint GetWindowThreadId(nint window) => 55;
@@ -384,7 +501,20 @@ public sealed class ScreensaverFocusMemoryTests
         public bool AttachThreadInput(uint attachThreadId, uint attachToThreadId, bool attach)
         {
             AttachCalls.Add((attachThreadId, attachToThreadId, attach));
-            return AttachResults.Count == 0 || AttachResults.Dequeue();
+            return AttachResults.Count == 0
+                ? AttachDefaultResult
+                : AttachResults.Dequeue();
+        }
+    }
+
+    private sealed class FakeFocusRestoreDelay(Action? afterWait = null) : IFocusRestoreDelay
+    {
+        public List<TimeSpan> Waits { get; } = [];
+
+        public void Wait(TimeSpan delay)
+        {
+            Waits.Add(delay);
+            afterWait?.Invoke();
         }
     }
 }

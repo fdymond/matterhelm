@@ -100,6 +100,44 @@ public static class PairingWindowTests
     }
 
     [Fact]
+    public static void FirstVisibleFrameAlreadyUsesTheSettledCenteredBounds()
+    {
+        using var window = new PairingWindow();
+        Point? firstVisibleLocation = null;
+        Size? firstVisibleSize = null;
+        window.VisibleChanged += (_, _) =>
+        {
+            if (window.Visible && firstVisibleLocation is null)
+            {
+                firstVisibleLocation = window.Location;
+                firstVisibleSize = window.Size;
+            }
+        };
+
+        window.Show();
+
+        Point location = Assert.IsType<Point>(firstVisibleLocation);
+        Size size = Assert.IsType<Size>(firstVisibleSize);
+        Screen screen = Screen.FromPoint(location);
+        Assert.Equal(CenteredLocation(screen.WorkingArea, size), location);
+    }
+
+    [Fact]
+    public static void FirstShowRecentersAfterTheShownLayoutSettlesToASmallerSize()
+    {
+        using var window = new PairingWindow();
+        Size settledSize = window.Size;
+        window.AutoSize = false;
+        window.Size = new Size(settledSize.Width + 95, settledSize.Height);
+        window.Shown += (_, _) => window.Size = settledSize;
+
+        window.Show();
+
+        Screen screen = Screen.FromRectangle(window.Bounds);
+        Assert.Equal(CenteredLocation(screen.WorkingArea, window.Size), window.Location);
+    }
+
+    [Fact]
     public static void SameStageCodeUpdateLeavesTheWindowPositionUntouched()
     {
         using var window = new PairingWindow

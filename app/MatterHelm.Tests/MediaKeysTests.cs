@@ -5,13 +5,30 @@ namespace MatterHelm.Tests;
 
 public sealed class MediaKeysTests
 {
-    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan VerifyDelay = TimeSpan.FromMilliseconds(400);
-    private static readonly TimeSpan RouteDeadline = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan RepeatWindow = TimeSpan.FromSeconds(2);
     private static readonly MediaAppIdentity Kodi = new(10, "kodi.exe", null);
     private static readonly MediaAppIdentity Chrome = new(20, "chrome.exe", "Chrome.App");
     private static readonly MediaAppIdentity Spotify = new(30, "Spotify.exe", "SpotifyAB.Spotify!App");
+
+    [Fact]
+    public void ProductionRoutingPolicyPinsReviewedRetryAndDrainBudget()
+    {
+        MediaRoutingPolicy policy = MediaKeys.ProductionRoutingPolicy;
+
+        Assert.Equal(TimeSpan.FromSeconds(1), policy.SessionTimeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(400), policy.VerificationDelay);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), policy.AppCommandRetryDelay);
+        Assert.Equal(TimeSpan.FromSeconds(4), policy.RouteDeadline);
+        Assert.Equal(TimeSpan.FromSeconds(2), policy.UnverifiableRepeatWindow);
+    }
+
+    [Theory]
+    [InlineData(1460, (int)ForegroundCommandDelivery.TimedOut)]
+    [InlineData(0, (int)ForegroundCommandDelivery.Failed)]
+    [InlineData(5, (int)ForegroundCommandDelivery.Failed)]
+    public void Win32AppCommandFailureClassificationPreservesTimeoutMeaning(
+        int win32Error,
+        int expectedValue) =>
+        Assert.Equal((ForegroundCommandDelivery)expectedValue, MediaKeys.ClassifyAppCommandFailure(win32Error));
 
     [Theory]
     [InlineData((int)ForegroundMediaCommand.Play, (int)MediaPlaybackState.Playing)]
@@ -154,11 +171,36 @@ public sealed class MediaKeysTests
     }
 
     [Fact]
-    public void FailedFocusedDeliveryMayUseAnUnrelatedCurrentSessionAsTheFallbackTarget()
+    public void TargetedDeliveryFailureDoesNotFallBackToAnUnrelatedSession()
     {
         var controller = new FakeMediaSessionController(
-            Snapshot(MediaPlaybackState.Paused, "Chrome.App"),
-            Snapshot(MediaPlaybackState.Playing, "Chrome.App"));
+            Snapshot(MediaPlaybackState.Paused, "Chrome.App"));
+        var foreground = new FakeForegroundSender(Kodi)
+        {
+            Result = ForegroundCommandDelivery.Failed,
+        };
+        var log = new TestSupport.LogCapture();
+
+        ActionExecutionResult result = RouteDetailed(
+            ForegroundMediaCommand.Play,
+            controller,
+            foreground,
+            new FakeDelay(),
+            new FakeRepeatGuard(),
+            log);
+
+        Assert.False(result.Ok);
+        Assert.Contains("no same-owner media session", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, controller.PlayCalls);
+        Assert.True(log.Contains("WARN", "session-fallback blocked"));
+    }
+
+    [Fact]
+    public void TargetedDeliveryFailureMayFallBackToASameOwnerSession()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "kodi.exe"),
+            Snapshot(MediaPlaybackState.Playing, "kodi.exe"));
         var foreground = new FakeForegroundSender(Kodi)
         {
             Result = ForegroundCommandDelivery.Failed,
@@ -173,8 +215,183 @@ public sealed class MediaKeysTests
             new TestSupport.LogCapture());
 
         Assert.True(result);
-        Assert.Equal(1, controller.PlayCalls);
+        Assert.Equal(["kodi.exe"], controller.ActionTargets);
+    }
+
+    [Fact]
+    public void UntargetedRouteUsesTheCapturedCurrentSessionWhenOneExists()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "Chrome.App"),
+            Snapshot(MediaPlaybackState.Playing, "Chrome.App"));
+
+        bool result = Route(
+            ForegroundMediaCommand.Play,
+            controller,
+            new FakeForegroundSender(null),
+            new FakeDelay(),
+            new FakeRepeatGuard(),
+            new TestSupport.LogCapture());
+
+        Assert.True(result);
         Assert.Equal(["Chrome.App"], controller.ActionTargets);
+    }
+
+    [Fact]
+    public void UntargetedRouteFailsWhenNoCurrentSessionExists()
+    {
+        var controller = new FakeMediaSessionController(MediaSessionSnapshot.NoSession);
+
+        ActionExecutionResult result = RouteDetailed(
+            ForegroundMediaCommand.Play,
+            controller,
+            new FakeForegroundSender(null),
+            new FakeDelay(),
+            new FakeRepeatGuard(),
+            new TestSupport.LogCapture());
+
+        Assert.False(result.Ok);
+        Assert.Contains("no focused media target", result.Error, StringComparison.Ordinal);
+        Assert.Contains("no media session exists", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, controller.ActionCalls);
+    }
+
+    [Fact]
+    public void UntargetedRouteFailsWhenCapturedSessionOwnerChangesBeforeVerification()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "Chrome.App"),
+            Snapshot(MediaPlaybackState.Playing, "SpotifyAB.Spotify!App"))
+        {
+            PlayResult = MediaSessionActionResult.TargetChanged,
+        };
+
+        ActionExecutionResult result = RouteDetailed(
+            ForegroundMediaCommand.Play,
+            controller,
+            new FakeForegroundSender(null),
+            new FakeDelay(),
+            new FakeRepeatGuard(),
+            new TestSupport.LogCapture());
+
+        Assert.False(result.Ok);
+        Assert.Equal(["Chrome.App"], controller.ActionTargets);
+        Assert.Contains("TargetChanged", result.Error, StringComparison.Ordinal);
+        Assert.Contains("SpotifyAB.Spotify!App", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TimedOutTargetRetriesOnceThenRejectsAnUnrelatedSessionWithAnHonestReason()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "SpotifyAB.Spotify!App"));
+        var foreground = new FakeForegroundSender(Kodi);
+        foreground.Results.Enqueue(ForegroundCommandDelivery.TimedOut);
+        foreground.Results.Enqueue(ForegroundCommandDelivery.TimedOut);
+        var delay = new FakeDelay();
+        var log = new TestSupport.LogCapture();
+
+        ActionExecutionResult result = RouteDetailed(
+            ForegroundMediaCommand.Play,
+            controller,
+            foreground,
+            delay,
+            new FakeRepeatGuard(),
+            log);
+
+        Assert.False(result.Ok);
+        Assert.Contains("timed out after two attempts", result.Error, StringComparison.Ordinal);
+        Assert.Contains("no same-owner media session", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, controller.ActionCalls);
+        Assert.Equal(2, foreground.Commands.Count);
+        Assert.Equal([MediaKeys.ProductionRoutingPolicy.AppCommandRetryDelay], delay.Waits);
+        Assert.True(log.Contains("WARN", "retrying once"));
+    }
+
+    [Fact]
+    public void TimedOutTargetRetriesOnceThenAllowsASameOwnerSessionFallback()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "kodi.exe"),
+            Snapshot(MediaPlaybackState.Playing, "kodi.exe"));
+        var foreground = new FakeForegroundSender(Kodi);
+        foreground.Results.Enqueue(ForegroundCommandDelivery.TimedOut);
+        foreground.Results.Enqueue(ForegroundCommandDelivery.TimedOut);
+        var delay = new FakeDelay();
+
+        bool result = Route(
+            ForegroundMediaCommand.Play,
+            controller,
+            foreground,
+            delay,
+            new FakeRepeatGuard(),
+            new TestSupport.LogCapture());
+
+        Assert.True(result);
+        Assert.Equal(2, foreground.Commands.Count);
+        Assert.Equal(1, controller.PlayCalls);
+        Assert.Equal("kodi.exe", Assert.Single(controller.ActionTargets));
+        Assert.Equal(
+            [
+                MediaKeys.ProductionRoutingPolicy.AppCommandRetryDelay,
+                MediaKeys.ProductionRoutingPolicy.VerificationDelay,
+            ],
+            delay.Waits);
+    }
+
+    [Fact]
+    public void TimedOutTargetCanHandleTheSingleRetryWithoutUsingSessionFallback()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "kodi.exe"),
+            Snapshot(MediaPlaybackState.Playing, "kodi.exe"));
+        var foreground = new FakeForegroundSender(Kodi);
+        foreground.Results.Enqueue(ForegroundCommandDelivery.TimedOut);
+        foreground.Results.Enqueue(ForegroundCommandDelivery.DeliveredHandled);
+        var delay = new FakeDelay();
+        var log = new TestSupport.LogCapture();
+
+        bool result = Route(
+            ForegroundMediaCommand.Play,
+            controller,
+            foreground,
+            delay,
+            new FakeRepeatGuard(),
+            log);
+
+        Assert.True(result);
+        Assert.Equal(2, foreground.Commands.Count);
+        Assert.Equal(0, controller.ActionCalls);
+        Assert.Equal(
+            [
+                MediaKeys.ProductionRoutingPolicy.AppCommandRetryDelay,
+                MediaKeys.ProductionRoutingPolicy.VerificationDelay,
+            ],
+            delay.Waits);
+        Assert.True(log.Contains("WARN", "retrying once"));
+        Assert.True(log.Contains("DEBUG", "path=focused-handled"));
+    }
+
+    [Fact]
+    public void NonTimeoutTargetRefusalIsNotRetried()
+    {
+        var controller = new FakeMediaSessionController(
+            Snapshot(MediaPlaybackState.Paused, "kodi.exe"),
+            Snapshot(MediaPlaybackState.Playing, "kodi.exe"));
+        var foreground = new FakeForegroundSender(Kodi)
+        {
+            Result = ForegroundCommandDelivery.Failed,
+        };
+
+        Assert.True(Route(
+            ForegroundMediaCommand.Play,
+            controller,
+            foreground,
+            new FakeDelay(),
+            new FakeRepeatGuard(),
+            new TestSupport.LogCapture()));
+
+        Assert.Single(foreground.Commands);
     }
 
     [Fact]
@@ -186,7 +403,7 @@ public sealed class MediaKeysTests
         {
             PlayResult = MediaSessionActionResult.TargetChanged,
         };
-        var foreground = new FakeForegroundSender(Kodi)
+        var foreground = new FakeForegroundSender(Chrome)
         {
             Result = ForegroundCommandDelivery.Failed,
         };
@@ -306,13 +523,21 @@ public sealed class MediaKeysTests
 
         Assert.Equal(
             MediaPlaybackState.Paused,
-            (await controller.GetCurrentSessionAsync(TestTimeout, CancellationToken.None)).State);
+            (await controller.GetCurrentSessionAsync(
+                MediaKeys.ProductionRoutingPolicy.SessionTimeout,
+                CancellationToken.None)).State);
         Assert.Equal(
             MediaSessionActionResult.Succeeded,
-            await controller.TryPlayAsync("Chrome.App", TestTimeout, CancellationToken.None));
+            await controller.TryPlayAsync(
+                "Chrome.App",
+                MediaKeys.ProductionRoutingPolicy.SessionTimeout,
+                CancellationToken.None));
         Assert.Equal(
             MediaSessionActionResult.Succeeded,
-            await controller.TryPauseAsync("Chrome.App", TestTimeout, CancellationToken.None));
+            await controller.TryPauseAsync(
+                "Chrome.App",
+                MediaKeys.ProductionRoutingPolicy.SessionTimeout,
+                CancellationToken.None));
 
         Assert.Equal(1, managerRequests);
         Assert.Equal(3, manager.CurrentSessionLookups);
@@ -344,10 +569,23 @@ public sealed class MediaKeysTests
             foreground,
             delay,
             repeatGuard,
-            TestTimeout,
-            VerifyDelay,
-            RouteDeadline,
-            RepeatWindow,
+            MediaKeys.ProductionRoutingPolicy,
+            log.Sink);
+
+    private static ActionExecutionResult RouteDetailed(
+        ForegroundMediaCommand command,
+        FakeMediaSessionController controller,
+        FakeForegroundSender foreground,
+        FakeDelay delay,
+        IUnverifiableMediaRepeatGuard repeatGuard,
+        TestSupport.LogCapture log) =>
+        MediaKeys.RouteDetailed(
+            command,
+            controller,
+            foreground,
+            delay,
+            repeatGuard,
+            MediaKeys.ProductionRoutingPolicy,
             log.Sink);
 
     private sealed class FakeMediaSessionController(params MediaSessionSnapshot[] snapshots) : IMediaSessionController
@@ -405,6 +643,7 @@ public sealed class MediaKeysTests
     private sealed class FakeForegroundSender(MediaAppIdentity? identity) : IForegroundMediaCommandSender
     {
         internal ForegroundCommandDelivery Result { get; init; } = ForegroundCommandDelivery.DeliveredUnhandled;
+        internal Queue<ForegroundCommandDelivery> Results { get; } = [];
         internal List<ForegroundMediaCommand> Commands { get; } = [];
 
         public ForegroundMediaTarget? GetTarget() => identity is null
@@ -414,15 +653,20 @@ public sealed class MediaKeysTests
         public ForegroundCommandDelivery Send(ForegroundMediaTarget target, ForegroundMediaCommand command)
         {
             Commands.Add(command);
-            return Result;
+            return Results.TryDequeue(out ForegroundCommandDelivery result)
+                ? result
+                : Result;
         }
     }
 
     private sealed class FakeDelay : IMediaVerificationDelay
     {
+        internal List<TimeSpan> Waits { get; } = [];
+
         public Task WaitAsync(TimeSpan delay, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Waits.Add(delay);
             return Task.CompletedTask;
         }
     }

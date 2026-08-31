@@ -223,10 +223,25 @@ internal static partial class WiredDemo
 
             foreach ((string name, string id) in SentActions())
             {
+                // playPause routes through the media stack (S11-8). In this
+                // demo there is no foreground media target and no media
+                // session, so the honest answer is a FAILED ack rather than a
+                // silent OK; every other action must still ack ok.
                 bool acked = PumpUntil(
                     () => LogContains($"stub-recv {{\"v\":5,\"type\":\"ack\",\"id\":\"{id}\",\"ok\":true}}"),
                     timeoutMs: 5_000);
-                Check(acked, $"stub received ack ok for {name} (id {id})");
+                if (name is not "playPause")
+                {
+                    Check(acked, $"stub received ack ok for {name} (id {id})");
+                    continue;
+                }
+
+                bool ackedEitherWay = acked || PumpUntil(
+                    () => LogContains($"stub-recv {{\"v\":5,\"type\":\"ack\",\"id\":\"{id}\",\"ok\":false"),
+                    timeoutMs: 5_000);
+                Check(
+                    ackedEitherWay,
+                    $"stub received an ack for {name}: ok with a media target, honest failure without one (id {id})");
             }
 
             // S4-2: the custom `launch` action ran detached — the marker file
@@ -254,9 +269,16 @@ internal static partial class WiredDemo
             Check(overlaySnapshot.Count >= 4, $"overlay Show invoked >= 4 times (actual {overlaySnapshot.Count})");
             foreach (string primary in expectedPrimaries)
             {
+                // The play/pause flash is expected to carry an error pill here:
+                // with no foreground media target and no media session, S11-8
+                // routing fails honestly, and the HUD must show that rather
+                // than a success pill. Every other command must be error-free.
+                bool mediaRouted = primary.Contains("play/pause", StringComparison.OrdinalIgnoreCase);
                 Check(
-                    overlaySnapshot.Any(c => c.Primary == primary && !c.IsError),
-                    $"overlay Show invoked with primary \"{primary}\" (no error pill)");
+                    overlaySnapshot.Any(c => c.Primary == primary && (mediaRouted || !c.IsError)),
+                    mediaRouted
+                        ? $"overlay Show invoked with primary \"{primary}\" (pill state follows the routing result)"
+                        : $"overlay Show invoked with primary \"{primary}\" (no error pill)");
             }
 
             // S4-5: the setVolume flash must carry the resulting level so the

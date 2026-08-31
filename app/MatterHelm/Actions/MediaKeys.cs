@@ -14,6 +14,7 @@ internal enum ForegroundMediaCommand
 internal enum ForegroundCommandDelivery
 {
     Failed,
+    TimedOut,
     DeliveredUnhandled,
     DeliveredHandled,
 }
@@ -78,6 +79,14 @@ internal interface IUnverifiableMediaRepeatGuard
     void Reset();
 }
 
+/// <summary>Production timing and suppression policy for one focused-first media route.</summary>
+internal sealed record MediaRoutingPolicy(
+    TimeSpan SessionTimeout,
+    TimeSpan VerificationDelay,
+    TimeSpan AppCommandRetryDelay,
+    TimeSpan RouteDeadline,
+    TimeSpan UnverifiableRepeatWindow);
+
 /// <summary>Focused-first media routing with ownership-aware current-session verification.</summary>
 public static partial class MediaKeys
 {
@@ -85,22 +94,23 @@ public static partial class MediaKeys
     private const ushort VkMediaPrevTrack = 0xB1;
     private const ushort VkMediaStop = 0xB2;
 
-    private static readonly TimeSpan MediaSessionTimeout = TimeSpan.FromSeconds(2);
-
-    // One route must finish before IpcServer's five-second worker-drain budget.
-    // Three seconds leaves shutdown headroom while still allowing two short
-    // observations and one absolute session operation.
-    private static readonly TimeSpan RouteDeadline = TimeSpan.FromSeconds(3);
-
-    // Two seconds covers immediate Matter/routine duplicates and retained edge
-    // pairs. A later deliberate command remains deliverable. Suppression is
-    // limited to same-process dedicated verbs that were already unverifiable.
-    private static readonly TimeSpan UnverifiableRepeatWindow = TimeSpan.FromSeconds(2);
-
-    // 400 ms gives focus-driven players time to publish their asynchronous
-    // playback-state change while keeping the observation interval below half
-    // a second. Both waits share RouteDeadline.
-    private static readonly TimeSpan VerificationDelay = TimeSpan.FromMilliseconds(400);
+    /// <summary>The actual routing policy used by the Win32/SMTC production path.</summary>
+    internal static MediaRoutingPolicy ProductionRoutingPolicy { get; } = new(
+        SessionTimeout: TimeSpan.FromSeconds(1),
+        // 400 ms gives focus-driven players time to publish their asynchronous
+        // playback-state change while keeping the observation interval below half
+        // a second. Both waits share the route deadline.
+        VerificationDelay: TimeSpan.FromMilliseconds(400),
+        // A just-restored player can still be rebuilding its message pump. One
+        // short pause is enough to yield without turning refusal into a retry.
+        AppCommandRetryDelay: TimeSpan.FromMilliseconds(200),
+        // One route must finish before IpcServer's five-second worker-drain budget.
+        // Four seconds leaves one second of shutdown-drain headroom while allowing
+        // two one-second appcommand attempts plus bounded session operations.
+        RouteDeadline: TimeSpan.FromSeconds(4),
+        // Covers immediate Matter/routine duplicates and retained edge pairs.
+        // A later deliberate command remains deliverable.
+        UnverifiableRepeatWindow: TimeSpan.FromSeconds(2));
     private static readonly IMediaSessionController SessionController = new WindowsMediaSessionController();
     private static readonly IForegroundMediaCommandSender ForegroundSender = new WindowsForegroundMediaCommandSender();
     private static readonly IMediaVerificationDelay Delay = new TaskMediaVerificationDelay();
@@ -108,6 +118,9 @@ public static partial class MediaKeys
 
     /// <summary>Routes play/pause to the focused app, then an ownership-pinned absolute session fallback.</summary>
     public static bool PlayPause() => RouteDefault(ForegroundMediaCommand.PlayPause);
+
+    /// <summary>Routes play/pause and preserves a specific failure reason.</summary>
+    public static ActionExecutionResult PlayPauseDetailed() => RouteDefaultDetailed(ForegroundMediaCommand.PlayPause);
 
     /// <summary>Sends the next-track media key. Returns false if injection failed.</summary>
     public static bool NextTrack()
@@ -133,19 +146,24 @@ public static partial class MediaKeys
     /// <summary>Routes absolute play to the focused app, then an ownership-pinned session fallback.</summary>
     public static bool Play() => RouteDefault(ForegroundMediaCommand.Play);
 
+    /// <summary>Routes absolute play and preserves a specific failure reason.</summary>
+    public static ActionExecutionResult PlayDetailed() => RouteDefaultDetailed(ForegroundMediaCommand.Play);
+
     /// <summary>Routes absolute pause to the focused app, then an ownership-pinned session fallback.</summary>
     public static bool Pause() => RouteDefault(ForegroundMediaCommand.Pause);
 
-    private static bool RouteDefault(ForegroundMediaCommand command) => Route(
+    /// <summary>Routes absolute pause and preserves a specific failure reason.</summary>
+    public static ActionExecutionResult PauseDetailed() => RouteDefaultDetailed(ForegroundMediaCommand.Pause);
+
+    private static bool RouteDefault(ForegroundMediaCommand command) => RouteDefaultDetailed(command).Ok;
+
+    private static ActionExecutionResult RouteDefaultDetailed(ForegroundMediaCommand command) => RouteDetailed(
         command,
         SessionController,
         ForegroundSender,
         Delay,
         RepeatGuard,
-        MediaSessionTimeout,
-        VerificationDelay,
-        RouteDeadline,
-        UnverifiableRepeatWindow,
+        ProductionRoutingPolicy,
         WriteLog);
 
     internal static bool Route(
@@ -154,12 +172,30 @@ public static partial class MediaKeys
         IForegroundMediaCommandSender foreground,
         IMediaVerificationDelay delay,
         IUnverifiableMediaRepeatGuard repeatGuard,
-        TimeSpan sessionTimeout,
-        TimeSpan verificationDelay,
-        TimeSpan routeDeadline,
-        TimeSpan repeatWindow,
+        MediaRoutingPolicy policy,
+        Action<string, string> log) => RouteDetailed(
+            command,
+            controller,
+            foreground,
+            delay,
+            repeatGuard,
+            policy,
+            log).Ok;
+
+    internal static ActionExecutionResult RouteDetailed(
+        ForegroundMediaCommand command,
+        IMediaSessionController controller,
+        IForegroundMediaCommandSender foreground,
+        IMediaVerificationDelay delay,
+        IUnverifiableMediaRepeatGuard repeatGuard,
+        MediaRoutingPolicy policy,
         Action<string, string> log)
     {
+        TimeSpan sessionTimeout = policy.SessionTimeout;
+        TimeSpan verificationDelay = policy.VerificationDelay;
+        TimeSpan appCommandRetryDelay = policy.AppCommandRetryDelay;
+        TimeSpan routeDeadline = policy.RouteDeadline;
+        TimeSpan repeatWindow = policy.UnverifiableRepeatWindow;
         string verb = Verb(command);
         using var deadline = new CancellationTokenSource(routeDeadline);
         CancellationToken cancellationToken = deadline.Token;
@@ -183,7 +219,7 @@ public static partial class MediaKeys
         {
             repeatGuard.Reset();
             log("DEBUG", $"media routing '{verb}': path=already-in-state; matching focused-app session required no delivery.");
-            return true;
+            return ActionExecutionResult.Success;
         }
 
         bool initiallyUnverifiable = !initialOwned;
@@ -195,20 +231,35 @@ public static partial class MediaKeys
             log(
                 "WARN",
                 $"media routing '{verb}': path=unverifiable-repeat-suppressed; same target {repeatTarget.Identity.LogLabel} received this dedicated verb within {repeatWindow.TotalSeconds:0.#} s; no second appcommand sent.");
-            return true;
+            return ActionExecutionResult.Success;
         }
 
         ForegroundCommandDelivery focusedDelivery = target is ForegroundMediaTarget focusedTarget
             ? foreground.Send(focusedTarget, command)
             : ForegroundCommandDelivery.Failed;
-        bool focusedSent = focusedDelivery != ForegroundCommandDelivery.Failed;
+        int focusedAttempts = target is null ? 0 : 1;
+        if (focusedDelivery == ForegroundCommandDelivery.TimedOut)
+        {
+            log(
+                "WARN",
+                $"media routing '{verb}': targeted appcommand timed out; retrying once after {appCommandRetryDelay.TotalMilliseconds:0} ms.");
+            if (Wait(delay, appCommandRetryDelay, cancellationToken)
+                && target is ForegroundMediaTarget retryTarget)
+            {
+                focusedDelivery = foreground.Send(retryTarget, command);
+                focusedAttempts++;
+            }
+        }
+
+        bool focusedSent = focusedDelivery is ForegroundCommandDelivery.DeliveredUnhandled
+            or ForegroundCommandDelivery.DeliveredHandled;
         if (focusedSent)
         {
             if (!Wait(delay, verificationDelay, cancellationToken))
             {
                 RecordUnverifiable(command, target, repeatGuard, log, verb);
                 log("WARN", $"media routing '{verb}': path=unverifiable; focused appcommand delivered but the {routeDeadline.TotalSeconds:0.#} s route deadline expired before verification.");
-                return true;
+                return ActionExecutionResult.Success;
             }
 
             if (!TryReadSession(
@@ -221,7 +272,7 @@ public static partial class MediaKeys
                 RecordUnverifiable(command, target, repeatGuard, log, verb);
                 LogOwnership(log, verb, "after-focused", target, null, owned: false, readError);
                 log("DEBUG", $"media routing '{verb}': path=unverifiable; focused appcommand delivered; session verification unavailable ({readError}); no fallback sent.");
-                return true;
+                return ActionExecutionResult.Success;
             }
 
             bool afterFocusedOwned = IsOwnedBy(afterFocused, target);
@@ -230,28 +281,28 @@ public static partial class MediaKeys
             {
                 RecordUnverifiable(command, target, repeatGuard, log, verb);
                 log("DEBUG", $"media routing '{verb}': path=unverifiable; focused appcommand delivered; current session belongs to a different or unresolved app, so no fallback was allowed.");
-                return true;
+                return ActionExecutionResult.Success;
             }
 
             if (focusedDesired is MediaPlaybackState expected && afterFocused.State == expected)
             {
                 repeatGuard.Reset();
                 log("DEBUG", $"media routing '{verb}': path=focused-handled; matching app ownership and {StateName(expected)} state verified.");
-                return true;
+                return ActionExecutionResult.Success;
             }
 
             if (focusedDesired is null)
             {
                 RecordUnverifiable(command, target, repeatGuard, log, verb);
                 log("DEBUG", $"media routing '{verb}': path=unverifiable; play/pause lacked a matching initial session state, so its focused toggle outcome cannot be proven; no fallback sent.");
-                return true;
+                return ActionExecutionResult.Success;
             }
 
             if (focusedDelivery == ForegroundCommandDelivery.DeliveredHandled)
             {
                 RecordUnverifiable(command, target, repeatGuard, log, verb);
                 log("DEBUG", $"media routing '{verb}': path=unverifiable; focused window reported handled but its matching session did not update; no fallback sent to avoid a repeated side effect.");
-                return true;
+                return ActionExecutionResult.Success;
             }
 
             return ExecuteAndVerifyFallback(
@@ -262,6 +313,7 @@ public static partial class MediaKeys
                 delay,
                 sessionTimeout,
                 verificationDelay,
+                routeDeadline,
                 log,
                 cancellationToken);
         }
@@ -270,15 +322,25 @@ public static partial class MediaKeys
         if (!initialRead || !initial.HasSession)
         {
             string detail = initialRead ? "no media session exists" : $"session read failed ({readError})";
-            log("WARN", $"media routing '{verb}': path=unverifiable failed; focused delivery failed and {detail}, so there is no fallback target.");
-            return false;
+            string error = $"{DeliveryFailure(focusedDelivery, target, focusedAttempts)}; {detail}, so there is no fallback target";
+            log("WARN", $"media routing '{verb}': path=unverifiable failed; {error}.");
+            return ActionExecutionResult.Failure(error);
+        }
+
+        if (target is ForegroundMediaTarget targeted && !initialOwned)
+        {
+            string error = $"{DeliveryFailure(focusedDelivery, target, focusedAttempts)}; no same-owner media session is available for {targeted.Identity.LogLabel}";
+            log(
+                "WARN",
+                $"media routing '{verb}': path=session-fallback blocked; {error}; current session owner is '{initial.SourceAppUserModelId}'.");
+            return ActionExecutionResult.Failure(error);
         }
 
         MediaPlaybackState? fallbackDesired = DesiredState(command, initial.State);
         if (fallbackDesired is null)
         {
             log("WARN", $"media routing '{verb}': path=session-fallback failed; no playback state exists from which to derive the toggle intent.");
-            return false;
+            return ActionExecutionResult.Failure("media fallback could not derive the requested play/pause state");
         }
 
         log("DEBUG", $"media routing '{verb}': focused delivery failed; using captured session owner '{initial.SourceAppUserModelId}' as the fallback target.");
@@ -290,11 +352,12 @@ public static partial class MediaKeys
             delay,
             sessionTimeout,
             verificationDelay,
+            routeDeadline,
             log,
             cancellationToken);
     }
 
-    private static bool ExecuteAndVerifyFallback(
+    private static ActionExecutionResult ExecuteAndVerifyFallback(
         string verb,
         MediaPlaybackState desired,
         MediaSessionSnapshot target,
@@ -302,6 +365,7 @@ public static partial class MediaKeys
         IMediaVerificationDelay delay,
         TimeSpan sessionTimeout,
         TimeSpan verificationDelay,
+        TimeSpan routeDeadline,
         Action<string, string> log,
         CancellationToken cancellationToken)
     {
@@ -315,7 +379,7 @@ public static partial class MediaKeys
         if (!Wait(delay, verificationDelay, cancellationToken))
         {
             log("WARN", $"media routing '{verb}': path=session-fallback failed; route deadline expired after session verb returned {fallbackResult}.");
-            return false;
+            return ActionExecutionResult.Failure($"session fallback did not finish before the {routeDeadline.TotalSeconds:0.#} s route deadline");
         }
 
         if (TryReadSession(
@@ -331,15 +395,33 @@ public static partial class MediaKeys
             && afterFallback.State == desired)
         {
             log("DEBUG", $"media routing '{verb}': path=session-fallback; owner '{source}' remained stable and absolute {StateName(desired)} was verified.");
-            return true;
+            return ActionExecutionResult.Success;
         }
 
         string detail = readError is null
             ? $"owner/state became '{afterFallback.SourceAppUserModelId ?? "no-session"}'/{StateName(afterFallback.State)}"
             : $"verification failed ({readError})";
         log("WARN", $"media routing '{verb}': path=session-fallback failed; session verb returned {fallbackResult}; {detail}.");
-        return false;
+        return ActionExecutionResult.Failure($"same-owner session fallback returned {fallbackResult}; {detail}");
     }
+
+    private static string DeliveryFailure(
+        ForegroundCommandDelivery delivery,
+        ForegroundMediaTarget? target,
+        int attempts) => delivery switch
+    {
+        ForegroundCommandDelivery.TimedOut when attempts == 2 => "targeted appcommand timed out after two attempts",
+        ForegroundCommandDelivery.TimedOut => "targeted appcommand timed out after one attempt",
+        ForegroundCommandDelivery.Failed when target is null => "no focused media target was available",
+        ForegroundCommandDelivery.Failed => "targeted appcommand was refused",
+        _ => "targeted appcommand delivery failed",
+    };
+
+    /// <summary>Classifies a failed <c>SendMessageTimeout</c> call without invoking Win32.</summary>
+    internal static ForegroundCommandDelivery ClassifyAppCommandFailure(int win32Error) =>
+        win32Error == 1460
+            ? ForegroundCommandDelivery.TimedOut
+            : ForegroundCommandDelivery.Failed;
 
     private static MediaPlaybackState? AbsoluteDesiredState(ForegroundMediaCommand command) => command switch
     {
@@ -596,7 +678,7 @@ public static partial class MediaKeys
     {
         private const uint WmAppCommand = 0x0319;
         private const uint SmtoAbortIfHung = 0x0002;
-        private const uint SendTimeoutMs = 100;
+        private const uint SendTimeoutMs = 1000;
         private const uint ProcessQueryLimitedInformation = 0x1000;
         private const int ErrorInsufficientBuffer = 122;
         private const int MaxPathChars = 32768;
@@ -626,8 +708,9 @@ public static partial class MediaKeys
                 out nint handlerResult);
             if (deliveryResult == 0)
             {
-                Log.Warn($"media appcommand '{Verb(command)}' to {target.Identity.LogLabel} failed or timed out (Win32 {Marshal.GetLastPInvokeError()}).");
-                return ForegroundCommandDelivery.Failed;
+                int error = Marshal.GetLastPInvokeError();
+                Log.Warn($"media appcommand '{Verb(command)}' to {target.Identity.LogLabel} failed or timed out (Win32 {error}).");
+                return ClassifyAppCommandFailure(error);
             }
 
             return handlerResult == 0
