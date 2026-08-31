@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
+## [0.7.1] — 2026-09-01
+
+Field fixes from real HTPC logs, plus a first-show centring bug the logs
+indirectly exposed.
+
+### Fixed
+- **A screensaver-off step no longer aborts the rest of a command sequence.**
+  Dismissing the screensaver is the action's contract; restoring focus
+  afterwards is best effort. A refused restore used to fail the step — and
+  report the success text "screensaver dismissed" as the failure reason — so a
+  macro of screensaver-off → wait → play stopped at step one.
+- **Focus restore now retries** (every 100 ms for up to 1.5 s). Immediately
+  after the screensaver process closes there is often no foreground window at
+  all, so the first attempt could be refused when the same restore succeeded a
+  moment later.
+- **A media command aimed at one app can no longer act on another.** When a
+  delivery targeted at the focused player timed out, the fallback could apply
+  the verb to whatever media session happened to exist — in practice starting a
+  background Spotify session instead of the player being watched. A fallback is
+  now only permitted to a session owned by the same app; otherwise the command
+  fails honestly.
+- **A timed-out delivery is retried once** after 200 ms, within a four-second
+  route deadline: a window that has just been restored to the foreground is
+  often still too busy to answer the first message.
+- **Failure messages describe the failure** instead of echoing the intended
+  action's success text.
+- **The pairing window no longer opens slightly off-centre.** CenterScreen
+  combined with content-driven auto-sizing centred the window before layout
+  settled and left it about 47 px off; it now re-centres from the settled size
+  after the first show.
+
+### Changed
+- The custom-command sequence editor has a single **Add…** button whose type
+  dropdown now includes **Mouse move**; adding and editing all step types share
+  one dialog and one target picker.
+
+### Documentation
+- Troubleshooting for `SendInput … (Win32 error 5)`: Windows refuses synthetic
+  input into an elevated window, so a hotkey command cannot reach an app run as
+  administrator (Philips Hue Sync is the common case). Run the target app
+  non-elevated.
+
+
 ## [0.7.0] — 2026-08-31
 
 ### Added
