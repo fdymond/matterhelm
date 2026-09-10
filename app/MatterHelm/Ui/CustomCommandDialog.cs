@@ -173,6 +173,7 @@ public sealed class CustomCommandDialog : Form
         pathRow.Controls.Add(browseButton);
         pathRow.Controls.Add(storeButton);
         _argsBox = new TextBox { Width = S(240) };
+        _argsBox.TextChanged += (_, _) => Revalidate();
         _launchRows = SubGrid(grid);
         AddRow(_launchRows, "Program", pathRow);
         AddRow(_launchRows, "Arguments", _argsBox);
@@ -389,6 +390,7 @@ public sealed class CustomCommandDialog : Form
             _vm.ValidateCustomCommandKey(_keyBox.Text.Trim(), _originalKey)
             ?? SettingsViewModel.ValidateCustomCommandName(_nameBox.Text.Trim())
             ?? (IsLaunchAction ? _vm.ValidateLaunchPath(_pathBox.Text.Trim()) : null)
+            ?? (IsLaunchAction ? SettingsViewModel.ValidateLaunchArguments(_argsBox.Text.Trim()) : null)
             ?? (IsKeySequenceAction ? SettingsViewModel.ValidateKeySequence(_sequenceBox.Text.Trim()) : null)
             ?? (IsMacroAction ? _vm.ValidateAction(new SequenceActionConfig { Steps = _steps }, allowSequence: true) : null);
         _errorLabel.Text = error ?? "";
@@ -550,7 +552,10 @@ public sealed class CustomCommandDialog : Form
         CustomActionConfig action = _actionTypeCombo.SelectedIndex switch
         {
             LaunchActionIndex => new LaunchActionConfig { Path = _pathBox.Text.Trim(), Args = _argsBox.Text.Trim() },
-            KeySequenceActionIndex => new KeySequenceActionConfig { Sequence = CanonicalSequence(_sequenceBox.Text.Trim()) },
+            KeySequenceActionIndex => new KeySequenceActionConfig
+            {
+                Sequence = KeySequenceCanonicalizer.Canonicalize(_sequenceBox.Text.Trim()),
+            },
             SystemActionIndex => new SystemActionConfig
             {
                 Command = SettingsViewModel.SystemCommandChoices[Math.Max(0, _systemCombo.SelectedIndex)].Command,
@@ -570,10 +575,6 @@ public sealed class CustomCommandDialog : Form
         DialogResult = DialogResult.OK;
         Close();
     }
-
-    /// <summary>Canonical form of a sequence the validator already accepted (case-insensitive input, canonical casing out — the config stores canonical only).</summary>
-    private static string CanonicalSequence(string sequence) =>
-        KeyChord.TryParse(sequence, out ParsedKeyChord? chord, out _) ? chord.Canonical : sequence;
 
     /// <summary>Pure media-key editor mapping used by initialization and UI round-trip tests.</summary>
     internal static int MediaKeyIndex(MediaKeyName key) =>

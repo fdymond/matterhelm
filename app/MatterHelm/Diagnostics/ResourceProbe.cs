@@ -168,21 +168,55 @@ internal static partial class ResourceProbe
         void BridgeChurn(int cycles)
         {
             using var executor = new ProbeExecutor();
+            int childFailures = 0;
             using var host = new BridgeHost(
                 config,
                 executor,
                 ProbeSidecarSpec(),
                 supervisorOptions: new Sidecar.SupervisorOptions { StopGraceMs = 500 },
-                log: (level, message) => Emit($"    [{level}] {message}"),
+                log: (level, message) =>
+                {
+                    if (level == "ERROR"
+                        || message.StartsWith("sidecar exited unexpectedly", StringComparison.Ordinal))
+                    {
+                        Interlocked.Increment(ref childFailures);
+                    }
+
+                    Emit($"    [{level}] {message}");
+                },
                 storageDir: Path.Combine(tempRoot, "matter"));
             for (int i = 0; i < cycles; i++)
             {
+                int failuresBefore = Volatile.Read(ref childFailures);
+                int expectedActions = executor.ExecutionCount + MacroBurstSize;
                 config.Current.IpcPort = GetFreeLoopbackPort();
                 host.SetEnabled(true);
                 long deadline = Environment.TickCount64 + 2_000;
                 while (host.State != BridgeState.Connected && Environment.TickCount64 < deadline)
                 {
                     Pump(5);
+                }
+
+                if (host.State != BridgeState.Connected)
+                {
+                    throw new InvalidOperationException($"resource probe bridge cycle {i + 1} did not authenticate");
+                }
+
+                deadline = Environment.TickCount64 + 5_000;
+                while (executor.ExecutionCount < expectedActions && Environment.TickCount64 < deadline)
+                {
+                    Pump(5);
+                }
+
+                if (executor.ExecutionCount != expectedActions)
+                {
+                    throw new InvalidOperationException(
+                        $"resource probe bridge cycle {i + 1} observed {executor.ExecutionCount} actions; expected {expectedActions}");
+                }
+
+                if (Volatile.Read(ref childFailures) != failuresBefore)
+                {
+                    throw new InvalidOperationException($"resource probe sidecar failed during bridge cycle {i + 1}");
                 }
 
                 host.SetEnabled(false);
@@ -265,7 +299,7 @@ internal static partial class ResourceProbe
             string token = Environment.GetEnvironmentVariable("HTPC_BRIDGE_IPC_TOKEN")
                 ?? throw new InvalidOperationException("resource probe sidecar has no IPC token");
             using var socket = new ClientWebSocket();
-            socket.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/"), CancellationToken.None).GetAwaiter().GetResult();
+            socket.ConnectAsync(SidecarUri(port), CancellationToken.None).GetAwaiter().GetResult();
             Send(socket, $$"""{"v":5,"type":"hello","token":"{{token}}","protocol":1}""");
             Send(socket, """{"v":5,"type":"matterStatus","commissioned":true,"advertisement":"notApplicable"}""");
             for (int i = 0; i < MacroBurstSize; i++)
@@ -276,11 +310,14 @@ internal static partial class ResourceProbe
             _ = Console.In.ReadToEnd();
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"resource probe sidecar failed: {ex}");
             return 1;
         }
     }
+
+    internal static Uri SidecarUri(string port) => new($"ws://localhost:{port}/");
 
     private static void Send(ClientWebSocket socket, string frame)
     {
@@ -311,13 +348,21 @@ internal static partial class ResourceProbe
 
     private sealed class ProbeExecutor : IActionExecutor
     {
+        private int _executionCount;
+
+        internal int ExecutionCount => Volatile.Read(ref _executionCount);
+
         public event EventHandler<VolumeState>? VolumeChanged
         {
             add { }
             remove { }
         }
 
-        public bool Execute(string name, object? value = null) => true;
+        public bool Execute(string name, object? value = null)
+        {
+            Interlocked.Increment(ref _executionCount);
+            return true;
+        }
 
         public VolumeState GetVolumeState() => new(50, false);
 

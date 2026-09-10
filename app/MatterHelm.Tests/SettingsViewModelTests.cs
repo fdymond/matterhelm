@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.NetworkInformation;
 using MatterHelm.Actions;
@@ -233,6 +234,41 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void PersistedNameCapsAreRejectedInlineBySettingsValidation()
+    {
+        SettingsViewModel vm = NewViewModel();
+        string tooLong = new('n', Config.MaxNameLength + 1);
+
+        vm.Working.BridgeName = tooLong;
+        Assert.Equal("bridge-name", Assert.Single(vm.Validate()).SettingId);
+        vm.Working.BridgeName = "Bridge";
+
+        vm.Working.Commands.Speaker.Name = tooLong;
+        Assert.Equal("speaker-name", Assert.Single(vm.Validate()).SettingId);
+        vm.Working.Commands.Speaker.Name = "Speaker";
+
+        vm.AddCustomCommand(MediaKeyCommand("movie-mode", name: tooLong));
+        SettingsValidationError custom = Assert.Single(vm.Validate());
+        Assert.Equal("custom-commands", custom.SettingId);
+        Assert.Contains(Config.MaxNameLength.ToString(CultureInfo.InvariantCulture), custom.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CustomCommandCountCapIsRejectedInlineInsteadOfVanishingAfterReload()
+    {
+        SettingsViewModel vm = NewViewModel();
+        for (int i = 0; i <= Config.MaxCustomCommands; i++)
+        {
+            vm.AddCustomCommand(MediaKeyCommand($"command-{i}"));
+        }
+
+        SettingsValidationError error = Assert.Single(vm.Validate());
+
+        Assert.Equal("custom-commands", error.SettingId);
+        Assert.Contains(Config.MaxCustomCommands.ToString(CultureInfo.InvariantCulture), error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DuplicateCustomKeysFailValidationOnTheCustomCommandsRow()
     {
         SettingsViewModel vm = NewViewModel();
@@ -285,6 +321,28 @@ public sealed class SettingsViewModelTests : IDisposable
 
         ((LaunchActionConfig)vm.Working.Commands.Custom[0].Action).Path = @"C:\exists.exe";
         Assert.True(vm.IsValid);
+    }
+
+    [Fact]
+    public void LaunchArgumentCapIsRejectedByTheSharedInlineValidator()
+    {
+        SettingsViewModel vm = NewViewModel(pathExists: _ => true);
+        vm.AddCustomCommand(new CustomCommandConfig
+        {
+            Key = "movie-mode",
+            Name = "Movie Mode",
+            Action = new LaunchActionConfig
+            {
+                Path = @"C:\exists.exe",
+                Args = new string('a', Config.MaxLaunchArgsLength + 1),
+            },
+        });
+
+        SettingsValidationError error = Assert.Single(vm.Validate());
+
+        Assert.Equal("custom-commands", error.SettingId);
+        Assert.Contains(Config.MaxLaunchArgsLength.ToString(CultureInfo.InvariantCulture), error.Message, StringComparison.Ordinal);
+        Assert.NotNull(SettingsViewModel.ValidateLaunchArguments(new string('a', Config.MaxLaunchArgsLength + 1)));
     }
 
     [Fact]
@@ -1042,6 +1100,7 @@ public sealed class SettingsViewModelTests : IDisposable
                 "ipc-port", "log-level",
                 "bridge-name",
                 "speaker-name", "play-pause-name", "next-name", "previous-name", "power-name",
+                "power-off-action",
                 "momentary-reset-ms",
                 "custom-commands",
                 "mdns-interface",

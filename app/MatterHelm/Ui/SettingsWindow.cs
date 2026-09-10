@@ -152,7 +152,7 @@ public sealed partial class SettingsWindow : Form
         outer.Controls.Add(_contentHost, 1, 1);
 
         // S9-1: the per-row "takes effect …" notes are factored into this one
-        // footer message (owner request); rows needing a bridge restart carry
+        // footer message (maintainer request); rows needing a bridge restart carry
         // a "⟳" glyph next to their label instead.
         var bottomBar = new TableLayoutPanel
         {

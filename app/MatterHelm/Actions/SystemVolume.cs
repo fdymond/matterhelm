@@ -5,6 +5,56 @@ namespace MatterHelm.Actions;
 /// <summary>Master-volume state in the IPC protocol shape (percent 0–100 + muted).</summary>
 public readonly record struct VolumeState(int VolumePercent, bool Muted);
 
+internal sealed class EndpointReacquireScheduler
+{
+    private readonly Action _reacquire;
+    private readonly Action<Action> _queueWork;
+    // 0 = idle, 1 = running with no newer request, 2 = queued or rerun requested.
+    private int _state;
+
+    internal EndpointReacquireScheduler(Action reacquire, Action<Action>? queueWork = null)
+    {
+        _reacquire = reacquire;
+        _queueWork = queueWork ?? (work => ThreadPool.QueueUserWorkItem(_ => work()));
+    }
+
+    internal void Schedule()
+    {
+        if (Interlocked.Exchange(ref _state, 2) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _queueWork(Run);
+        }
+        catch
+        {
+            Volatile.Write(ref _state, 0);
+            throw;
+        }
+    }
+
+    private void Run()
+    {
+        try
+        {
+            do
+            {
+                Volatile.Write(ref _state, 1);
+                _reacquire();
+            }
+            while (Interlocked.CompareExchange(ref _state, 0, 1) != 1);
+        }
+        catch
+        {
+            Volatile.Write(ref _state, 0);
+            throw;
+        }
+    }
+}
+
 /// <summary>
 /// System master volume via hand-rolled CoreAudio COM interop (ADR-003: no NAudio):
 /// get/set volume and mute on the default render endpoint, observe changes through
@@ -31,6 +81,7 @@ public sealed class SystemVolume : IDisposable
     // handed to COM — if the GC collected these, notifications would go silent.
     private readonly EndpointVolumeCallback _volumeCallback;
     private readonly DefaultDeviceListener _deviceListener;
+    private readonly EndpointReacquireScheduler _reacquireScheduler;
 
     private IAudioEndpointVolume? _endpointVolume;
     private bool _disposed;
@@ -40,6 +91,7 @@ public sealed class SystemVolume : IDisposable
     {
         _volumeCallback = new EndpointVolumeCallback(this);
         _deviceListener = new DefaultDeviceListener(this);
+        _reacquireScheduler = new EndpointReacquireScheduler(ReacquireEndpointAndNotify);
         _deviceEnumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         _deviceEnumerator.RegisterEndpointNotificationCallback(_deviceListener);
         AcquireEndpoint();
@@ -157,38 +209,31 @@ public sealed class SystemVolume : IDisposable
     /// objects inside the notification callback itself risks deadlocking the
     /// audio service (MMDevice API documentation).
     /// </summary>
-    private void ScheduleEndpointReacquire()
+    private void ScheduleEndpointReacquire() => _reacquireScheduler.Schedule();
+
+    private void ReacquireEndpointAndNotify()
     {
-        ThreadPool.QueueUserWorkItem(_ =>
+        try
         {
-            try
-            {
-                AcquireEndpoint();
+            AcquireEndpoint();
 
-                // A default-device-changed notification also fires when the
-                // last render device is simply removed, leaving no endpoint
-                // to bind — AcquireEndpoint already logged that at WARN (it
-                // is normal, not a fault), so there is nothing to resync
-                // observers with. Without this guard, GetState() below would
-                // re-throw the very same condition as a second, ERROR-level
-                // log for one benign event.
-                bool hasEndpoint;
-                lock (_gate)
-                {
-                    hasEndpoint = _endpointVolume is not null;
-                }
-
-                if (hasEndpoint)
-                {
-                    // The new device carries its own volume/mute; let observers resync.
-                    VolumeChanged?.Invoke(this, GetState());
-                }
-            }
-            catch (Exception ex)
+            // The new endpoint carries independent volume/mute state. Avoid a
+            // second error when device removal legitimately leaves no endpoint.
+            bool hasEndpoint;
+            lock (_gate)
             {
-                Log.Error($"Re-acquiring audio endpoint failed: {ex.Message}");
+                hasEndpoint = _endpointVolume is not null;
             }
-        });
+
+            if (hasEndpoint)
+            {
+                VolumeChanged?.Invoke(this, GetState());
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Re-acquiring audio endpoint failed: {ex.Message}");
+        }
     }
 
     private void RaiseVolumeChanged(VolumeState state) => VolumeChanged?.Invoke(this, state);

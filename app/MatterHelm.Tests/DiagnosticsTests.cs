@@ -463,8 +463,10 @@ public static class DiagnosticsTests
             File.WriteAllLines(
                 Path.Combine(_logsDir, "app-20260729.log"),
                 [
-                    "2026-07-29 10:00:00.000 [INFO] sidecar: device is uncommissioned passcode: 74308742 discriminator: 2495 manual pairing code: 22368645352",
-                    "2026-07-29 10:00:00.100 [INFO] sidecar: QR code URL: https://example.invalid/qrcode.html?data=MT:Y.K90SO527XL0V5PL10",
+                    "2026-07-29 10:00:00.000 [INFO] sidecar: device is uncommissioned passcode: 20202021 \"discriminator\": 3840 manual pairing code: 3497-011-2332",
+                    "2026-07-29 10:00:00.100 [INFO] sidecar: QR code: MT:Y.K9042C00KA0648G00",
+                    "  ▀▄████▄▀  ",
+                    "sidecar continuation: ████████",
                     "2026-07-29 10:00:01.000 [INFO] bridge: pairing payload received from sidecar.",
                 ]);
 
@@ -474,14 +476,123 @@ public static class DiagnosticsTests
             ZipArchiveEntry log = Assert.Single(archive.Entries, e => e.FullName == "logs/app-20260729.log");
             string content = ReadEntryText(log);
 
-            Assert.DoesNotContain("74308742", content, StringComparison.Ordinal);
-            Assert.DoesNotContain("22368645352", content, StringComparison.Ordinal);
-            Assert.DoesNotContain("MT:Y.K90SO527XL0V5PL10", content, StringComparison.Ordinal);
-            Assert.Contains("passcode: [redacted]", content, StringComparison.Ordinal);
-            Assert.Contains("manual pairing code: [redacted]", content, StringComparison.Ordinal);
-            Assert.Contains("MT:[redacted]", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("20202021", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("3840", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("3497-011-2332", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("MT:Y.K9042C00KA0648G00", content, StringComparison.Ordinal);
+            Assert.DoesNotMatch("[\u2580-\u259F]", content);
+            Assert.Contains("passcode: <redacted>", content, StringComparison.Ordinal);
+            Assert.Contains("\"discriminator\": <redacted>", content, StringComparison.Ordinal);
+            Assert.Contains("manual pairing code: <redacted>", content, StringComparison.Ordinal);
+            Assert.Contains("MT:<redacted>", content, StringComparison.Ordinal);
+            Assert.Equal(2, content.Split("<qr-art>", StringSplitOptions.None).Length - 1);
             // Non-sensitive lines survive untouched.
             Assert.Contains("pairing payload received from sidecar.", content, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void DefaultBundleSanitizesConfigAndEveryEntryAgainstAdversarialPrivateValues()
+        {
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            const string PairingCode = "3497-011-2332";
+            const string Ipv4 = "192.0.2.44";
+            const string Ipv6 = "2001:db8::dead:beef";
+            const string LaunchArgument = "--api-key launch-argument-secret";
+            string launchPath = Path.Combine(profile, "Private Apps", "player.exe");
+            var config = new
+            {
+                uniqueIdSeed = "identity-seed-secret",
+                bridgeName = "Living Room Bridge",
+                mdnsInterface = $"adapter-{Environment.UserName}",
+                commands = new
+                {
+                    speaker = new { name = "Living Room Speaker", enabled = true },
+                    custom = new[]
+                    {
+                        new
+                        {
+                            key = "private-launch",
+                            name = "Private Player",
+                            enabled = true,
+                            action = new { type = "launch", path = launchPath, args = LaunchArgument },
+                        },
+                    },
+                },
+            };
+            File.WriteAllText(_configPath, JsonSerializer.Serialize(config));
+            File.WriteAllLines(
+                Path.Combine(_logsDir, "app-20260729.log"),
+                [
+                    $"user={Environment.UserName} machine={Environment.MachineName} profile={profile}",
+                    $"mAnUaL pAiRiNg CoDe: {PairingCode} peer4={Ipv4} peer6={Ipv6}",
+                ]);
+            File.WriteAllLines(
+                Path.Combine(_logsDir, "metrics-20260729.jsonl"),
+                [$"{{\"machine\":\"{Environment.MachineName}\",\"peer\":\"{Ipv6}\"}}"]);
+
+            string zipPath = DiagnosticsBundle.ExportTo(
+                Path.Combine(_dir, "out", "diagnostics.zip"),
+                _logsDir,
+                _configPath);
+
+            using ZipArchive archive = ZipFile.OpenRead(zipPath);
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                string content = ReadEntryText(entry);
+                Assert.DoesNotContain(Environment.UserName, content, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(Environment.MachineName, content, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(profile, content, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(PairingCode, content, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(Ipv4, content, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(Ipv6, content, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(LaunchArgument, content, StringComparison.OrdinalIgnoreCase);
+            }
+
+            string sanitized = ReadEntryText(Assert.Single(archive.Entries, entry => entry.FullName == "config.json"));
+            using JsonDocument document = JsonDocument.Parse(sanitized);
+            JsonElement root = document.RootElement;
+            Assert.Equal("<redacted>", root.GetProperty("uniqueIdSeed").GetString());
+            Assert.Equal("Living Room Bridge", root.GetProperty("bridgeName").GetString());
+            JsonElement commands = root.GetProperty("commands");
+            Assert.Equal("Living Room Speaker", commands.GetProperty("speaker").GetProperty("name").GetString());
+            JsonElement custom = commands.GetProperty("custom")[0];
+            Assert.Equal("Private Player", custom.GetProperty("name").GetString());
+            Assert.StartsWith(
+                "%USERPROFILE%",
+                custom.GetProperty("action").GetProperty("path").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(
+                $"<redacted: {LaunchArgument.Length} chars>",
+                custom.GetProperty("action").GetProperty("args").GetString());
+        }
+
+        [Fact]
+        public void IdentityReplacementHonoursWordBoundariesButIncludesPathSegments()
+        {
+            const string Input = @"normal al C:\Users\al\settings ipc PC \\PC\share";
+
+            string redacted = DiagnosticsBundle.ReplaceIdentityLiteral(Input, "al", "<user>");
+            redacted = DiagnosticsBundle.ReplaceIdentityLiteral(redacted, "PC", "<machine>");
+
+            Assert.Equal(
+                @"normal <user> C:\Users\<user>\settings ipc <machine> \\<machine>\share",
+                redacted);
+        }
+
+        [Fact]
+        public void RawConfigRequiresExplicitOptIn()
+        {
+            const string Raw = "{\"uniqueIdSeed\":\"explicit-raw-opt-in\"}";
+            File.WriteAllText(_configPath, Raw);
+
+            string zipPath = DiagnosticsBundle.ExportTo(
+                Path.Combine(_dir, "out", "diagnostics-raw.zip"),
+                _logsDir,
+                _configPath,
+                includeRawConfig: true);
+
+            using ZipArchive archive = ZipFile.OpenRead(zipPath);
+            Assert.Equal(Raw, ReadEntryText(Assert.Single(archive.Entries, entry => entry.FullName == "config.json")));
         }
 
         [Fact]

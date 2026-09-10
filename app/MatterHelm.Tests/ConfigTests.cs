@@ -420,7 +420,7 @@ public sealed class ConfigTests : IDisposable
     [InlineData("not json at all")]
     [InlineData("{ this is broken json")]
     [InlineData("[1,2,3]")]
-    public void UnparsableJsonFallsBackToDefaultsAndWarnsInsteadOfCrashing(string malformed)
+    public void InvalidJsonFallsBackToDefaultsAndIsPreservedAsRejected(string malformed)
     {
         File.WriteAllText(_path, malformed);
 
@@ -428,18 +428,44 @@ public sealed class ConfigTests : IDisposable
 
         Assert.Equal("HTPC Speaker", config.Current.Commands.Speaker.Name);
         Assert.Equal(39531, config.Current.IpcPort);
-        Assert.True(_log.Contains("WARN", "config.json"));
+        Assert.True(_log.Contains("ERROR", "config.json"));
+        Assert.Single(Directory.EnumerateFiles(_dir, "config.json.rejected-*"));
     }
 
     [Fact]
-    public void NonObjectRootFallsBackToDefaults()
+    public void RejectedLoadRefusesSaveUntilASubsequentSuccessfulLoad()
+    {
+        File.WriteAllText(_path, "{ invalid json");
+        Config config = NewConfig();
+        string rejectedName = Path.GetFileName(Assert.Single(Directory.EnumerateFiles(_dir, "config.json.rejected-*")));
+
+        config.Current.BridgeName = "must remain in memory";
+        Assert.False(config.Save());
+        Assert.Equal(
+            $"config.json was rejected on load and moved to {rejectedName}; restore or delete it, then restart",
+            config.LastSaveError);
+        Assert.Equal(config.LastSaveError, config.LastLoadWarning);
+        Assert.False(File.Exists(_path));
+
+        File.WriteAllText(_path, "{\"bridgeName\":\"restored\"}");
+        config.Reload();
+        config.Current.BridgeName = "save enabled again";
+
+        Assert.True(config.Save());
+        Assert.Null(config.LastSaveError);
+        Assert.Contains("save enabled again", File.ReadAllText(_path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonObjectRootFallsBackToDefaultsAndIsPreservedAsRejected()
     {
         File.WriteAllText(_path, "42");
 
         Config config = NewConfig();
 
         Assert.Equal(39531, config.Current.IpcPort);
-        Assert.True(_log.Contains("WARN", "root is not an object"));
+        Assert.True(_log.Contains("ERROR", "root is not an object"));
+        Assert.Single(Directory.EnumerateFiles(_dir, "config.json.rejected-*"));
     }
 
     [Fact]
@@ -1444,6 +1470,144 @@ public sealed class ConfigTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(_dir, ".config.json.*.tmp"));
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_path));
         Assert.Equal("Serialized saves", document.RootElement.GetProperty("bridgeName").GetString());
+    }
+
+    [Fact]
+    public void OversizedConfigIsPreservedUnderARejectedNameBeforeDefaultsLoad()
+    {
+        File.WriteAllText(_path, "{\"padding\":\"" + new string('x', Config.MaxConfigFileBytes) + "\"}");
+        long originalLength = new FileInfo(_path).Length;
+
+        Config config = NewConfig();
+
+        Assert.Equal(39531, config.Current.IpcPort);
+        Assert.False(File.Exists(_path));
+        string rejected = Assert.Single(Directory.EnumerateFiles(_dir, "config.json.rejected-*")).ToString();
+        Assert.Equal(originalLength, new FileInfo(rejected).Length);
+        Assert.True(_log.Contains("ERROR", "size limit"));
+    }
+
+    [Fact]
+    public void MalformedJsonIsPreservedUnderARejectedNameBeforeDefaultsLoad()
+    {
+        const string Malformed = "{ not valid json";
+        File.WriteAllText(_path, Malformed);
+
+        Config config = NewConfig();
+
+        Assert.Equal(39531, config.Current.IpcPort);
+        Assert.False(File.Exists(_path));
+        string rejected = Assert.Single(Directory.EnumerateFiles(_dir, "config.json.rejected-*")).ToString();
+        Assert.Equal(Malformed, File.ReadAllText(rejected));
+        Assert.True(_log.Contains("ERROR", "not valid JSON"));
+    }
+
+    [Fact]
+    public void CustomCommandCountAccepts64AndRejects65()
+    {
+        static string JsonWithCommands(int count) => JsonSerializer.Serialize(new
+        {
+            commands = new
+            {
+                custom = Enumerable.Range(0, count).Select(index => new
+                {
+                    key = $"command-{index}",
+                    name = $"Command {index}",
+                    action = new { type = "mediaKey", keyName = "stop" },
+                }),
+            },
+        });
+
+        File.WriteAllText(_path, JsonWithCommands(Config.MaxCustomCommands));
+        Assert.Equal(Config.MaxCustomCommands, NewConfig().Current.Commands.Custom.Count);
+
+        File.WriteAllText(_path, JsonWithCommands(Config.MaxCustomCommands + 1));
+        Assert.Empty(NewConfig().Current.Commands.Custom);
+        Assert.True(_log.Contains("WARN", $"more than {Config.MaxCustomCommands}"));
+    }
+
+    [Fact]
+    public void EndpointAndBridgeNamesAccept64CharactersAndReject65()
+    {
+        string maximum = new('n', Config.MaxNameLength);
+        string tooLong = maximum + "x";
+        string json = JsonSerializer.Serialize(new
+        {
+            bridgeName = tooLong,
+            commands = new
+            {
+                speaker = new { name = maximum, enabled = true },
+                custom = new[]
+                {
+                    new
+                    {
+                        key = "valid-name",
+                        name = maximum,
+                        action = new { type = "mediaKey", keyName = "stop" },
+                    },
+                    new
+                    {
+                        key = "long-name",
+                        name = tooLong,
+                        action = new { type = "mediaKey", keyName = "stop" },
+                    },
+                },
+            },
+        });
+        File.WriteAllText(_path, json);
+
+        BridgeConfig config = NewConfig().Current;
+
+        Assert.Equal(maximum, config.Commands.Speaker.Name);
+        Assert.Equal(maximum, config.Commands.Custom[0].Name);
+        Assert.Equal("long-name", config.Commands.Custom[1].Name);
+        Assert.Equal("HTPC Matter Bridge", config.BridgeName);
+        Assert.True(_log.Contains("WARN", $"at most {Config.MaxNameLength}"));
+    }
+
+    [Fact]
+    public void LaunchArgumentsAccept2048CharactersAndReject2049()
+    {
+        static string LaunchConfig(string args) => JsonSerializer.Serialize(new
+        {
+            commands = new
+            {
+                custom = new[]
+                {
+                    new
+                    {
+                        key = "launch-test",
+                        name = "Launch Test",
+                        action = new { type = "launch", path = "player.exe", args },
+                    },
+                },
+            },
+        });
+
+        string maximum = new('a', Config.MaxLaunchArgsLength);
+        File.WriteAllText(_path, LaunchConfig(maximum));
+        var accepted = Assert.IsType<LaunchActionConfig>(Assert.Single(NewConfig().Current.Commands.Custom).Action);
+        Assert.Equal(maximum, accepted.Args);
+
+        File.WriteAllText(_path, LaunchConfig(maximum + "x"));
+        var rejected = Assert.IsType<LaunchActionConfig>(Assert.Single(NewConfig().Current.Commands.Custom).Action);
+        Assert.Empty(rejected.Args);
+        Assert.True(_log.Contains("WARN", $"at most {Config.MaxLaunchArgsLength}"));
+
+        Config warned = NewConfig();
+        Assert.Contains("commands.custom[0].action.args", warned.LastLoadWarning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IdentitySeedAccepts128CharactersAndRejects129()
+    {
+        string maximum = new('s', Config.MaxUniqueIdSeedLength);
+        File.WriteAllText(_path, JsonSerializer.Serialize(new { uniqueIdSeed = maximum }));
+        Assert.Equal(maximum, NewConfig().Current.UniqueIdSeed);
+
+        File.WriteAllText(_path, JsonSerializer.Serialize(new { uniqueIdSeed = maximum + "x" }));
+        Assert.Null(NewConfig().Current.UniqueIdSeed);
+        Assert.True(_log.Contains("WARN", $"at most {Config.MaxUniqueIdSeedLength}"));
     }
 }
 

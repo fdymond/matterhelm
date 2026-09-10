@@ -8,8 +8,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
 
-[assembly: InternalsVisibleTo("MatterHelm.Tests")]
-
 namespace MatterHelm.Updates;
 
 /// <summary>The packaging mode of the currently-running copy of MatterHelm.</summary>
@@ -439,7 +437,7 @@ public sealed class UpdateService : IDisposable
         _installationProbe = installationProbe ?? throw new ArgumentNullException(nameof(installationProbe));
         _currentVersion = currentVersion;
         _token = string.IsNullOrWhiteSpace(token) ? null : token;
-        _log = log ?? DefaultLog;
+        _log = log ?? Log.Write;
         _updatesDirectory = Path.GetFullPath(updatesDirectory
             ?? Path.Combine(Path.GetTempPath(), "MatterHelm", "updates"));
     }
@@ -466,7 +464,7 @@ public sealed class UpdateService : IDisposable
             new WindowsUpdateInstallationProbe(),
             SemanticVersion.FromAssemblyVersion(assemblyVersion),
             Environment.GetEnvironmentVariable("MATTERHELM_UPDATE_TOKEN"),
-            DefaultLog,
+            Log.Write,
             ownsHttpClient: true);
     }
 
@@ -884,21 +882,6 @@ public sealed class UpdateService : IDisposable
         }
     }
 
-    private static void DefaultLog(string level, string message)
-    {
-        switch (level)
-        {
-            case "ERROR":
-                Log.Error(message);
-                break;
-            case "WARN":
-                Log.Warn(message);
-                break;
-            default:
-                Log.Info(message);
-                break;
-        }
-    }
 }
 
 /// <summary>Creates and starts the post-exit helper that applies a verified package.</summary>
@@ -948,46 +931,54 @@ public static class UpdateHandoff
                 return false;
             }
 
-            string helperDirectory = Path.Combine(Path.GetTempPath(), "MatterHelm", "updates");
-            Directory.CreateDirectory(helperDirectory);
-            string id = Guid.NewGuid().ToString("N");
-            string helperPath = Path.Combine(helperDirectory, $"handoff-{id}.ps1");
-            string helperLogPath = Path.Combine(helperDirectory, $"handoff-{id}.log");
-            string script = GetHelperScript(release.InstallMode);
-            await File.WriteAllTextAsync(
-                helperPath,
-                script,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
-                cancellationToken).ConfigureAwait(false);
-
-            string powershell = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe");
-            ProcessStartInfo start = CreateHelperStartInfo(
-                powershell,
-                helperPath,
-                Environment.ProcessId,
+            return await WithVerifiedPackageAsync(
                 packagePath,
-                installation.ExecutablePath,
-                installation.InstallDirectory,
-                helperLogPath,
-                expectedSha256);
-            using Process? helper = Process.Start(start);
-            if (helper is null)
-            {
-                Log.Error("Update handoff: PowerShell helper did not start.");
-                return false;
-            }
+                expectedSha256,
+                async () =>
+                {
+                    string helperDirectory = Path.Combine(Path.GetTempPath(), "MatterHelm", "updates");
+                    Directory.CreateDirectory(helperDirectory);
+                    string id = Guid.NewGuid().ToString("N");
+                    string helperPath = Path.Combine(helperDirectory, $"handoff-{id}.ps1");
+                    string helperLogPath = Path.Combine(helperDirectory, $"handoff-{id}.log");
+                    string script = GetHelperScript(release.InstallMode);
+                    await File.WriteAllTextAsync(
+                        helperPath,
+                        script,
+                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+                        cancellationToken).ConfigureAwait(false);
 
-            Log.Info($"Update handoff: helper started at '{helperPath}' (helper log '{helperLogPath}').");
-            return true;
+                    string powershell = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System),
+                        "WindowsPowerShell",
+                        "v1.0",
+                        "powershell.exe");
+                    ProcessStartInfo start = CreateHelperStartInfo(
+                        powershell,
+                        helperPath,
+                        Environment.ProcessId,
+                        packagePath,
+                        installation.ExecutablePath,
+                        installation.InstallDirectory,
+                        helperLogPath,
+                        expectedSha256);
+                    using Process? helper = Process.Start(start);
+                    if (helper is null)
+                    {
+                        Log.Error("Update handoff: PowerShell helper did not start.");
+                        return false;
+                    }
+
+                    Log.Info($"Update handoff: helper started at '{helperPath}' (helper log '{helperLogPath}').");
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is
             IOException or
             UnauthorizedAccessException or
             InvalidOperationException or
+            InvalidDataException or
             System.ComponentModel.Win32Exception or
             System.Security.SecurityException)
         {
@@ -1004,7 +995,8 @@ public static class UpdateHandoff
         string executablePath,
         string installDirectory,
         string logPath,
-        string expectedSha256)
+        string expectedSha256,
+        Action<ProcessStartInfo>? beforeEnvironmentSanitizeForTest = null)
     {
         var start = new ProcessStartInfo
         {
@@ -1030,7 +1022,33 @@ public static class UpdateHandoff
         start.ArgumentList.Add(logPath);
         start.ArgumentList.Add("-ExpectedSha256");
         start.ArgumentList.Add(expectedSha256);
+        beforeEnvironmentSanitizeForTest?.Invoke(start);
+        start.Environment.Remove("MATTERHELM_UPDATE_TOKEN");
         return start;
+    }
+
+    internal static async Task<bool> WithVerifiedPackageAsync(
+        string packagePath,
+        string expectedSha256,
+        Func<Task<bool>> usePackage,
+        CancellationToken cancellationToken = default)
+    {
+        await using var package = new FileStream(
+            packagePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 128 * 1024,
+            useAsync: true);
+        string actualSha256 = Convert.ToHexString(
+            await SHA256.HashDataAsync(package, cancellationToken).ConfigureAwait(false));
+        if (!actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("The update package SHA-256 changed before helper launch.");
+        }
+
+        package.Position = 0;
+        return await usePackage().ConfigureAwait(false);
     }
 
     internal static string GetHelperScript(UpdateInstallMode mode) =>
@@ -1062,19 +1080,29 @@ public static class UpdateHandoff
           [Parameter(Mandatory=$true)][string]$ExpectedSha256
         )
         $ErrorActionPreference = 'Stop'
+        $packageStream = $null
         try {
           Add-Content -LiteralPath $LogPath -Value "Waiting for MatterHelm process $MatterHelmProcessId to exit."
           Wait-Process -Id $MatterHelmProcessId -ErrorAction SilentlyContinue
           Add-Content -LiteralPath $LogPath -Value 'Rechecking package SHA-256 before installer launch.'
-          $actualSha256 = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash
+          $packageStream = [IO.File]::Open($PackagePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          $sha256 = [Security.Cryptography.SHA256]::Create()
+          try {
+            $actualSha256 = [BitConverter]::ToString($sha256.ComputeHash($packageStream)).Replace('-', '')
+          } finally {
+            $sha256.Dispose()
+          }
           if ($actualSha256 -ine $ExpectedSha256) {
             throw 'Package SHA-256 changed after verification; refusing to start the installer.'
           }
+          $packageStream.Position = 0
           $setup = Start-Process -FilePath $PackagePath -ArgumentList @('/SILENT', '/NORESTART', '/SP-') -Wait -PassThru
           Add-Content -LiteralPath $LogPath -Value "Installer exited with code $($setup.ExitCode)."
           if ($setup.ExitCode -ne 0) {
             throw "Installer exited with code $($setup.ExitCode)."
           }
+          $packageStream.Dispose()
+          $packageStream = $null
           Add-Content -LiteralPath $LogPath -Value 'Update installed; relaunching MatterHelm.'
           Start-Process -FilePath $ExecutablePath
           Remove-Item -LiteralPath $PackagePath -Force -ErrorAction SilentlyContinue
@@ -1088,6 +1116,7 @@ public static class UpdateHandoff
             Add-Content -LiteralPath $LogPath -Value "MatterHelm relaunch failed: $($_.Exception.Message)"
           }
         } finally {
+          if ($null -ne $packageStream) { $packageStream.Dispose() }
           Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
         }
         """;
@@ -1103,18 +1132,75 @@ public static class UpdateHandoff
         )
         $ErrorActionPreference = 'Stop'
         $stage = Join-Path ([IO.Path]::GetTempPath()) ("MatterHelm-update-stage-" + [Guid]::NewGuid().ToString('N'))
+        $packageStream = $null
+        $archive = $null
         try {
           Add-Content -LiteralPath $LogPath -Value "Waiting for MatterHelm process $MatterHelmProcessId to exit."
           Wait-Process -Id $MatterHelmProcessId -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $stage | Out-Null
           Add-Content -LiteralPath $LogPath -Value 'Rechecking package SHA-256 before archive expansion.'
-          $actualSha256 = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash
+          $packageStream = [IO.File]::Open($PackagePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          $sha256 = [Security.Cryptography.SHA256]::Create()
+          try {
+            $actualSha256 = [BitConverter]::ToString($sha256.ComputeHash($packageStream)).Replace('-', '')
+          } finally {
+            $sha256.Dispose()
+          }
           if ($actualSha256 -ine $ExpectedSha256) {
             throw 'Package SHA-256 changed after verification; refusing to expand the archive.'
           }
-          Expand-Archive -LiteralPath $PackagePath -DestinationPath $stage -Force
-          # Copy-over intentionally retains files removed by newer releases; tracked as the P3 backlog limitation.
+          $packageStream.Position = 0
+          Add-Type -AssemblyName System.IO.Compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipArchive]::new($packageStream, [IO.Compression.ZipArchiveMode]::Read, $true)
+          $stageRoot = [IO.Path]::GetFullPath($stage + [IO.Path]::DirectorySeparatorChar)
+          foreach ($entry in $archive.Entries) {
+            $destination = [IO.Path]::GetFullPath((Join-Path $stage $entry.FullName))
+            if (-not $destination.StartsWith($stageRoot, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "Archive entry escapes the staging directory: $($entry.FullName)"
+            }
+            if ([string]::IsNullOrEmpty($entry.Name)) {
+              [IO.Directory]::CreateDirectory($destination) | Out-Null
+              continue
+            }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+            $entryStream = $entry.Open()
+            $targetStream = [IO.File]::Open($destination, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+              $entryStream.CopyTo($targetStream)
+            } finally {
+              $targetStream.Dispose()
+              $entryStream.Dispose()
+            }
+          }
+          $archive.Dispose()
+          $archive = $null
+          $packageStream.Dispose()
+          $packageStream = $null
+          $layoutManifest = Join-Path $stage 'sidecar-layout.json'
+          $layout = $null
+          if (Test-Path -LiteralPath $layoutManifest -PathType Leaf) {
+            try {
+              $candidateLayout = (Get-Content -LiteralPath $layoutManifest -Raw | ConvertFrom-Json).layout
+              if ($candidateLayout -eq 'sea' -or $candidateLayout -eq 'node') {
+                $layout = $candidateLayout
+              } else {
+                Add-Content -LiteralPath $LogPath -Value "Portable package carries unsupported sidecar layout '$candidateLayout'; skipping stale sidecar cleanup."
+              }
+            } catch {
+              Add-Content -LiteralPath $LogPath -Value "Portable package sidecar layout manifest is malformed; skipping stale sidecar cleanup: $($_.Exception.Message)"
+            }
+          }
           Get-ChildItem -LiteralPath $stage -Force | Copy-Item -Destination $InstallDirectory -Recurse -Force
+          if ($null -ne $layout) {
+            $installedSidecar = Join-Path $InstallDirectory 'sidecar'
+            if ($layout -eq 'sea') {
+              Remove-Item -LiteralPath (Join-Path $installedSidecar 'node.exe') -Force -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath (Join-Path $installedSidecar 'bridge.cjs') -Force -ErrorAction SilentlyContinue
+            } else {
+              Remove-Item -LiteralPath (Join-Path $installedSidecar 'bridge.exe') -Force -ErrorAction SilentlyContinue
+            }
+          }
           Add-Content -LiteralPath $LogPath -Value 'Portable files replaced; relaunching MatterHelm.'
           Start-Process -FilePath $ExecutablePath
           Remove-Item -LiteralPath $PackagePath -Force -ErrorAction SilentlyContinue
@@ -1128,6 +1214,8 @@ public static class UpdateHandoff
             Add-Content -LiteralPath $LogPath -Value "MatterHelm relaunch failed: $($_.Exception.Message)"
           }
         } finally {
+          if ($null -ne $archive) { $archive.Dispose() }
+          if ($null -ne $packageStream) { $packageStream.Dispose() }
           Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
         }

@@ -6,8 +6,7 @@ namespace MatterHelm.Ui;
 
 /// <summary>
 /// Runtime-drawn tray iconography (no .ico assets): the HELM as the single
-/// glyph (owner pick 2026-08-23; trademark-safe original geometry - the
-/// prior CSA-mark glyph stays archived below), tinted by bridge state. When idle it is
+/// glyph (maintainer pick 2026-08-23; trademark-safe original geometry), tinted by bridge state. When idle it is
 /// monochrome and theme-aware — near-white on a dark taskbar, near-black on
 /// a light one — matching how Windows 11 system tray glyphs (OneDrive,
 /// Teams, Defender) read. Everything is drawn proportionally to the
@@ -67,9 +66,7 @@ public static class TrayIcons
 
     /// <summary>
     /// Renders one state's icon into a fresh 32bpp bitmap of the given square
-    /// size. The glyph is the HELM (candidate A, owner pick 2026-08-23 —
-    /// trademark-safe original geometry replacing the CSA certification
-    /// mark, which stays archived in <see cref="DrawMatterMark"/>). State
+    /// size. The glyph is the HELM (candidate A, maintainer pick 2026-08-23). State
     /// language unchanged: white/theme silhouette = disabled, amber =
     /// enabling/connecting, green = bridge running (hub-connected), red =
     /// faulted.
@@ -92,61 +89,6 @@ public static class TrayIcons
 
         DrawHelm(g, size, glyph);
         return bitmap;
-    }
-
-    /// <summary>
-    /// ARCHIVED (owner request 2026-08-23: keep, do not delete): the product
-    /// glyph 2026-08-09 → 2026-08-23, replaced by <see cref="DrawHelm"/> for
-    /// trademark safety. Still rendered as the reference row of
-    /// <see cref="ExportLogoCandidates"/>. A faithful
-    /// rendition of the Matter certification mark — three units at 120°
-    /// rotational symmetry, each a thick radial arm plus an arc whose circle
-    /// is centered on that arm's OUTER tip (proportions measured from the
-    /// reference art: arm ~0.17r→0.42r, arc radius ~0.32r, sweep ~96°
-    /// straddling the inward direction, so the segment bows toward the glyph
-    /// center and its ends flare toward the neighbouring units). Drawn for
-    /// the owner's personal build; the mark belongs to the CSA — revisit
-    /// before any distribution.
-    /// </summary>
-    private static void DrawMatterMark(Graphics g, int size, Color glyph)
-    {
-        float s = size;
-        var center = new PointF(0.50f * s, 0.52f * s);
-        float innerR = 0.15f * s;
-        float outerR = 0.40f * s;
-        // Tighter circle + wider sweep than the raw reference measurements:
-        // at tray sizes a large-radius 96° arc renders nearly straight and
-        // the three units read as a six-armed asterisk; ~0.26r/112° keeps
-        // the arcs legibly curved while preserving the mark's silhouette.
-        float arcR = 0.26f * s;
-        const float ArcSweepDegrees = 112f;
-        float stroke = Math.Max(1.6f, 0.10f * s);
-
-        using var pen = new Pen(glyph, stroke)
-        {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-        };
-
-        for (int i = 0; i < 3; i++)
-        {
-            float outwardDeg = -90f + (i * 120f);
-            double outward = outwardDeg * Math.PI / 180.0;
-            var dir = new PointF((float)Math.Cos(outward), (float)Math.Sin(outward));
-
-            var inner = new PointF(center.X + (dir.X * innerR), center.Y + (dir.Y * innerR));
-            var tip = new PointF(center.X + (dir.X * outerR), center.Y + (dir.Y * outerR));
-            g.DrawLine(pen, inner, tip);
-
-            g.DrawArc(
-                pen,
-                tip.X - arcR,
-                tip.Y - arcR,
-                2 * arcR,
-                2 * arcR,
-                outwardDeg + 180f - (ArcSweepDegrees / 2f),
-                ArcSweepDegrees);
-        }
     }
 
     /// <summary>Clones the bitmap into a GDI+-owned <see cref="Icon"/> and destroys the intermediate native handle.</summary>
@@ -299,7 +241,7 @@ public static class TrayIcons
         string dir = directory ?? Path.Combine(AppContext.BaseDirectory, "logo-candidates");
         Directory.CreateDirectory(dir);
         int[] sizes = [16, 24, 32, 48, 64];
-        Action<Graphics, int, Color>[] candidates = [DrawMatterMark, DrawHelm, DrawHelmHouse, DrawBridgeHouse];
+        Action<Graphics, int, Color>[] candidates = [DrawHelm, DrawHelmHouse, DrawBridgeHouse];
         BridgeState[] states =
             [BridgeState.Disabled, BridgeState.Running, BridgeState.Connected, BridgeState.Faulted];
 

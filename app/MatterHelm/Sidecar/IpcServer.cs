@@ -36,6 +36,7 @@ public sealed class IpcServer : IDisposable
     private const int MaxFrameBytes = 64 * 1024;
     private const int ActionQueueCapacity = 64;
     private static readonly TimeSpan ClientShutdownWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultSendTimeout = TimeSpan.FromSeconds(5);
 
     private readonly HttpListener _listener = new();
     private readonly byte[] _tokenUtf8;
@@ -48,7 +49,14 @@ public sealed class IpcServer : IDisposable
     private Task? _acceptLoop;
     private WebSocket? _authedClient;
     private int _clientSlot; // 0 = free, 1 = held by a connection (Interlocked)
+    private int _remoteRejectionLogged;
     private bool _disposed;
+
+    internal Func<CancellationToken, Task>? BeforeSendForTestAsync { get; set; }
+
+    internal TimeSpan SendTimeoutForTest { get; set; } = DefaultSendTimeout;
+
+    internal void SetAuthenticatedClientForTest(WebSocket socket) => Volatile.Write(ref _authedClient, socket);
 
     /// <summary>Creates the server (call <see cref="Start"/> to listen).</summary>
     /// <param name="port">Loopback port (BLUEPRINT default 39531).</param>
@@ -61,7 +69,7 @@ public sealed class IpcServer : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(token);
         _tokenUtf8 = Encoding.UTF8.GetBytes(token);
         _helloTimeout = helloTimeout ?? TimeSpan.FromSeconds(5);
-        _log = log ?? DefaultLog;
+        _log = log ?? Log.Write;
         _listener.Prefixes.Add($"http://localhost:{port}/");
     }
 
@@ -102,21 +110,36 @@ public sealed class IpcServer : IDisposable
         }
 
         byte[] payload = Encoding.UTF8.GetBytes(Protocol.Serialize(frame));
-        await _sendLock.WaitAsync(_cts.Token).ConfigureAwait(false);
+        bool acquired = false;
+        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        sendCts.CancelAfter(SendTimeoutForTest);
         try
         {
-            await socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, _cts.Token)
+            await _sendLock.WaitAsync(sendCts.Token).ConfigureAwait(false);
+            acquired = true;
+            if (BeforeSendForTestAsync is { } beforeSend)
+            {
+                await beforeSend(sendCts.Token).ConfigureAwait(false);
+            }
+
+            await socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, sendCts.Token)
                 .ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
         {
-            _log("WARN", $"IPC: send failed ({ex.Message}); frame dropped.");
+            string reason = ex is OperationCanceledException && !_cts.IsCancellationRequested
+                ? $"timed out after {SendTimeoutForTest.TotalSeconds:0.###} s"
+                : ex.Message;
+            _log("WARN", $"IPC: send failed ({reason}); frame dropped.");
             return false;
         }
         finally
         {
-            _sendLock.Release();
+            if (acquired)
+            {
+                _sendLock.Release();
+            }
         }
     }
 
@@ -241,22 +264,6 @@ public sealed class IpcServer : IDisposable
         }
     }
 
-    private static void DefaultLog(string level, string message)
-    {
-        switch (level)
-        {
-            case "ERROR":
-                Log.Error(message);
-                break;
-            case "WARN":
-                Log.Warn(message);
-                break;
-            default:
-                Log.Info(message);
-                break;
-        }
-    }
-
     private async Task AcceptLoopAsync()
     {
         while (!_cts.IsCancellationRequested)
@@ -290,6 +297,13 @@ public sealed class IpcServer : IDisposable
 
     private async Task HandleContextAsync(HttpListenerContext context)
     {
+        if (!IsAllowedRemoteEndpoint(context.Request.RemoteEndPoint))
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+            context.Response.Close();
+            return;
+        }
+
         if (!context.Request.IsWebSocketRequest)
         {
             context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
@@ -297,10 +311,9 @@ public sealed class IpcServer : IDisposable
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _clientSlot, 1, 0) != 0)
+        if (!TryAcquireClientSlot(out HttpStatusCode rejectionStatus))
         {
-            _log("WARN", "IPC: rejected concurrent connection (single-client policy).");
-            context.Response.StatusCode = (int)HttpStatusCode.Conflict;
+            context.Response.StatusCode = (int)rejectionStatus;
             context.Response.Close();
             return;
         }
@@ -317,6 +330,39 @@ public sealed class IpcServer : IDisposable
         }
 
         TrackClientTask(Task.Run(() => ServeClientAsync(webSocketContext.WebSocket)));
+    }
+
+    internal bool IsAllowedRemoteEndpoint(IPEndPoint? remoteEndPoint)
+    {
+        IPAddress? address = remoteEndPoint?.Address;
+        bool isLoopback = address is not null
+            && (IPAddress.IsLoopback(address)
+                || (address.IsIPv4MappedToIPv6 && IPAddress.IsLoopback(address.MapToIPv4())));
+        if (!isLoopback)
+        {
+            if (Interlocked.Exchange(ref _remoteRejectionLogged, 1) == 0)
+            {
+                string family = remoteEndPoint?.AddressFamily.ToString() ?? "unknown";
+                _log("WARN", $"IPC: rejected non-loopback connection (address family {family}).");
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    internal bool TryAcquireClientSlot(out HttpStatusCode rejectionStatus)
+    {
+        if (Interlocked.CompareExchange(ref _clientSlot, 1, 0) != 0)
+        {
+            _log("WARN", "IPC: rejected concurrent connection (single-client policy).");
+            rejectionStatus = HttpStatusCode.Conflict;
+            return false;
+        }
+
+        rejectionStatus = default;
+        return true;
     }
 
     private async Task ServeClientAsync(WebSocket socket)

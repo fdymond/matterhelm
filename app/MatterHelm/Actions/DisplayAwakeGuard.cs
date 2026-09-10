@@ -1,7 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
-
-[assembly: InternalsVisibleTo("MatterHelm.Tests")]
 
 namespace MatterHelm.Actions;
 

@@ -12,13 +12,21 @@ public sealed class MediaKeysTests
     [Fact]
     public void ProductionRoutingPolicyPinsReviewedRetryAndDrainBudget()
     {
-        MediaRoutingPolicy policy = MediaKeys.ProductionRoutingPolicy;
+        MediaRoutingPolicy policy = FocusedMediaRouter.ProductionRoutingPolicy;
 
         Assert.Equal(TimeSpan.FromSeconds(1), policy.SessionTimeout);
         Assert.Equal(TimeSpan.FromMilliseconds(400), policy.VerificationDelay);
         Assert.Equal(TimeSpan.FromMilliseconds(200), policy.AppCommandRetryDelay);
         Assert.Equal(TimeSpan.FromSeconds(4), policy.RouteDeadline);
         Assert.Equal(TimeSpan.FromSeconds(2), policy.UnverifiableRepeatWindow);
+    }
+
+    [Fact]
+    public void RouteLoggerTreatsUnknownLevelsAsWarnings()
+    {
+        Assert.Equal(LogLevel.Warn, MediaKeys.RouteLogLevel("INFO"));
+        Assert.Equal(LogLevel.Debug, MediaKeys.RouteLogLevel("DEBUG"));
+        Assert.Equal(LogLevel.Error, MediaKeys.RouteLogLevel("ERROR"));
     }
 
     [Theory]
@@ -28,7 +36,9 @@ public sealed class MediaKeysTests
     public void Win32AppCommandFailureClassificationPreservesTimeoutMeaning(
         int win32Error,
         int expectedValue) =>
-        Assert.Equal((ForegroundCommandDelivery)expectedValue, MediaKeys.ClassifyAppCommandFailure(win32Error));
+        Assert.Equal(
+            (ForegroundCommandDelivery)expectedValue,
+            WindowsForegroundMediaCommandSender.ClassifyAppCommandFailure(win32Error));
 
     [Theory]
     [InlineData((int)ForegroundMediaCommand.Play, (int)MediaPlaybackState.Playing)]
@@ -304,7 +314,7 @@ public sealed class MediaKeysTests
         Assert.Contains("no same-owner media session", result.Error, StringComparison.Ordinal);
         Assert.Equal(0, controller.ActionCalls);
         Assert.Equal(2, foreground.Commands.Count);
-        Assert.Equal([MediaKeys.ProductionRoutingPolicy.AppCommandRetryDelay], delay.Waits);
+        Assert.Equal([FocusedMediaRouter.ProductionRoutingPolicy.AppCommandRetryDelay], delay.Waits);
         Assert.True(log.Contains("WARN", "retrying once"));
     }
 
@@ -333,8 +343,8 @@ public sealed class MediaKeysTests
         Assert.Equal("kodi.exe", Assert.Single(controller.ActionTargets));
         Assert.Equal(
             [
-                MediaKeys.ProductionRoutingPolicy.AppCommandRetryDelay,
-                MediaKeys.ProductionRoutingPolicy.VerificationDelay,
+                FocusedMediaRouter.ProductionRoutingPolicy.AppCommandRetryDelay,
+                FocusedMediaRouter.ProductionRoutingPolicy.VerificationDelay,
             ],
             delay.Waits);
     }
@@ -364,8 +374,8 @@ public sealed class MediaKeysTests
         Assert.Equal(0, controller.ActionCalls);
         Assert.Equal(
             [
-                MediaKeys.ProductionRoutingPolicy.AppCommandRetryDelay,
-                MediaKeys.ProductionRoutingPolicy.VerificationDelay,
+                FocusedMediaRouter.ProductionRoutingPolicy.AppCommandRetryDelay,
+                FocusedMediaRouter.ProductionRoutingPolicy.VerificationDelay,
             ],
             delay.Waits);
         Assert.True(log.Contains("WARN", "retrying once"));
@@ -428,7 +438,7 @@ public sealed class MediaKeysTests
     public void ImmediateRepeatedDedicatedPauseToSameUnverifiableTargetIsSuppressed()
     {
         long ticks = 1000;
-        var repeatGuard = new MediaKeys.UnverifiableMediaRepeatGuard(() => ticks);
+        var repeatGuard = new UnverifiableMediaRepeatGuard(() => ticks);
         var controller = new FakeMediaSessionController(
             MediaSessionSnapshot.NoSession,
             MediaSessionSnapshot.NoSession,
@@ -460,7 +470,7 @@ public sealed class MediaKeysTests
     public void SameDedicatedVerbAfterRepeatWindowIsDeliveredAgain()
     {
         long ticks = 1000;
-        var repeatGuard = new MediaKeys.UnverifiableMediaRepeatGuard(() => ticks);
+        var repeatGuard = new UnverifiableMediaRepeatGuard(() => ticks);
         var controller = new FakeMediaSessionController(
             MediaSessionSnapshot.NoSession,
             MediaSessionSnapshot.NoSession,
@@ -524,19 +534,19 @@ public sealed class MediaKeysTests
         Assert.Equal(
             MediaPlaybackState.Paused,
             (await controller.GetCurrentSessionAsync(
-                MediaKeys.ProductionRoutingPolicy.SessionTimeout,
+                FocusedMediaRouter.ProductionRoutingPolicy.SessionTimeout,
                 CancellationToken.None)).State);
         Assert.Equal(
             MediaSessionActionResult.Succeeded,
             await controller.TryPlayAsync(
                 "Chrome.App",
-                MediaKeys.ProductionRoutingPolicy.SessionTimeout,
+                FocusedMediaRouter.ProductionRoutingPolicy.SessionTimeout,
                 CancellationToken.None));
         Assert.Equal(
             MediaSessionActionResult.Succeeded,
             await controller.TryPauseAsync(
                 "Chrome.App",
-                MediaKeys.ProductionRoutingPolicy.SessionTimeout,
+                FocusedMediaRouter.ProductionRoutingPolicy.SessionTimeout,
                 CancellationToken.None));
 
         Assert.Equal(1, managerRequests);
@@ -563,14 +573,14 @@ public sealed class MediaKeysTests
         FakeDelay delay,
         IUnverifiableMediaRepeatGuard repeatGuard,
         TestSupport.LogCapture log) =>
-        MediaKeys.Route(
+        FocusedMediaRouter.RouteDetailed(
             command,
             controller,
             foreground,
             delay,
             repeatGuard,
-            MediaKeys.ProductionRoutingPolicy,
-            log.Sink);
+            FocusedMediaRouter.ProductionRoutingPolicy,
+            log.Sink).Ok;
 
     private static ActionExecutionResult RouteDetailed(
         ForegroundMediaCommand command,
@@ -579,13 +589,13 @@ public sealed class MediaKeysTests
         FakeDelay delay,
         IUnverifiableMediaRepeatGuard repeatGuard,
         TestSupport.LogCapture log) =>
-        MediaKeys.RouteDetailed(
+        FocusedMediaRouter.RouteDetailed(
             command,
             controller,
             foreground,
             delay,
             repeatGuard,
-            MediaKeys.ProductionRoutingPolicy,
+            FocusedMediaRouter.ProductionRoutingPolicy,
             log.Sink);
 
     private sealed class FakeMediaSessionController(params MediaSessionSnapshot[] snapshots) : IMediaSessionController

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MatterHelm.Sidecar;
 using Xunit;
 
@@ -92,6 +93,27 @@ public static class ProtocolTests
             Assert.False(result.Success);
             Assert.Contains("extra", result.Reason, StringComparison.Ordinal);
         }
+
+        [Fact]
+        public void UnknownHelloFieldReasonRemovesUnicodeLogControlsBeforeAuthentication()
+        {
+            string field = "extra\u0085\u202Efield";
+            string json = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["v"] = 5,
+                ["type"] = "hello",
+                ["token"] = "session-token",
+                ["protocol"] = 1,
+                [field] = true,
+            });
+
+            SidecarParseResult result = Parse(json);
+
+            Assert.False(result.Success);
+            Assert.DoesNotContain('\u0085', result.Reason!);
+            Assert.DoesNotContain('\u202E', result.Reason!);
+            Assert.Contains("extrafield", result.Reason, StringComparison.Ordinal);
+        }
     }
 
     public sealed class BareActionFrames
@@ -140,6 +162,48 @@ public static class ProtocolTests
             SidecarParseResult result = Parse($$"""{"v":5,"type":"action","id":"{{Uuid1}}","name":"rewind"}""");
             Assert.False(result.Success);
             Assert.Contains("rewind", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void UnknownActionReasonStripsControlCharactersAndCapsTheEmbeddedName()
+        {
+            string name = "rewind\r\n\u001bWARN-" + new string('x', 80);
+            string json = JsonSerializer.Serialize(new { v = 5, type = "action", id = Uuid1, name });
+
+            SidecarParseResult result = Parse(json);
+
+            Assert.False(result.Success);
+            Assert.All(result.Reason!, character => Assert.False(char.IsControl(character)));
+            string embedded = result.Reason!.Split('"')[1];
+            Assert.Equal(65, embedded.Length);
+            Assert.EndsWith("…", embedded, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void TruncatedReasonNeverSplitsASurrogatePair()
+        {
+            string name = new string('x', 62) + "\U0001F680" + "tail";
+            string json = JsonSerializer.Serialize(new { v = 5, type = "action", id = Uuid1, name });
+
+            SidecarParseResult result = Parse(json);
+
+            string embedded = result.Reason!.Split('"')[1];
+            Assert.Equal(63, embedded.Length);
+            Assert.EndsWith("…", embedded, StringComparison.Ordinal);
+            Assert.DoesNotContain(embedded, char.IsSurrogate);
+        }
+
+        [Fact]
+        public void TruncatedReasonAppendsEllipsisWhenASurrogatePairStraddlesTheCut()
+        {
+            string name = new string('x', 63) + "\U0001F680" + "tail";
+            string json = JsonSerializer.Serialize(new { v = 5, type = "action", id = Uuid1, name });
+
+            SidecarParseResult result = Parse(json);
+
+            string embedded = result.Reason!.Split('"')[1];
+            Assert.Equal(new string('x', 63) + "…", embedded);
+            Assert.DoesNotContain(embedded, char.IsSurrogate);
         }
 
         [Fact]
@@ -529,6 +593,19 @@ public static class ProtocolTests
             SidecarParseResult result = Parse("""{"v":5,"type":"telemetry"}""");
             Assert.False(result.Success);
             Assert.Contains("telemetry", result.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void UnknownFrameTypeReasonStripsCrLfAndEscapeCharacters()
+        {
+            string type = "tele\r\n\u001bmetry";
+            string json = JsonSerializer.Serialize(new { v = 5, type });
+
+            SidecarParseResult result = Parse(json);
+
+            Assert.False(result.Success);
+            Assert.Contains("telemetry", result.Reason, StringComparison.Ordinal);
+            Assert.All(result.Reason!, character => Assert.False(char.IsControl(character)));
         }
 
         [Theory]

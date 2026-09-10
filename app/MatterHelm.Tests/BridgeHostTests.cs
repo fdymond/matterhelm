@@ -2,6 +2,7 @@ using System.Diagnostics.Metrics;
 using System.Text.Json;
 using MatterHelm.Actions;
 using MatterHelm.Diagnostics;
+using MatterHelm.Infrastructure;
 using MatterHelm.Sidecar;
 using MatterHelm.Ui;
 using Xunit;
@@ -60,7 +61,7 @@ public static class BridgeHostTests
             var transitions = new List<bool>();
             var queue = new SerialActionQueue(ex => throw new Xunit.Sdk.XunitException(ex.Message));
 
-            Task off = queue.Enqueue(() =>
+            Task off = queue.EnqueueAsync(() =>
             {
                 transitions.Add(false);
                 stopEntered.Set();
@@ -70,7 +71,7 @@ public static class BridgeHostTests
             // generous ceiling is free locally and survives a loaded CI runner
             // under coverage instrumentation (0.4.4: 2 s was too tight there).
             Assert.True(stopEntered.Wait(TimeSpan.FromSeconds(30)));
-            Task on = queue.Enqueue(() => transitions.Add(true));
+            Task on = queue.EnqueueAsync(() => transitions.Add(true));
 
             Assert.False(on.IsCompleted, "enable must wait for the complete stop operation");
             allowStopToFinish.Set();
@@ -93,7 +94,7 @@ public static class BridgeHostTests
             PowerOffAction action,
             bool expected)
         {
-            Assert.Equal(expected, BridgeHost.IsMomentaryPowerAction(action));
+            Assert.Equal(expected, SidecarEnvironment.IsMomentaryPowerAction(action));
         }
 
         [Theory]
@@ -111,7 +112,7 @@ public static class BridgeHostTests
                 MomentaryResetMs = 2000,
             };
 
-            Dictionary<string, string> env = BridgeHost.BuildSidecarExtraEnv(config);
+            Dictionary<string, string> env = SidecarEnvironment.BuildExtraEnv(config);
             using JsonDocument endpoints = JsonDocument.Parse(env["HTPC_BRIDGE_ENDPOINTS"]);
 
             Assert.Equal(
@@ -145,7 +146,7 @@ public static class BridgeHostTests
         {
             var calls = new List<string>();
 
-            (bool ok, _) = BridgeHost.RoutePowerAction(
+            (bool ok, _) = BridgeActionDispatcher.RoutePowerAction(
                 action,
                 on,
                 (name, _) =>
@@ -163,7 +164,7 @@ public static class BridgeHostTests
         {
             var calls = new List<string>();
 
-            (bool ok, _) = BridgeHost.RoutePowerAction(
+            (bool ok, _) = BridgeActionDispatcher.RoutePowerAction(
                 PowerOffAction.PauseAndDisplaysOff,
                 on: false,
                 (name, _) =>
@@ -188,7 +189,7 @@ public static class BridgeHostTests
         {
             int resultCalls = 0;
 
-            (bool ok, string pill) = BridgeHost.RoutePowerAction(
+            (bool ok, string pill) = BridgeActionDispatcher.RoutePowerAction(
                 action,
                 on: false,
                 (name, _) => name == "pause"
@@ -414,7 +415,7 @@ public static class BridgeHostTests
             string? verb = null;
             object? payload = null;
 
-            (bool ok, string pill, string? error) = BridgeHost.RouteMouseMoveAction(
+            (bool ok, string pill, string? error) = BridgeActionDispatcher.RouteMouseMoveAction(
                 "park-mouse",
                 action,
                 on,
@@ -444,7 +445,7 @@ public static class BridgeHostTests
             string? verb = null;
             object? payload = null;
 
-            (bool ok, string pill, string? error) = BridgeHost.RouteMouseMoveStep(
+            (bool ok, string pill, string? error) = BridgeActionDispatcher.RouteMouseMoveStep(
                 "movie-time",
                 action,
                 (name, value) =>
@@ -475,14 +476,14 @@ public static class BridgeHostTests
             };
             var calls = new List<string>();
 
-            (bool ok, string pill, string? error) = BridgeHost.RunSequenceSteps(
+            (bool ok, string pill, string? error) = BridgeActionDispatcher.RunSequenceSteps(
                 "park-then-stop",
                 sequence,
                 step =>
                 {
                     if (step is MouseMoveActionConfig mouseMove)
                     {
-                        return BridgeHost.RouteMouseMoveStep(
+                        return BridgeActionDispatcher.RouteMouseMoveStep(
                             "park-then-stop",
                             mouseMove,
                             (name, _) =>
@@ -515,14 +516,14 @@ public static class BridgeHostTests
             };
             int calls = 0;
 
-            (bool ok, string pill, string? error) = BridgeHost.RunSequenceSteps(
+            (bool ok, string pill, string? error) = BridgeActionDispatcher.RunSequenceSteps(
                 "failed-mouse-macro",
                 sequence,
                 step =>
                 {
                     calls++;
                     return step is MouseMoveActionConfig mouseMove
-                        ? BridgeHost.RouteMouseMoveStep("failed-mouse-macro", mouseMove, (_, _) => false)
+                        ? BridgeActionDispatcher.RouteMouseMoveStep("failed-mouse-macro", mouseMove, (_, _) => false)
                         : (true, "next", null);
                 });
 
@@ -590,6 +591,40 @@ public static class BridgeHostTests
             Touch("bridge.exe");
             Touch("node.exe");
             Touch("bridge.cjs");
+
+            SidecarSpec? spec = SidecarLaunchSpec.TryPackaged(_baseDir);
+
+            Assert.NotNull(spec);
+            Assert.Equal(Path.Combine(_sidecarDir, "bridge.exe"), spec.ExePath);
+            Assert.Empty(spec.Args);
+        }
+
+        [Fact]
+        public void NodeManifestWinsOverAStaleSeaExecutable()
+        {
+            Touch("bridge.exe");
+            Touch("node.exe");
+            Touch("bridge.cjs");
+            File.WriteAllText(
+                Path.Combine(_baseDir, "sidecar-layout.json"),
+                """{"layout":"node","files":["sidecar/node.exe","sidecar/bridge.cjs"]}""");
+
+            SidecarSpec? spec = SidecarLaunchSpec.TryPackaged(_baseDir);
+
+            Assert.NotNull(spec);
+            Assert.Equal(Path.Combine(_sidecarDir, "node.exe"), spec.ExePath);
+            Assert.Equal([Path.Combine(_sidecarDir, "bridge.cjs")], spec.Args);
+        }
+
+        [Fact]
+        public void SeaManifestWinsOverAStaleNodeLayout()
+        {
+            Touch("bridge.exe");
+            Touch("node.exe");
+            Touch("bridge.cjs");
+            File.WriteAllText(
+                Path.Combine(_baseDir, "sidecar-layout.json"),
+                """{"layout":"sea","files":["sidecar/bridge.exe"]}""");
 
             SidecarSpec? spec = SidecarLaunchSpec.TryPackaged(_baseDir);
 
@@ -764,7 +799,7 @@ public static class BridgeHostTests
             {
                 // S4-5: a successful setVolume flash carries the level so the
                 // HUD renders the percentage bar; the primary line drops the
-                // redundant percent (owner request) — the bar shows it.
+                // redundant percent (maintainer request) — the bar shows it.
                 Assert.Contains(
                     new OverlayContent("Google Home → Volume", "volume set to 25 %", false) { VolumePercent = 25 },
                     _overlay);
@@ -833,6 +868,18 @@ public static class BridgeHostTests
                 () => _log.ContainsMessage("""recv {"v":5,"type":"state","volume":61,"muted":true}"""),
                 TimeSpan.FromSeconds(10),
                 "stub to receive the volume-change state frame");
+
+            _executor.RaiseVolumeChanged(new VolumeState(73, false));
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("""recv {"v":5,"type":"state","volume":73,"muted":false}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the second volume-change state frame");
+
+            _executor.RaiseVolumeChanged(new VolumeState(12, true));
+            await TestSupport.WaitUntilAsync(
+                () => _log.ContainsMessage("""recv {"v":5,"type":"state","volume":12,"muted":true}"""),
+                TimeSpan.FromSeconds(10),
+                "stub to receive the third volume-change state frame");
         }
 
         [Fact]
@@ -861,9 +908,9 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "stub to receive the genuine volume-change state frame");
 
-            // Publishes ride Task.Run: give a wrongly-published echo a moment
-            // to land before asserting it never does.
-            await Task.Delay(250);
+            // State sends are serialized, so observing 40 proves any wrongly
+            // published earlier 26 frame would already be in the log. The
+            // fake-time publisher unit test pins the quiet-gap boundary.
             Assert.False(
                 _log.ContainsMessage("""recv {"v":5,"type":"state","volume":26,"muted":false}"""),
                 "the ±1 echo of the commanded volume must be suppressed");
@@ -1404,7 +1451,7 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "the delayed screensaver macro to enter its wait");
 
-            await host.QueueSetEnabled(false);
+            await host.QueueSetEnabledAsync(false);
 
             Assert.Equal(0, host.RunningMacroCount);
             Assert.DoesNotContain(("startScreenSaver", (object?)null), _executor.Calls);
@@ -1419,7 +1466,7 @@ public static class BridgeHostTests
             Assert.True(_executor.Execute("startScreenSaver"));
             Assert.True(_executor.HasScreensaverFocusCapture);
 
-            await host.QueueSetEnabled(false);
+            await host.QueueSetEnabledAsync(false);
             host.BeginMacroSession();
 
             Assert.False(_executor.HasScreensaverFocusCapture);
@@ -1453,7 +1500,7 @@ public static class BridgeHostTests
                 () => host.RunningMacroCount == 1,
                 TimeSpan.FromSeconds(10),
                 "the first-session macro to enter its wait");
-            await host.QueueSetEnabled(false);
+            await host.QueueSetEnabledAsync(false);
             Assert.DoesNotContain(("mediaStop", (object?)null), _executor.Calls);
 
             host.BeginMacroSession();
@@ -1464,6 +1511,66 @@ public static class BridgeHostTests
                 () => _executor.Calls.Contains(("mediaStop", (object?)null)),
                 TimeSpan.FromSeconds(10),
                 "the re-enabled session macro to complete");
+        }
+
+        [Fact]
+        public void DelayBearingMacroIsSingleFlightPerCustomCommand()
+        {
+            _config.Current.Commands.Custom =
+            [
+                new CustomCommandConfig
+                {
+                    Key = "single-flight",
+                    Name = "Single Flight",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps = [new DelayActionConfig { Ms = 10_000 }],
+                    },
+                },
+            ];
+            using var host = CreateHost(NodeClientSpec());
+            host.BeginMacroSession();
+
+            (bool firstOk, _, string? firstError) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.NewGuid(), "single-flight", On: true));
+            (bool secondOk, _, string? secondError) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.NewGuid(), "single-flight", On: true));
+
+            Assert.True(firstOk, firstError);
+            Assert.False(secondOk);
+            Assert.Contains("already running", secondError, StringComparison.Ordinal);
+            Assert.Equal(1, host.RunningMacroCount);
+        }
+
+        [Fact]
+        public void DelayBearingMacroGlobalCapReturnsAClearNackReason()
+        {
+            _config.Current.Commands.Custom = [.. Enumerable.Range(0, BridgeActionDispatcher.MaxConcurrentMacros + 1)
+                .Select(index => new CustomCommandConfig
+                {
+                    Key = $"macro-{index}",
+                    Name = $"Macro {index}",
+                    Action = new SequenceActionConfig
+                    {
+                        Steps = [new DelayActionConfig { Ms = 10_000 }],
+                    },
+                })];
+            using var host = CreateHost(NodeClientSpec());
+            host.BeginMacroSession();
+
+            for (int index = 0; index < BridgeActionDispatcher.MaxConcurrentMacros; index++)
+            {
+                (bool ok, _, string? error) = host.ExecuteFrame(
+                    new CustomActionFrame(Guid.NewGuid(), $"macro-{index}", On: true));
+                Assert.True(ok, error);
+            }
+
+            (bool overCap, _, string? overCapError) = host.ExecuteFrame(
+                new CustomActionFrame(Guid.NewGuid(), $"macro-{BridgeActionDispatcher.MaxConcurrentMacros}", On: true));
+
+            Assert.False(overCap);
+            Assert.Contains("capacity reached", overCapError, StringComparison.Ordinal);
+            Assert.Equal(BridgeActionDispatcher.MaxConcurrentMacros, host.RunningMacroCount);
         }
 
         [Fact]
@@ -1478,8 +1585,8 @@ public static class BridgeHostTests
                 TimeSpan.FromSeconds(10),
                 "bridge to connect before rapid lifecycle changes");
 
-            Task disabled = host.QueueSetEnabled(false);
-            Task enabled = host.QueueSetEnabled(true);
+            Task disabled = host.QueueSetEnabledAsync(false);
+            Task enabled = host.QueueSetEnabledAsync(true);
             await Task.WhenAll(disabled, enabled);
             await TestSupport.WaitUntilAsync(
                 () => host.State == BridgeState.Connected,
@@ -1859,7 +1966,7 @@ public static class BridgeHostTests
         }
 
         [Fact]
-        public async Task FactoryResetOnALockedStorageDirFailsWithoutDeletingAndRestoresEnabledState()
+        public async Task FactoryResetWithALockedLiveFileFailsStagingAndPreservesStorage()
         {
             string storageDir = Path.Combine(_dir, "matter");
             Directory.CreateDirectory(storageDir);
@@ -1879,23 +1986,23 @@ public static class BridgeHostTests
             FactoryResetResult result;
             using (new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                // Held open (no FileShare.Delete) for the whole retry window,
-                // so the delete must exhaust its retries and fail — never
-                // silently, never with a half-deleted directory.
+                // Windows cannot rename a directory while a child handle does
+                // not share delete access. The honest outcome is a failed
+                // staging step with the live storage tree untouched.
                 result = host.FactoryReset();
             }
 
             Assert.False(result.Ok);
-            Assert.NotNull(result.Error);
-            Assert.True(Directory.Exists(storageDir), "a failed delete must not partially remove the directory");
-            Assert.True(File.Exists(lockedFile), "nothing inside the directory was touched either");
-            Assert.True(_log.Contains("WARN", "factory reset could not delete"));
+            Assert.Contains("stage", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.True(Directory.Exists(storageDir), "a failed staging rename must preserve the live storage path");
+            Assert.True(File.Exists(lockedFile), "a failed staging rename must preserve the live storage contents");
+            Assert.False(_log.Contains("WARN", "residue left at"));
 
             Assert.True(_config.Current.BridgeEnabled);
             await TestSupport.WaitUntilAsync(
                 () => host.State == BridgeState.Connected,
                 TimeSpan.FromSeconds(10),
-                "the pre-reset enabled state to be restored after delete failure");
+                "the bridge to restore its previous session after the failed reset");
             lock (_gate)
             {
                 Assert.Contains(_overlay, c => c.Primary == "Factory reset failed" && c.IsError);

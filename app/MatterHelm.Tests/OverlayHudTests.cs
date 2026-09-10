@@ -80,4 +80,66 @@ public sealed class OverlayHudTests
             OverlayHud.MeasureDesiredCanvasWidthForTest(shortCommand),
             OverlayHud.MeasureDesiredCanvasWidthForTest(longCommand));
     }
+
+    [Theory]
+    [InlineData(CanvasFailure.CreateCompatibleDc, 0, 0)]
+    [InlineData(CanvasFailure.CreateDibSection, 0, 1)]
+    [InlineData(CanvasFailure.SelectObject, 1, 1)]
+    public void LayeredCanvasCreationFailureReleasesEveryAcquiredNativeResource(
+        CanvasFailure failure,
+        int expectedDeletedObjects,
+        int expectedDeletedDcs)
+    {
+        var native = new FailingLayeredCanvasNative(failure);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            OverlayHud.CreateLayeredCanvasForTest(32, 16, native));
+
+        Assert.Equal(expectedDeletedObjects, native.DeletedObjects);
+        Assert.Equal(expectedDeletedDcs, native.DeletedDcs);
+        Assert.Equal(0, native.RestoredSelections);
+    }
+
+    public enum CanvasFailure
+    {
+        CreateCompatibleDc,
+        CreateDibSection,
+        SelectObject,
+    }
+
+    private sealed class FailingLayeredCanvasNative(CanvasFailure failure) : ILayeredCanvasNative
+    {
+        public int DeletedObjects { get; private set; }
+
+        public int DeletedDcs { get; private set; }
+
+        public int RestoredSelections { get; private set; }
+
+        public IntPtr CreateCompatibleDc() =>
+            failure == CanvasFailure.CreateCompatibleDc ? IntPtr.Zero : (IntPtr)1;
+
+        public IntPtr CreateDibSection(
+            IntPtr deviceContext,
+            ref NativeMethods.BitmapInfoHeader header,
+            out IntPtr bits)
+        {
+            bits = failure == CanvasFailure.CreateDibSection ? IntPtr.Zero : (IntPtr)3;
+            return failure == CanvasFailure.CreateDibSection ? IntPtr.Zero : (IntPtr)2;
+        }
+
+        public IntPtr SelectObject(IntPtr deviceContext, IntPtr value)
+        {
+            if (value == (IntPtr)2)
+            {
+                return failure == CanvasFailure.SelectObject ? IntPtr.Zero : (IntPtr)4;
+            }
+
+            RestoredSelections++;
+            return (IntPtr)2;
+        }
+
+        public void DeleteObject(IntPtr value) => DeletedObjects++;
+
+        public void DeleteDc(IntPtr deviceContext) => DeletedDcs++;
+    }
 }

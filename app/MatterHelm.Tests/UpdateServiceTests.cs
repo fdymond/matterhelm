@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -498,7 +499,9 @@ public sealed class UpdateServiceTests
             "C:\\MatterHelm\\MatterHelm.exe",
             "C:\\MatterHelm",
             "C:\\Temp\\handoff.log",
-            Hash);
+            Hash,
+            beforeEnvironmentSanitizeForTest: info =>
+                info.Environment["MATTERHELM_UPDATE_TOKEN"] = "must-not-reach-helper");
 
         string[] arguments = [.. start.ArgumentList];
         int hashSwitch = Array.IndexOf(arguments, "-ExpectedSha256");
@@ -507,24 +510,64 @@ public sealed class UpdateServiceTests
         Assert.Equal(Hash, arguments[hashSwitch + 1]);
         Assert.Contains(PackagePath, arguments);
         Assert.DoesNotContain(arguments, argument => argument.Contains("-Command", StringComparison.OrdinalIgnoreCase));
+        Assert.False(start.Environment.ContainsKey("MATTERHELM_UPDATE_TOKEN"));
     }
 
     [Theory]
     [InlineData(UpdateInstallMode.Installed, "Start-Process -FilePath $PackagePath")]
-    [InlineData(UpdateInstallMode.Portable, "Expand-Archive -LiteralPath $PackagePath")]
-    public void HelperRechecksHashImmediatelyBeforeUsingPackageAndRelaunchesOnFailure(
+    [InlineData(UpdateInstallMode.Portable, "$archive = [IO.Compression.ZipArchive]::new")]
+    public void HelperHoldsADenyWriteDeleteHandleFromHashThroughPackageUseAndRelaunchesOnFailure(
         UpdateInstallMode mode,
         string packageAction)
     {
         string script = UpdateHandoff.GetHelperScript(mode);
-        int hashCheck = script.IndexOf("Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256", StringComparison.Ordinal);
+        int open = script.IndexOf("[IO.FileShare]::Read", StringComparison.Ordinal);
+        int hashCheck = script.IndexOf("$sha256.ComputeHash($packageStream)", StringComparison.Ordinal);
         int action = script.IndexOf(packageAction, StringComparison.Ordinal);
+        int dispose = script.IndexOf("$packageStream.Dispose()", action, StringComparison.Ordinal);
 
-        Assert.True(hashCheck >= 0);
+        Assert.True(open >= 0);
+        Assert.True(hashCheck > open);
         Assert.True(action > hashCheck);
+        Assert.True(dispose > action);
         Assert.Contains("$ExpectedSha256", script, StringComparison.Ordinal);
         Assert.Contains("Update handoff failed", script, StringComparison.Ordinal);
         Assert.Contains("Start-Process -FilePath $ExecutablePath", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-FileHash", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReplacementBetweenHashAndUseIsRejectedWhileTheVerifiedHandleIsHeld()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string packagePath = Path.Combine(directory, "package.bin");
+        string replacementPath = Path.Combine(directory, "replacement.bin");
+        byte[] original = Encoding.UTF8.GetBytes("verified package");
+        File.WriteAllBytes(packagePath, original);
+        File.WriteAllText(replacementPath, "attacker replacement");
+        string expectedSha256 = Convert.ToHexString(SHA256.HashData(original));
+        bool packageUseReached = false;
+        try
+        {
+            Exception? replacementFailure = await Record.ExceptionAsync(() => UpdateHandoff.WithVerifiedPackageAsync(
+                packagePath,
+                expectedSha256,
+                () =>
+                {
+                    File.Move(replacementPath, packagePath, overwrite: true);
+                    packageUseReached = true;
+                    return Task.FromResult(true);
+                }));
+
+            Assert.True(replacementFailure is IOException or UnauthorizedAccessException);
+            Assert.False(packageUseReached);
+            Assert.Equal(original, File.ReadAllBytes(packagePath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -534,6 +577,180 @@ public sealed class UpdateServiceTests
 
         Assert.Contains("if ($setup.ExitCode -ne 0)", script, StringComparison.Ordinal);
         Assert.Contains("throw \"Installer exited with code $($setup.ExitCode).\"", script, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("node", "bridge.exe", "node.exe", "bridge.cjs")]
+    [InlineData("sea", "node.exe", "bridge.exe", null)]
+    public async Task PortableUpgradeRemovesOnlyTheOtherKnownSidecarLayout(
+        string newLayout,
+        string staleFile,
+        string expectedFile,
+        string? secondExpectedFile)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
+        string install = Path.Combine(root, "install");
+        string packagePath = Path.Combine(root, "package.zip");
+        string scriptPath = Path.Combine(root, "handoff.ps1");
+        string logPath = Path.Combine(root, "handoff.log");
+        string sidecar = Path.Combine(install, "sidecar");
+        Directory.CreateDirectory(sidecar);
+        File.WriteAllText(Path.Combine(sidecar, staleFile), "stale");
+        if (newLayout == "sea")
+        {
+            File.WriteAllText(Path.Combine(sidecar, "bridge.cjs"), "stale bundle");
+        }
+        try
+        {
+            using (ZipArchive archive = ZipFile.Open(packagePath, ZipArchiveMode.Create))
+            {
+                WriteEntry(archive, "MatterHelm.exe", "not a real executable");
+                WriteEntry(
+                    archive,
+                    "sidecar-layout.json",
+                    newLayout == "sea"
+                        ? """{"layout":"sea","files":["sidecar/bridge.exe"]}"""
+                        : """{"layout":"node","files":["sidecar/node.exe","sidecar/bridge.cjs"]}""");
+                if (newLayout == "sea")
+                {
+                    WriteEntry(archive, "sidecar/bridge.exe", "new sea");
+                }
+                else
+                {
+                    WriteEntry(archive, "sidecar/node.exe", "new node");
+                    WriteEntry(archive, "sidecar/bridge.cjs", "new bundle");
+                }
+            }
+
+            File.WriteAllText(scriptPath, UpdateHandoff.GetHelperScript(UpdateInstallMode.Portable));
+            string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
+            var start = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-ExecutionPolicy");
+            start.ArgumentList.Add("Bypass");
+            start.ArgumentList.Add("-File");
+            start.ArgumentList.Add(scriptPath);
+            start.ArgumentList.Add("-MatterHelmProcessId");
+            start.ArgumentList.Add(int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            start.ArgumentList.Add("-PackagePath");
+            start.ArgumentList.Add(packagePath);
+            start.ArgumentList.Add("-ExecutablePath");
+            start.ArgumentList.Add(Path.Combine(install, "MatterHelm.exe"));
+            start.ArgumentList.Add("-InstallDirectory");
+            start.ArgumentList.Add(install);
+            start.ArgumentList.Add("-LogPath");
+            start.ArgumentList.Add(logPath);
+            start.ArgumentList.Add("-ExpectedSha256");
+            start.ArgumentList.Add(hash);
+
+            using Process process = Process.Start(start)!;
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.False(
+                File.Exists(Path.Combine(sidecar, staleFile)),
+                File.Exists(logPath) ? File.ReadAllText(logPath) : "helper produced no log");
+            if (newLayout == "sea")
+            {
+                Assert.False(File.Exists(Path.Combine(sidecar, "bridge.cjs")));
+            }
+            Assert.True(File.Exists(Path.Combine(sidecar, expectedFile)));
+            if (secondExpectedFile is not null)
+            {
+                Assert.True(File.Exists(Path.Combine(sidecar, secondExpectedFile)));
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PortableHelperValidatesLayoutBeforeCopyAndUnknownLayoutCannotThrowAfterCopy()
+    {
+        string script = UpdateHandoff.GetHelperScript(UpdateInstallMode.Portable);
+        int parse = script.IndexOf("ConvertFrom-Json", StringComparison.Ordinal);
+        int copy = script.IndexOf("Copy-Item -Destination $InstallDirectory", StringComparison.Ordinal);
+
+        Assert.True(parse >= 0);
+        Assert.True(copy > parse);
+        Assert.Contains("unsupported sidecar layout", script, StringComparison.Ordinal);
+        Assert.Contains("skipping stale sidecar cleanup", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("throw \"Portable package carries an unsupported sidecar layout", script, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("{\"layout\":\"future\"}", "unsupported sidecar layout")]
+    [InlineData("{ malformed", "layout manifest is malformed")]
+    public async Task UnsupportedOrMalformedPortableLayoutStillCopiesAndRelaunches(
+        string manifest,
+        string expectedLog)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MatterHelmTests", Guid.NewGuid().ToString("N"));
+        string install = Path.Combine(root, "install");
+        string sidecar = Path.Combine(install, "sidecar");
+        string packagePath = Path.Combine(root, "package.zip");
+        string scriptPath = Path.Combine(root, "handoff.ps1");
+        string logPath = Path.Combine(root, "handoff.log");
+        Directory.CreateDirectory(sidecar);
+        string stalePeer = Path.Combine(sidecar, "bridge.exe");
+        File.WriteAllText(stalePeer, "stale peer must remain");
+        try
+        {
+            using (ZipArchive archive = ZipFile.Open(packagePath, ZipArchiveMode.Create))
+            {
+                WriteEntry(archive, "sidecar-layout.json", manifest);
+                WriteEntry(archive, "updated-marker.txt", "files copied");
+            }
+
+            File.WriteAllText(scriptPath, UpdateHandoff.GetHelperScript(UpdateInstallMode.Portable));
+            string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
+            var start = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-NonInteractive");
+            start.ArgumentList.Add("-ExecutionPolicy");
+            start.ArgumentList.Add("Bypass");
+            start.ArgumentList.Add("-File");
+            start.ArgumentList.Add(scriptPath);
+            start.ArgumentList.Add("-MatterHelmProcessId");
+            start.ArgumentList.Add(int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            start.ArgumentList.Add("-PackagePath");
+            start.ArgumentList.Add(packagePath);
+            start.ArgumentList.Add("-ExecutablePath");
+            start.ArgumentList.Add(Path.Combine(Environment.SystemDirectory, "where.exe"));
+            start.ArgumentList.Add("-InstallDirectory");
+            start.ArgumentList.Add(install);
+            start.ArgumentList.Add("-LogPath");
+            start.ArgumentList.Add(logPath);
+            start.ArgumentList.Add("-ExpectedSha256");
+            start.ArgumentList.Add(hash);
+
+            using Process process = Process.Start(start)!;
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+
+            string log = File.ReadAllText(logPath);
+            Assert.True(File.Exists(Path.Combine(install, "updated-marker.txt")), log);
+            Assert.True(File.Exists(stalePeer), log);
+            Assert.Contains(expectedLog, log, StringComparison.OrdinalIgnoreCase);
+            Assert.True(
+                log.IndexOf(expectedLog, StringComparison.OrdinalIgnoreCase)
+                    < log.IndexOf("Portable files replaced", StringComparison.Ordinal),
+                log);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Theory]
@@ -552,6 +769,13 @@ public sealed class UpdateServiceTests
 
         Assert.Equal(UpdateCheckStatus.Unavailable, result.Status);
         Assert.Contains("unavailable", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void WriteEntry(ZipArchive archive, string path, string content)
+    {
+        ZipArchiveEntry entry = archive.CreateEntry(path);
+        using StreamWriter writer = new(entry.Open());
+        writer.Write(content);
     }
 
     private static UpdateAsset Asset(string name) => new(name, new Uri($"https://api.github.com/assets/{name}"));
