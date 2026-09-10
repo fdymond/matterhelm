@@ -409,7 +409,10 @@ public sealed class SequenceStepDialog : Form
         internal CustomActionConfig ToAction() => TypeIndex switch
         {
             LaunchIndex => new LaunchActionConfig { Path = Path, Args = Args },
-            KeySequenceIndex => new KeySequenceActionConfig { Sequence = CanonicalSequence(KeySequence) },
+            KeySequenceIndex => new KeySequenceActionConfig
+            {
+                Sequence = KeySequenceCanonicalizer.Canonicalize(KeySequence),
+            },
             SystemIndex => new SystemActionConfig { Command = SystemCommand },
             MouseMoveIndex => MouseTarget.ToAction(),
             DelayIndex => new DelayActionConfig { Ms = DelayMs },
@@ -426,10 +429,6 @@ public sealed class SequenceStepDialog : Form
             new MouseTargetSelection(global::MatterHelm.MouseTarget.BottomRight, 0, 0),
             300);
     }
-
-    /// <summary>Canonical form of a sequence the validator already accepted.</summary>
-    private static string CanonicalSequence(string sequence) =>
-        KeyChord.TryParse(sequence, out ParsedKeyChord? chord, out _) ? chord.Canonical : sequence;
 
     /// <summary>Logical (96-dpi) pixels → device pixels; see SettingsWindow's DPI note.</summary>
     private int S(int logical) => LogicalToDeviceUnits(logical);

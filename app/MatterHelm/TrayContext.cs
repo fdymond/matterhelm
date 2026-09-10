@@ -91,6 +91,11 @@ public sealed class TrayContext : ApplicationContext
     {
         bool usingProductionConfig = config is null;
         Config = config ?? new Config();
+        if (Config.TakeLastLoadWarning() is { } loadWarning)
+        {
+            Log.Warn($"Tray: {loadWarning.Replace(Environment.NewLine, "; ", StringComparison.Ordinal)}");
+        }
+
         _commissioned = commissionedAtStartup
             ?? (usingProductionConfig && Directory.Exists(Path.Combine(AppPaths.Root, "matter")));
         _updateService = updateService ?? UpdateService.CreateDefault();
@@ -696,7 +701,7 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnConfigChanged(object? sender, ConfigChangedEventArgs e)
     {
-        bool restartRequired = SettingsViewModel.RequiresBridgeRestart(e.OldConfig, e.NewConfig);
+        bool restartRequired = BridgeRestartPolicy.RequiresRestart(e.OldConfig, e.NewConfig);
         bool recreatePairingWindow = PairingWindowOpen && restartRequired;
         if (restartRequired)
         {

@@ -15,7 +15,21 @@ internal static partial class Program
 
     /// <summary>Entry point.</summary>
     [STAThread]
-    private static void Main(string[] args)
+    private static void Main(string[] args) => RunWithLogFlush(() => Run(args));
+
+    internal static void RunWithLogFlush(Action run)
+    {
+        try
+        {
+            run();
+        }
+        finally
+        {
+            Log.Flush();
+        }
+    }
+
+    private static void Run(string[] args)
     {
         // S2-2 acceptance demo: run the Actions/ self-test and exit — no tray,
         // no single-instance guard (it must work beside a running instance).
@@ -215,7 +229,7 @@ internal static partial class Program
 
         // Start/stop run on the host's ordered lifecycle queue: SetEnabled
         // blocks for the child's stop grace, and the UI thread never waits.
-        trayContext.EnableBridgeChanged += (_, enabled) => _ = host.QueueSetEnabled(enabled);
+        trayContext.EnableBridgeChanged += (_, enabled) => _ = host.QueueSetEnabledAsync(enabled);
 
         // FactoryReset blocks on the same child-stop grace plus delete
         // retries (S3-2) — the lifecycle queue, same reasoning as SetEnabled
@@ -226,7 +240,7 @@ internal static partial class Program
         // S10-8: the reset leaves the bridge running and uncommissioned, so the
         // tray syncs its "Enable bridge" tick and opens the pairing window for
         // the fresh code once FactoryReset returns (it marshals internally).
-        trayContext.FactoryResetRequested += (_, _) => _ = host.QueueFactoryReset(trayContext.OnFactoryResetCompleted);
+        trayContext.FactoryResetRequested += (_, _) => _ = host.QueueFactoryResetAsync(trayContext.OnFactoryResetCompleted);
         trayContext.OverlayEnabledChanged += (_, enabled) => overlay.Visible = enabled;
         // S9-1/S9-4: preview with the STAGED position/theme/opacity (the
         // settings window passes its unsaved working values), then restore the
@@ -272,7 +286,7 @@ internal static partial class Program
 
         if (trayContext.Config.Current.BridgeEnabled)
         {
-            _ = host.QueueSetEnabled(true);
+            _ = host.QueueSetEnabledAsync(true);
         }
 
         Application.Run(trayContext);

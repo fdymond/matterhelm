@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MatterHelm.Actions;
@@ -347,7 +348,9 @@ public sealed class BridgeConfig
 
     /// <summary>
     /// How long after an On activation an opted-in custom command returns its
-    /// Google Home switch to Off (integer 0–2000; 0 = next tick). Threaded to
+    /// Google Home switch to Off (integer
+    /// <see cref="SettingLimits.MomentaryResetMinimumMs"/>–<see cref="SettingLimits.MomentaryResetMaximumMs"/>;
+    /// the minimum means next tick). Threaded to
     /// the sidecar via <c>HTPC_BRIDGE_MOMENTARY_RESET_MS</c>.
     /// </summary>
     public int MomentaryResetMs { get; set; }
@@ -361,8 +364,8 @@ public sealed class BridgeConfig
     /// <summary>Overlay color theme (S9-4): follow the Windows apps theme (default), or force dark/light.</summary>
     public OverlayTheme OverlayTheme { get; set; } = OverlayTheme.System;
 
-    /// <summary>Overlay panel opacity percent, 30-100 (S9-4; 100 = the classic look).</summary>
-    public int OverlayOpacityPercent { get; set; } = 100;
+    /// <summary>Overlay panel opacity percent, <see cref="SettingLimits.OverlayOpacityMinimumPercent"/>–<see cref="SettingLimits.OverlayOpacityMaximumPercent"/> (S9-4; the maximum is the classic look).</summary>
+    public int OverlayOpacityPercent { get; set; } = SettingLimits.OverlayOpacityMaximumPercent;
 
     /// <summary>
     /// Whether the bridge (sidecar + IPC server) runs — the tray "Enable
@@ -441,18 +444,27 @@ public sealed class ConfigChangedEventArgs : EventArgs
 /// Loads, validates, and persists <c>config.json</c>
 /// (default <c>%APPDATA%\MatterHelm\config.json</c>, camelCase JSON,
 /// BLUEPRINT §2.4). A missing file is created from defaults on first load.
-/// A malformed file or malformed individual fields never crash the app: each
-/// bad field falls back to its default and is logged once as a WARN; only the
-/// bad fields are replaced, so a partially-valid file still loads its valid
-/// fields. The file path is injectable so tests target a temp directory
+/// A wholly rejected file is preserved under a timestamped rejected name and
+/// logged at ERROR; saves stay blocked until a later successful load. Malformed
+/// individual fields never crash the app: each bad
+/// field falls back to its default and is logged once as a WARN; only the bad
+/// fields are replaced, so a partially-valid file still loads its valid fields.
+/// The file path is injectable so tests target a temp directory
 /// instead of the real user profile.
 /// </summary>
 public sealed class Config
 {
+    internal const int MaxConfigFileBytes = 1024 * 1024;
+    internal const int MaxCustomCommands = 64;
+    internal const int MaxNameLength = 64;
+    internal const int MaxLaunchArgsLength = 2048;
+    internal const int MaxUniqueIdSeedLength = 128;
+
     private readonly string _path;
     private readonly Action<string, string> _log;
     private readonly Lock _writeGate = new();
     private string? _lastSaveError;
+    private string? _rejectedLoadSaveError;
 
     /// <summary>
     /// Loads (or creates) the config at <paramref name="path"/>, defaulting to
@@ -463,7 +475,7 @@ public sealed class Config
     public Config(string? path = null, Action<string, string>? log = null)
     {
         _path = path ?? DefaultPath;
-        _log = log ?? DefaultLog;
+        _log = log ?? Log.Write;
         Current = LoadOrCreate();
     }
 
@@ -496,6 +508,17 @@ public sealed class Config
         }
     }
 
+    /// <summary>A load-time field-cap warning suitable for later UI surfacing, or null when the last load had none.</summary>
+    public string? LastLoadWarning { get; private set; }
+
+    /// <summary>Returns and clears the last load warning so the tray surfaces it once at startup.</summary>
+    internal string? TakeLastLoadWarning()
+    {
+        string? warning = LastLoadWarning;
+        LastLoadWarning = null;
+        return warning;
+    }
+
     /// <summary>Persists a staged snapshot without first mutating <see cref="Current"/>.</summary>
     internal bool Save(BridgeConfig snapshot) => WriteFile(snapshot);
 
@@ -507,6 +530,7 @@ public sealed class Config
     public void Reload()
     {
         BridgeConfig previous = Current;
+        LastLoadWarning = null;
         BridgeConfig updated = LoadOrCreate();
         Current = updated;
         Changed?.Invoke(this, new ConfigChangedEventArgs(previous, updated));
@@ -514,16 +538,26 @@ public sealed class Config
 
     private BridgeConfig LoadOrCreate()
     {
-        string? text = TryReadFile();
+        string? text = TryReadFile(out bool rejectedDuringRead);
         if (text is null)
         {
             var defaults = new BridgeConfig();
+            if (!File.Exists(_path))
+            {
+                ClearRejectedLoadBlock();
+            }
+
             WriteFile(defaults);
             return defaults;
         }
 
-        BridgeConfig config = ParseWithFallback(text, out bool migrated);
-        if (migrated)
+        BridgeConfig config = ParseWithFallback(text, out bool migrated, out bool rejectedDuringParse);
+        if (!rejectedDuringRead && !rejectedDuringParse)
+        {
+            ClearRejectedLoadBlock();
+        }
+
+        if (migrated && !rejectedDuringRead && !rejectedDuringParse)
         {
             // ADR-004 §1: migrate-on-load, then persist the new shape so the
             // superseded "deviceNames" key disappears from the file.
@@ -534,11 +568,30 @@ public sealed class Config
         return config;
     }
 
-    private string? TryReadFile()
+    private string? TryReadFile(out bool rejected)
     {
+        rejected = false;
         try
         {
-            return File.Exists(_path) ? File.ReadAllText(_path) : null;
+            if (!File.Exists(_path))
+            {
+                return null;
+            }
+
+            long length;
+            using (var source = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                length = source.Length;
+                if (length <= MaxConfigFileBytes)
+                {
+                    using var reader = new StreamReader(source);
+                    return reader.ReadToEnd();
+                }
+            }
+
+            RejectWholeFile($"it exceeds the {MaxConfigFileBytes}-byte size limit");
+            rejected = true;
+            return "{}";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -551,6 +604,13 @@ public sealed class Config
     {
         lock (_writeGate)
         {
+            if (_rejectedLoadSaveError is not null)
+            {
+                _lastSaveError = _rejectedLoadSaveError;
+                _log("ERROR", $"config.json was not written ({_rejectedLoadSaveError}).");
+                return false;
+            }
+
             string? tmp = null;
             try
             {
@@ -604,10 +664,11 @@ public sealed class Config
     /// <c>deviceNames</c> section was folded into <c>commands</c> (ADR-004
     /// §1) — the caller then rewrites the file in the new shape.
     /// </summary>
-    private BridgeConfig ParseWithFallback(string json, out bool migrated)
+    private BridgeConfig ParseWithFallback(string json, out bool migrated, out bool rejected)
     {
         var result = new BridgeConfig();
         migrated = false;
+        rejected = false;
 
         JsonDocument document;
         try
@@ -616,7 +677,8 @@ public sealed class Config
         }
         catch (JsonException ex)
         {
-            _log("WARN", $"config.json is not valid JSON ({ex.Message}); using defaults.");
+            RejectWholeFile($"it is not valid JSON ({ex.Message})");
+            rejected = true;
             return result;
         }
 
@@ -625,7 +687,8 @@ public sealed class Config
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                _log("WARN", "config.json root is not an object; using defaults.");
+                RejectWholeFile("its JSON root is not an object");
+                rejected = true;
                 return result;
             }
 
@@ -714,13 +777,22 @@ public sealed class Config
 
         if (entry.TryGetProperty("name", out JsonElement name))
         {
-            if (name.ValueKind == JsonValueKind.String && name.GetString() is { Length: > 0 } value)
+            if (name.ValueKind == JsonValueKind.String
+                && name.GetString() is { Length: > 0 and <= MaxNameLength } value)
             {
                 builtin.Name = value;
             }
             else
             {
-                _log("WARN", $"config.json \"commands.{field}.name\" must be a non-empty string; using default \"{builtin.Name}\".");
+                string message = $"config.json \"commands.{field}.name\" must be a non-empty string of at most {MaxNameLength} characters; using default \"{builtin.Name}\".";
+                if (name.ValueKind == JsonValueKind.String && (name.GetString()?.Length ?? 0) > MaxNameLength)
+                {
+                    RecordLoadCapWarning($"commands.{field}.name", message);
+                }
+                else
+                {
+                    _log("WARN", message);
+                }
             }
         }
 
@@ -753,6 +825,14 @@ public sealed class Config
         if (custom.ValueKind != JsonValueKind.Array)
         {
             _log("WARN", "config.json \"commands.custom\" is not an array; using no custom commands.");
+            return;
+        }
+
+        if (custom.GetArrayLength() > MaxCustomCommands)
+        {
+            RecordLoadCapWarning(
+                "commands.custom",
+                $"config.json \"commands.custom\" has more than {MaxCustomCommands} entries; using no custom commands.");
             return;
         }
 
@@ -804,13 +884,22 @@ public sealed class Config
         var command = new CustomCommandConfig { Key = key, Name = key, Action = action };
         if (entry.TryGetProperty("name", out JsonElement name))
         {
-            if (name.ValueKind == JsonValueKind.String && name.GetString() is { Length: > 0 } value)
+            if (name.ValueKind == JsonValueKind.String
+                && name.GetString() is { Length: > 0 and <= MaxNameLength } value)
             {
                 command.Name = value;
             }
             else
             {
-                _log("WARN", $"config.json \"{where}.name\" must be a non-empty string; using the key \"{key}\".");
+                string message = $"config.json \"{where}.name\" must be a non-empty string of at most {MaxNameLength} characters; using the key \"{key}\".";
+                if (name.ValueKind == JsonValueKind.String && (name.GetString()?.Length ?? 0) > MaxNameLength)
+                {
+                    RecordLoadCapWarning($"{where}.name", message);
+                }
+                else
+                {
+                    _log("WARN", message);
+                }
             }
         }
 
@@ -904,13 +993,22 @@ public sealed class Config
                 var launch = new LaunchActionConfig { Path = pathValue };
                 if (action.TryGetProperty("args", out JsonElement args))
                 {
-                    if (args.ValueKind == JsonValueKind.String)
+                    if (args.ValueKind == JsonValueKind.String
+                        && args.GetString() is { Length: <= MaxLaunchArgsLength } argsValue)
                     {
-                        launch.Args = args.GetString()!;
+                        launch.Args = argsValue;
                     }
                     else
                     {
-                        _log("WARN", $"config.json \"{where}.args\" must be a string; using no arguments.");
+                        string message = $"config.json \"{where}.args\" must be a string of at most {MaxLaunchArgsLength} characters; using no arguments.";
+                        if (args.ValueKind == JsonValueKind.String && (args.GetString()?.Length ?? 0) > MaxLaunchArgsLength)
+                        {
+                            RecordLoadCapWarning($"{where}.args", message);
+                        }
+                        else
+                        {
+                            _log("WARN", message);
+                        }
                     }
                 }
 
@@ -1114,6 +1212,14 @@ public sealed class Config
             return defaultValue;
         }
 
+        if (value.Length > MaxNameLength)
+        {
+            RecordLoadCapWarning(
+                $"deviceNames.{field}",
+                $"config.json \"deviceNames.{field}\" exceeds {MaxNameLength} characters; using default \"{defaultValue}\".");
+            return defaultValue;
+        }
+
         return value;
     }
 
@@ -1143,13 +1249,17 @@ public sealed class Config
         // The bridge's env parser is strict and treats an out-of-range value
         // as FATAL — same discipline as logLevel (S4-R RISK-2): never hand
         // the sidecar a value that would crash-loop it.
-        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int ms) && ms is >= 0 and <= 2000)
+        if (element.ValueKind == JsonValueKind.Number
+            && element.TryGetInt32(out int ms)
+            && ms is >= SettingLimits.MomentaryResetMinimumMs and <= SettingLimits.MomentaryResetMaximumMs)
         {
             result.MomentaryResetMs = ms;
             return;
         }
 
-        _log("WARN", $"config.json \"momentaryResetMs\" must be an integer 0-2000; using default {result.MomentaryResetMs}.");
+        _log(
+            "WARN",
+            $"config.json \"momentaryResetMs\" must be an integer {SettingLimits.MomentaryResetMinimumMs}-{SettingLimits.MomentaryResetMaximumMs}; using default {result.MomentaryResetMs}.");
     }
 
     private void ApplyPowerOffAction(JsonElement root, BridgeConfig result)
@@ -1231,13 +1341,17 @@ public sealed class Config
             return;
         }
 
-        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int percent) && percent is >= 30 and <= 100)
+        if (element.ValueKind == JsonValueKind.Number
+            && element.TryGetInt32(out int percent)
+            && percent is >= SettingLimits.OverlayOpacityMinimumPercent and <= SettingLimits.OverlayOpacityMaximumPercent)
         {
             result.OverlayOpacityPercent = percent;
             return;
         }
 
-        _log("WARN", $"config.json \"overlayOpacityPercent\" must be an integer 30-100; using default {result.OverlayOpacityPercent}.");
+        _log(
+            "WARN",
+            $"config.json \"overlayOpacityPercent\" must be an integer {SettingLimits.OverlayOpacityMinimumPercent}-{SettingLimits.OverlayOpacityMaximumPercent}; using default {result.OverlayOpacityPercent}.");
     }
 
     /// <summary>Reads the S10-7 first-run flag; a non-boolean is a WARN and leaves it false so the guide still appears once.</summary>
@@ -1364,13 +1478,23 @@ public sealed class Config
             return;
         }
 
-        if (element.ValueKind == JsonValueKind.String && element.GetString() is { } name && !string.IsNullOrWhiteSpace(name))
+        if (element.ValueKind == JsonValueKind.String
+            && element.GetString() is { Length: <= MaxNameLength } name
+            && !string.IsNullOrWhiteSpace(name))
         {
             result.BridgeName = name.Trim();
             return;
         }
 
-        _log("WARN", $"config.json \"bridgeName\" must be a non-empty string; using default \"{result.BridgeName}\".");
+        string message = $"config.json \"bridgeName\" must be a non-empty string of at most {MaxNameLength} characters; using default \"{result.BridgeName}\".";
+        if (element.ValueKind == JsonValueKind.String && (element.GetString()?.Length ?? 0) > MaxNameLength)
+        {
+            RecordLoadCapWarning("bridgeName", message);
+        }
+        else
+        {
+            _log("WARN", message);
+        }
     }
 
     /// <summary>Reads the identity seed (S10-4); a non-string is a WARN and leaves it unresolved so the next start re-decides.</summary>
@@ -1385,13 +1509,72 @@ public sealed class Config
         {
             case JsonValueKind.Null:
                 return;
-            case JsonValueKind.String when element.GetString() is { Length: > 0 } seed:
+            case JsonValueKind.String when element.GetString() is { Length: > 0 and <= MaxUniqueIdSeedLength } seed:
                 result.UniqueIdSeed = seed;
                 return;
             default:
-                _log("WARN", "config.json \"uniqueIdSeed\" must be a non-empty string or null; leaving it unset (a seed will be resolved on the next start).");
+                string message = $"config.json \"uniqueIdSeed\" must be a non-empty string of at most {MaxUniqueIdSeedLength} characters or null; leaving it unset (a seed will be resolved on the next start).";
+                if (element.ValueKind == JsonValueKind.String && (element.GetString()?.Length ?? 0) > MaxUniqueIdSeedLength)
+                {
+                    RecordLoadCapWarning("uniqueIdSeed", message);
+                }
+                else
+                {
+                    _log("WARN", message);
+                }
+
                 return;
         }
+    }
+
+    private void RejectWholeFile(string reason)
+    {
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        string rejectedPath = _path + ".rejected-" + timestamp;
+        for (int suffix = 1; File.Exists(rejectedPath); suffix++)
+        {
+            rejectedPath = _path + ".rejected-" + timestamp + $"-{suffix}";
+        }
+
+        try
+        {
+            File.Move(_path, rejectedPath);
+            string rejectedName = Path.GetFileName(rejectedPath);
+            string saveError = $"config.json was rejected on load and moved to {rejectedName}; restore or delete it, then restart";
+            BlockSavesAfterRejectedLoad(saveError);
+            _log("ERROR", $"config.json was rejected because {reason}; preserved it as '{rejectedName}' before using in-memory defaults. {saveError}.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            string saveError = "config.json was rejected on load but could not be moved; restore or delete it, then restart";
+            BlockSavesAfterRejectedLoad(saveError);
+            _log("ERROR", $"config.json was rejected because {reason}, but could not be preserved under a rejected name ({ex.Message}); using in-memory defaults and refusing saves. {saveError}.");
+        }
+    }
+
+    private void BlockSavesAfterRejectedLoad(string saveError)
+    {
+        lock (_writeGate)
+        {
+            _rejectedLoadSaveError = saveError;
+        }
+
+        LastLoadWarning = saveError;
+    }
+
+    private void ClearRejectedLoadBlock()
+    {
+        lock (_writeGate)
+        {
+            _rejectedLoadSaveError = null;
+        }
+    }
+
+    private void RecordLoadCapWarning(string field, string message)
+    {
+        _log("WARN", message);
+        string surfaced = $"{field}: configured value exceeded its supported cap and fell back.";
+        LastLoadWarning = LastLoadWarning is null ? surfaced : LastLoadWarning + Environment.NewLine + surfaced;
     }
 
     private void ApplyLogLevel(JsonElement root, BridgeConfig result)
@@ -1457,19 +1640,4 @@ public sealed class Config
         _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
     };
 
-    private static void DefaultLog(string level, string message)
-    {
-        switch (level)
-        {
-            case "ERROR":
-                Log.Error(message);
-                break;
-            case "WARN":
-                Log.Warn(message);
-                break;
-            default:
-                Log.Info(message);
-                break;
-        }
-    }
 }

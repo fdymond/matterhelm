@@ -84,8 +84,9 @@ public static class SidecarSupervisorTests
         public void EachSessionGetsAFreshBase64UrlToken()
         {
             var spec = new SidecarSpec("unused.exe", [], Path.GetTempPath());
-            using var first = new SidecarSupervisor(spec, ipcPort: 1, storageDir: "x");
-            using var second = new SidecarSupervisor(spec, ipcPort: 1, storageDir: "x");
+            var capture = new TestSupport.LogCapture();
+            using var first = new SidecarSupervisor(spec, ipcPort: 1, storageDir: "x", log: capture.Sink);
+            using var second = new SidecarSupervisor(spec, ipcPort: 1, storageDir: "x", log: capture.Sink);
             Assert.NotEqual(first.IpcToken, second.IpcToken);
             Assert.Equal(43, first.IpcToken.Length); // 32 bytes -> 43 base64url chars, no padding.
             Assert.DoesNotContain('+', first.IpcToken);
@@ -108,9 +109,10 @@ public static class SidecarSupervisorTests
                 "const crypto = require('crypto');" +
                 "const sha = crypto.createHash('sha256').update(process.env.HTPC_BRIDGE_IPC_TOKEN).digest('hex');" +
                 "console.log('ENVCHECK port=' + process.env.HTPC_BRIDGE_IPC_PORT" +
-                " + ' level=' + process.env.HTPC_BRIDGE_LOG_LEVEL" +
-                " + ' storage=' + process.env.HTPC_BRIDGE_STORAGE_DIR" +
-                " + ' tokenSha=' + sha);" +
+                 " + ' level=' + process.env.HTPC_BRIDGE_LOG_LEVEL" +
+                 " + ' storage=' + process.env.HTPC_BRIDGE_STORAGE_DIR" +
+                 " + ' tokenSha=' + sha" +
+                 " + ' updateTokenPresent=' + Object.hasOwn(process.env, 'MATTERHELM_UPDATE_TOKEN'));" +
                 "console.log(JSON.stringify({ level: 40, msg: 'warn line' }));" +
                 "console.log(JSON.stringify({ level: 50, msg: 'error line' }));" +
                 "console.error('stderr line');" +
@@ -118,10 +120,14 @@ public static class SidecarSupervisorTests
             using (var supervisor = new SidecarSupervisor(
                 new SidecarSpec(node, ["-e", script], Path.GetTempPath()),
                 ipcPort: 41234,
-                storageDir: storageDir,
-                logLevel: "debug",
-                options: new SupervisorOptions { StopGraceMs = 250 },
-                log: capture.Sink))
+                 storageDir: storageDir,
+                 logLevel: "debug",
+                 options: new SupervisorOptions { StopGraceMs = 250 },
+                 log: capture.Sink,
+                 extraEnv: new Dictionary<string, string>
+                 {
+                     ["MATTERHELM_UPDATE_TOKEN"] = "must-not-reach-sidecar",
+                 }))
             {
                 supervisor.Start();
                 await TestSupport.WaitUntilAsync(
@@ -133,9 +139,9 @@ public static class SidecarSupervisorTests
                         SHA256.HashData(Encoding.UTF8.GetBytes(supervisor.IpcToken)))
                     .ToLowerInvariant();
                 Assert.True(
-                    capture.Contains(
-                        "INFO",
-                        $"ENVCHECK port=41234 level=debug storage={storageDir} tokenSha={expectedSha}"),
+                     capture.Contains(
+                         "INFO",
+                         $"ENVCHECK port=41234 level=debug storage={storageDir} tokenSha={expectedSha} updateTokenPresent=false"),
                     "child did not see the documented environment contract");
                 Assert.True(capture.Contains("WARN", "sidecar: warn line"), "pino level 40 must map to WARN");
                 Assert.True(capture.Contains("ERROR", "sidecar: error line"), "pino level 50 must map to ERROR");
@@ -315,56 +321,119 @@ public static class SidecarSupervisorTests
         {
             string node = TestSupport.RequireNodeExe();
             var capture = new TestSupport.LogCapture();
-            var gate = new Lock();
-            int starts = 0;
-            int delayCount = 0;
+            var time = new ManualTimeProvider();
             using (var supervisor = new SidecarSupervisor(
                 new SidecarSpec(node, ["-e", "process.exit(1);"], Path.GetTempPath()),
                 ipcPort: 41234,
                 storageDir: "x",
                 options: new SupervisorOptions { BackoffBaseMs = 400, BackoffCapMs = 2_000, StopGraceMs = 250 },
-                log: capture.Sink))
+                log: capture.Sink,
+                timeProvider: time))
             {
-                supervisor.ChildStarted += (_, _) =>
-                {
-                    lock (gate)
-                    {
-                        starts++;
-                    }
-                };
-                supervisor.RestartScheduled += (_, _) =>
-                {
-                    lock (gate)
-                    {
-                        delayCount++;
-                    }
-                };
                 supervisor.Start();
                 await TestSupport.WaitUntilAsync(
-                    () =>
-                    {
-                        lock (gate)
-                        {
-                            return delayCount >= 1;
-                        }
-                    },
+                    () => time.TimerCreatedCount >= 1,
                     ChildWaitTimeout,
-                    "a restart to be scheduled");
+                    "a restart timer to be created");
+                int startsAtStop = capture.Snapshot().Count(entry =>
+                    entry.Message.StartsWith("sidecar started", StringComparison.Ordinal));
                 supervisor.Stop();
                 supervisor.Stop(); // Idempotent.
+
+                // Advancing the injected timer past every possible jittered first
+                // delay deterministically proves Stop disposed the pending restart.
+                time.Advance(TimeSpan.FromSeconds(2));
+                Assert.Equal(
+                    startsAtStop,
+                    capture.Snapshot().Count(entry =>
+                        entry.Message.StartsWith("sidecar started", StringComparison.Ordinal)));
+            }
+        }
+
+        private sealed class ManualTimeProvider : TimeProvider
+        {
+            private readonly Lock _gate = new();
+            private readonly List<ManualTimer> _timers = [];
+            private long _timestamp;
+            private int _timerCreatedCount;
+
+            public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+            public override long GetTimestamp() => _timestamp;
+
+            internal int TimerCreatedCount => Volatile.Read(ref _timerCreatedCount);
+
+            public override ITimer CreateTimer(
+                TimerCallback callback,
+                object? state,
+                TimeSpan dueTime,
+                TimeSpan period)
+            {
+                var timer = new ManualTimer(this, callback, state);
+                timer.Change(dueTime, period);
+                lock (_gate)
+                {
+                    _timers.Add(timer);
+                }
+
+                Interlocked.Increment(ref _timerCreatedCount);
+                return timer;
             }
 
-            int startsAtStop;
-            lock (gate)
+            internal void Advance(TimeSpan delta)
             {
-                startsAtStop = starts;
+                ManualTimer[] timers;
+                lock (_gate)
+                {
+                    _timestamp += delta.Ticks;
+                    timers = [.. _timers];
+                }
+
+                foreach (ManualTimer timer in timers)
+                {
+                    timer.FireIfDue(Volatile.Read(ref _timestamp));
+                }
             }
 
-            // The pending ~400 ms restart must never fire after Stop().
-            await Task.Delay(800);
-            lock (gate)
+            private sealed class ManualTimer(
+                ManualTimeProvider owner,
+                TimerCallback callback,
+                object? state) : ITimer
             {
-                Assert.Equal(startsAtStop, starts);
+                private long _dueAt = long.MaxValue;
+                private bool _disposed;
+
+                public bool Change(TimeSpan dueTime, TimeSpan period)
+                {
+                    if (_disposed)
+                    {
+                        return false;
+                    }
+
+                    _dueAt = dueTime == Timeout.InfiniteTimeSpan
+                        ? long.MaxValue
+                        : owner._timestamp + dueTime.Ticks;
+                    return true;
+                }
+
+                public void Dispose() => _disposed = true;
+
+                public ValueTask DisposeAsync()
+                {
+                    Dispose();
+                    return ValueTask.CompletedTask;
+                }
+
+                internal void FireIfDue(long now)
+                {
+                    if (_disposed || now < _dueAt)
+                    {
+                        return;
+                    }
+
+                    _dueAt = long.MaxValue;
+                    callback(state);
+                }
             }
         }
     }

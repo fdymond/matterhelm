@@ -6,7 +6,7 @@ namespace MatterHelm.Tests;
 
 public static class TrayContextTests
 {
-    private const string SampleQrPayload = "MT:Y.K90C0R159FZO62N10";
+    private const string SampleQrPayload = "MT:Y.K9042C00KA0648G00";
 
     [Theory]
     [InlineData(BridgeState.Disabled)]
@@ -179,7 +179,7 @@ public static class TrayContextTests
                 });
             tray.StartGuidedPairing();
             tray.SetState(BridgeState.AwaitingPairing);
-            tray.SetPairingInfo(SampleQrPayload, "0434-914-6415");
+            tray.SetPairingInfo(SampleQrPayload, "3497-011-2332");
             Assert.Equal(PairingStage.ReadyToScan, tray.PairingWindowStage);
 
             tray.SetState(BridgeState.Connected);
@@ -231,7 +231,7 @@ public static class TrayContextTests
             using var tray = new TrayContext(config);
             tray.StartGuidedPairing();
             tray.SetState(BridgeState.AwaitingPairing);
-            tray.SetPairingInfo(SampleQrPayload, "0434-914-6415");
+            tray.SetPairingInfo(SampleQrPayload, "3497-011-2332");
             Assert.True(tray.PairMenuEnabled);
 
             tray.SetState(BridgeState.Disabled);

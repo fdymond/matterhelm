@@ -1,13 +1,17 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Net;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MatterHelm.Diagnostics;
 
 /// <summary>
 /// Builds the local-only diagnostics zip (ADR-006 §2): the app's daily logs
-/// and metrics snapshots, an environment manifest, and <c>config.json</c>.
+/// and metrics snapshots, an environment manifest, and a sanitised
+/// <c>config.json</c> unless the caller explicitly opts into raw config.
 /// Nothing ever uploads. Privacy rules the manifest must keep: no machine
 /// name, no username, no user-profile paths (it therefore contains no file
 /// paths at all); the IPC token is runtime-only — never logged, never
@@ -28,16 +32,22 @@ public static class DiagnosticsBundle
     /// <paramref name="directory"/> (default <c>%APPDATA%\MatterHelm</c>)
     /// from the real log directory and config. Returns the zip's full path.
     /// </summary>
-    public static string Export(string? directory = null) =>
-        ExportTo(Path.Combine(directory ?? AppDataDir, SuggestedFileName()));
+    public static string Export(string? directory = null, bool includeRawConfig = false) =>
+        ExportTo(Path.Combine(directory ?? AppDataDir, SuggestedFileName()), includeRawConfig: includeRawConfig);
 
     /// <summary>
     /// Produces the bundle at exactly <paramref name="zipPath"/>.
     /// <paramref name="logsDirectory"/>/<paramref name="configPath"/> default
     /// to the real locations and are injectable so tests and demos bundle
     /// temp directories instead of the user profile.
+    /// <paramref name="includeRawConfig"/> is an explicit privacy opt-in and
+    /// defaults to <see langword="false"/>.
     /// </summary>
-    public static string ExportTo(string zipPath, string? logsDirectory = null, string? configPath = null)
+    public static string ExportTo(
+        string zipPath,
+        string? logsDirectory = null,
+        string? configPath = null,
+        bool includeRawConfig = false)
     {
         string logsDir = logsDirectory ?? Path.Combine(AppDataDir, "logs");
         string config = configPath ?? MatterHelm.Config.DefaultPath;
@@ -52,12 +62,14 @@ public static class DiagnosticsBundle
         WriteManifest(archive);
         if (File.Exists(config))
         {
-            // Documented carve-out (S5-R F3): config.json is included VERBATIM.
-            // It is user-authored and may contain user-chosen paths (e.g. a
-            // custom launch command under C:\Users\<name>\...) — the
-            // username-scrubbing guarantee applies to the manifest and logs,
-            // not to content the user wrote into their own config.
-            AddFile(archive, config, "config.json");
+            if (includeRawConfig)
+            {
+                AddFile(archive, config, "config.json");
+            }
+            else
+            {
+                AddSanitizedConfig(archive, config);
+            }
         }
 
         if (Directory.Exists(logsDir))
@@ -74,17 +86,35 @@ public static class DiagnosticsBundle
         return zipPath;
     }
 
-    // S5-R F1: matter.js's Commissioning facility historically logged the raw
-    // setup passcode / manual pairing code / QR payload, and those lines can
-    // persist in app logs written BEFORE the bridge-side suppression landed
-    // (or with a user override re-enabling that facility). Scrub commissioning
-    // credentials from bundled logs regardless of how they got there.
-    private static readonly (string Pattern, string Replacement)[] LogRedactions =
-    [
-        (@"passcode:\s*\d+", "passcode: [redacted]"),
-        (@"manual pairing code:\s*\d+", "manual pairing code: [redacted]"),
-        (@"MT:[A-Z0-9.\-]{5,}", "MT:[redacted]"),
-    ];
+    private static readonly Regex PairingCodeRegex = new(
+        @"(?:(?<label>\b(?:setup[\s_.-]*passcode|passcode|manual[\s_.-]*(?:pairing[\s_.-]*)?code)\b\s*[:=]\s*['""]?)\d(?:[\s-]*\d){5,}|(?<label>\bdiscriminator\b['""]?\s*[:=]\s*['""]?)\d{1,5})",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly Regex QrPayloadRegex = new(
+        @"(?:MT:|MT%3A)[A-Z0-9.%\-]{5,}",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly Regex QrBlockArtRegex = new(
+        @"[\u2580-\u259F]+",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly Regex QrBlockArtLineRegex = new(
+        @"^(?:(?=[\s\u2580-\u259F]*[\u2580-\u259F])[\s\u2580-\u259F]+|.*[\u2580-\u259F]{8,}.*)$",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly Regex Ipv4CandidateRegex = new(
+        @"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly Regex Ipv6CandidateRegex = new(
+        @"(?<![0-9A-Fa-f:.%])(?=[0-9A-Fa-f:.%]*:)[0-9A-Fa-f:.]*[0-9A-Fa-f](?:%[0-9A-Za-z_.-]+)?(?![0-9A-Fa-f:.%])",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
 
     private static void AddRedactedTextFile(ZipArchive archive, string path, string entryName)
     {
@@ -92,16 +122,137 @@ public static class DiagnosticsBundle
         // mid-append is fine.
         using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(source);
-        string text = reader.ReadToEnd();
-        foreach ((string pattern, string replacement) in LogRedactions)
-        {
-            text = System.Text.RegularExpressions.Regex.Replace(text, pattern, replacement);
-        }
-
         ZipArchiveEntry entry = archive.CreateEntry(entryName);
         using var writer = new StreamWriter(entry.Open());
-        writer.Write(text);
+        while (reader.ReadLine() is { } line)
+        {
+            writer.WriteLine(RedactLogLine(line));
+        }
     }
+
+    private static void AddSanitizedConfig(ZipArchive archive, string path)
+    {
+        ZipArchiveEntry entry = archive.CreateEntry("config.json");
+        using Stream target = entry.Open();
+        try
+        {
+            using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using JsonDocument document = JsonDocument.Parse(source);
+            using var writer = new Utf8JsonWriter(target, new JsonWriterOptions { Indented = true });
+            WriteSanitizedConfigElement(writer, document.RootElement, propertyName: null);
+        }
+        catch (JsonException)
+        {
+            using var writer = new Utf8JsonWriter(target, new JsonWriterOptions { Indented = true });
+            writer.WriteStartObject();
+            writer.WriteString("error", "config.json was invalid and could not be sanitised");
+            writer.WriteEndObject();
+        }
+    }
+
+    private static void WriteSanitizedConfigElement(Utf8JsonWriter writer, JsonElement element, string? propertyName)
+    {
+        if (propertyName is not null && propertyName.Equals("uniqueIdSeed", StringComparison.OrdinalIgnoreCase))
+        {
+            writer.WriteStringValue("<redacted>");
+            return;
+        }
+
+        if (propertyName is not null && propertyName.Equals("args", StringComparison.OrdinalIgnoreCase))
+        {
+            int length = element.ValueKind == JsonValueKind.String
+                ? (element.GetString()?.Length ?? 0)
+                : element.GetRawText().Length;
+            writer.WriteStringValue($"<redacted: {length} chars>");
+            return;
+        }
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (JsonProperty property in element.EnumerateObject())
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteSanitizedConfigElement(writer, property.Value, property.Name);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (JsonElement item in element.EnumerateArray())
+                {
+                    WriteSanitizedConfigElement(writer, item, propertyName: null);
+                }
+
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(RedactProfileRoot(element.GetString() ?? ""));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
+
+    private static string RedactLogLine(string line)
+    {
+        string redacted = PairingCodeRegex.Replace(line, "${label}<redacted>");
+        redacted = QrPayloadRegex.Replace(redacted, match =>
+            match.Value.StartsWith("MT%3A", StringComparison.OrdinalIgnoreCase)
+                ? "MT%3A<redacted>"
+                : "MT:<redacted>");
+        if (QrBlockArtLineRegex.IsMatch(redacted))
+        {
+            redacted = "<qr-art>";
+        }
+        if (redacted.Contains("MT:<redacted>", StringComparison.OrdinalIgnoreCase)
+            || redacted.Contains("MT%3A<redacted>", StringComparison.OrdinalIgnoreCase))
+        {
+            redacted = QrBlockArtRegex.Replace(redacted, "<qr-art>");
+        }
+
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        redacted = ReplaceLiteral(redacted, profile, "<profile>");
+        redacted = ReplaceLiteral(redacted, profile.Replace('\\', '/'), "<profile>");
+        redacted = ReplaceIdentityLiteral(redacted, Environment.UserName, "<user>");
+        redacted = ReplaceIdentityLiteral(redacted, Environment.MachineName, "<machine>");
+        redacted = Ipv4CandidateRegex.Replace(redacted, RedactIpLiteral);
+        return Ipv6CandidateRegex.Replace(redacted, RedactIpLiteral);
+    }
+
+    private static string RedactProfileRoot(string value)
+    {
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string redacted = ReplaceLiteral(value, profile, "%USERPROFILE%");
+        redacted = ReplaceLiteral(redacted, profile.Replace('\\', '/'), "%USERPROFILE%");
+        return ReplaceIdentityLiteral(redacted, Environment.UserName, "%USERNAME%");
+    }
+
+    private static string ReplaceLiteral(string value, string sensitive, string replacement) =>
+        string.IsNullOrEmpty(sensitive)
+            ? value
+            : Regex.Replace(
+                value,
+                Regex.Escape(sensitive),
+                _ => replacement,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(1));
+
+    internal static string ReplaceIdentityLiteral(string value, string sensitive, string replacement) =>
+        string.IsNullOrEmpty(sensitive)
+            ? value
+            : Regex.Replace(
+                value,
+                $@"(?<![A-Za-z0-9_]){Regex.Escape(sensitive)}(?![A-Za-z0-9_])",
+                _ => replacement,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(1));
+
+    private static string RedactIpLiteral(Match match) =>
+        IPAddress.TryParse(match.Value, out _) ? "<ip>" : match.Value;
 
     private static void WriteManifest(ZipArchive archive)
     {

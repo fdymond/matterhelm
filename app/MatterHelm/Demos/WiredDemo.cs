@@ -254,7 +254,7 @@ internal static partial class WiredDemo
             string[] expectedPrimaries =
             [
                 // Volume sets read "Volume" without the percent — the fill bar
-                // carries the number (owner request).
+                // carries the number (maintainer request).
                 "Google Home → Volume",
                 "Google Home → unmute",
                 "Google Home → play/pause",

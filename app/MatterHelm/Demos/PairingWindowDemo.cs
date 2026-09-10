@@ -30,8 +30,8 @@ namespace MatterHelm.Demos;
 /// </remarks>
 internal static class PairingWindowDemo
 {
-    private const string DemoQrPayload = "MT:Y.K90C0R159FZO62N10";
-    private const string DemoManualCode = "0434-914-6415";
+    private const string DemoQrPayload = "MT:Y.K9042C00KA0648G00";
+    private const string DemoManualCode = "3497-011-2332";
     private const int DemoDisplayMilliseconds = 1_000;
     private const int StagePumpMilliseconds = 250;
     private const int MinDistinctSampledColors = 2;

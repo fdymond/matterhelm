@@ -1,11 +1,13 @@
 using MatterHelm.Ui;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace MatterHelm.Tests;
 
 public static class PairingWindowTests
 {
-    private const string SampleQrPayload = "MT:Y.K90C0R159FZO62N10";
+    private const string SampleQrPayload = "MT:Y.K9042C00KA0648G00";
 
     [Fact]
     public static void ReadyToScanKeepsEssentialsVisibleAndRequirementsCollapsed()
@@ -13,12 +15,12 @@ public static class PairingWindowTests
         using var window = new PairingWindow(0xFFF3, 0x801A);
         window.Show();
 
-        window.SetPairingInfo(SampleQrPayload, "0434-914-6415");
+        window.SetPairingInfo(SampleQrPayload, "3497-011-2332");
 
         Assert.True(window.IdentityHelpVisible);
         Assert.True(window.QrVisible);
         Assert.True(window.ManualCodeVisible);
-        Assert.Equal("0434-914-6415", window.ManualCodeText);
+        Assert.Equal("3497-011-2332", window.ManualCodeText);
         Assert.Equal(
             "VID 0xFFF3 · PID 0x801A — must match your Google Developer Console integration",
             window.MatterIdentityText);
@@ -52,9 +54,23 @@ public static class PairingWindowTests
     [Fact]
     public static void DefaultIdentityMatchesTheSidecarDefaults()
     {
+        string configSource = File.ReadAllText(FindRepoFile("bridge", "src", "config.ts"));
+        Assert.Contains(
+            "parseVendorOrProductId(env.HTPC_BRIDGE_VENDOR_ID",
+            configSource,
+            StringComparison.Ordinal);
+
+        // config.ts leaves absent identity values unset; bridge.ts owns the
+        // numeric fallbacks that are actually passed to matter.js.
+        string bridgeSource = File.ReadAllText(FindRepoFile("bridge", "src", "matter", "bridge.ts"));
+        int vendorId = ParseHexConstant(bridgeSource, "DEFAULT_VENDOR_ID");
+        int productId = ParseHexConstant(bridgeSource, "DEFAULT_PRODUCT_ID");
         using var window = new PairingWindow();
 
-        Assert.Contains("VID 0xFFF1 · PID 0x8000", window.MatterIdentityText, StringComparison.Ordinal);
+        Assert.Contains(
+            $"VID 0x{vendorId:X4} · PID 0x{productId:X4}",
+            window.MatterIdentityText,
+            StringComparison.Ordinal);
     }
 
     [Theory]
@@ -146,7 +162,7 @@ public static class PairingWindowTests
         };
         Screen screen = Screen.PrimaryScreen ?? throw new InvalidOperationException("No screen is available.");
         window.Show();
-        window.SetPairingInfo(SampleQrPayload, "0434-914-6415");
+        window.SetPairingInfo(SampleQrPayload, "3497-011-2332");
         Point movedLocation = new(screen.WorkingArea.Left + 24, screen.WorkingArea.Top + 24);
         window.Location = movedLocation;
 
@@ -167,7 +183,7 @@ public static class PairingWindowTests
                 scheduledDelay = delay;
             });
         window.Show();
-        window.SetPairingInfo(SampleQrPayload, "0434-914-6415");
+        window.SetPairingInfo(SampleQrPayload, "3497-011-2332");
         Screen screen = Screen.FromRectangle(window.Bounds);
         window.Location = new Point(screen.WorkingArea.Left + 24, screen.WorkingArea.Top + 24);
 
@@ -193,17 +209,40 @@ public static class PairingWindowTests
         using var window = new PairingWindow(
             autoCloseScheduler: (callback, _) => staleScheduledClose = callback);
         window.Show();
-        window.SetPairingInfo(SampleQrPayload, "0434-914-6415");
+        window.SetPairingInfo(SampleQrPayload, "3497-011-2332");
         window.ShowPairedAndAutoClose();
 
         window.SetStage(PairingStage.Starting);
-        window.SetPairingInfo("MT:Y.K90C0R159FZO62N11", "1111-222-3333");
+        window.SetPairingInfo("MT:SYNTHETIC-NOT-A-VALID-PAYLOAD", "0000-000-0000");
         Assert.IsType<Action>(staleScheduledClose)();
 
         Assert.False(window.IsDisposed);
         Assert.Equal(PairingStage.ReadyToScan, window.CurrentStage);
         Assert.True(window.QrVisible);
         Assert.False(window.AutoCloseScheduled);
+    }
+
+    private static int ParseHexConstant(string source, string name)
+    {
+        Match match = Regex.Match(
+            source,
+            $@"export\s+const\s+{Regex.Escape(name)}\s*=\s*0x(?<value>[0-9a-fA-F]+)\s*;");
+        Assert.True(match.Success, $"Could not find exported {name} in bridge/src/matter/bridge.ts.");
+        return int.Parse(match.Groups["value"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+    }
+
+    private static string FindRepoFile(params string[] relativeParts)
+    {
+        for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            string candidate = Path.Combine([directory.FullName, .. relativeParts]);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException($"Could not locate repository file {Path.Combine(relativeParts)}.");
     }
 
     private static Point CenteredLocation(Rectangle workingArea, Size windowSize) => new(

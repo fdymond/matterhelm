@@ -92,7 +92,7 @@ public sealed class SidecarSupervisor : IDisposable
         _storageDir = storageDir;
         _logLevel = logLevel;
         _options = options ?? new SupervisorOptions();
-        _log = log ?? DefaultLog;
+        _log = log ?? Log.Write;
         _extraEnv = extraEnv;
         _timeProvider = timeProvider ?? TimeProvider.System;
         IpcToken = GenerateToken();
@@ -273,22 +273,6 @@ public sealed class SidecarSupervisor : IDisposable
         return "INFO";
     }
 
-    private static void DefaultLog(string level, string message)
-    {
-        switch (level)
-        {
-            case "ERROR":
-                Log.Error(message);
-                break;
-            case "WARN":
-                Log.Warn(message);
-                break;
-            default:
-                Log.Info(message);
-                break;
-        }
-    }
-
     /// <summary>Caller must hold <c>_gate</c>.</summary>
     private void StartChildLocked()
     {
@@ -332,6 +316,7 @@ public sealed class SidecarSupervisor : IDisposable
         startInfo.Environment["HTPC_BRIDGE_IPC_TOKEN"] = IpcToken;
         startInfo.Environment["HTPC_BRIDGE_STORAGE_DIR"] = _storageDir;
         startInfo.Environment["HTPC_BRIDGE_LOG_LEVEL"] = _logLevel;
+        startInfo.Environment.Remove("MATTERHELM_UPDATE_TOKEN");
 
         var child = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         child.Exited += (_, _) => OnChildExited(child);

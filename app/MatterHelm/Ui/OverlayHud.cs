@@ -24,6 +24,189 @@ public sealed record OverlayContent(string Primary, string Pill, bool IsError)
 /// <summary>What the Settings Preview button wants flashed (S9-4): the STAGED position, theme, and opacity — not the saved config values.</summary>
 public sealed record OverlayPreviewRequest(OverlayPosition Position, OverlayTheme Theme, int OpacityPercent);
 
+internal interface ILayeredCanvasNative
+{
+    IntPtr CreateCompatibleDc();
+
+    IntPtr CreateDibSection(
+        IntPtr deviceContext,
+        ref NativeMethods.BitmapInfoHeader header,
+        out IntPtr bits);
+
+    IntPtr SelectObject(IntPtr deviceContext, IntPtr value);
+
+    void DeleteObject(IntPtr value);
+
+    void DeleteDc(IntPtr deviceContext);
+}
+
+internal sealed class LayeredCanvas : IDisposable
+{
+    private static readonly IntPtr InvalidGdiObject = new(-1);
+    private readonly ILayeredCanvasNative _native;
+    private IntPtr _memoryDc;
+    private IntPtr _dibSection;
+    private IntPtr _oldSelection;
+    private Bitmap? _bitmap;
+
+    private LayeredCanvas(
+        ILayeredCanvasNative native,
+        IntPtr memoryDc,
+        IntPtr dibSection,
+        IntPtr oldSelection,
+        Bitmap bitmap)
+    {
+        _native = native;
+        _memoryDc = memoryDc;
+        _dibSection = dibSection;
+        _oldSelection = oldSelection;
+        _bitmap = bitmap;
+    }
+
+    internal Bitmap Bitmap => _bitmap ?? throw new ObjectDisposedException(nameof(LayeredCanvas));
+
+    internal IntPtr MemoryDc => _memoryDc;
+
+    internal static LayeredCanvas Create(int width, int height, ILayeredCanvasNative native)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        ArgumentNullException.ThrowIfNull(native);
+
+        IntPtr memoryDc = IntPtr.Zero;
+        IntPtr dibSection = IntPtr.Zero;
+        IntPtr oldSelection = IntPtr.Zero;
+        Bitmap? bitmap = null;
+        bool ownershipTransferred = false;
+        try
+        {
+            memoryDc = native.CreateCompatibleDc();
+            if (memoryDc == IntPtr.Zero)
+            {
+                throw new InvalidOperationException("CreateCompatibleDC failed while creating the overlay canvas.");
+            }
+
+            var header = new NativeMethods.BitmapInfoHeader
+            {
+                biSize = Marshal.SizeOf<NativeMethods.BitmapInfoHeader>(),
+                biWidth = width,
+                biHeight = -height,
+                biPlanes = 1,
+                biBitCount = 32,
+                biCompression = NativeMethods.BiRgb,
+            };
+            dibSection = native.CreateDibSection(memoryDc, ref header, out IntPtr bits);
+            if (dibSection == IntPtr.Zero || bits == IntPtr.Zero)
+            {
+                throw new InvalidOperationException("CreateDIBSection failed while creating the overlay canvas.");
+            }
+
+            oldSelection = native.SelectObject(memoryDc, dibSection);
+            if (oldSelection == IntPtr.Zero || oldSelection == InvalidGdiObject)
+            {
+                throw new InvalidOperationException("SelectObject failed while creating the overlay canvas.");
+            }
+
+            bitmap = new Bitmap(width, height, width * 4, PixelFormat.Format32bppPArgb, bits);
+            var owner = new LayeredCanvas(native, memoryDc, dibSection, oldSelection, bitmap);
+            ownershipTransferred = true;
+            return owner;
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+            {
+                bitmap?.Dispose();
+                if (memoryDc != IntPtr.Zero
+                    && oldSelection != IntPtr.Zero
+                    && oldSelection != InvalidGdiObject)
+                {
+                    _ = native.SelectObject(memoryDc, oldSelection);
+                }
+
+                if (dibSection != IntPtr.Zero)
+                {
+                    native.DeleteObject(dibSection);
+                }
+
+                if (memoryDc != IntPtr.Zero)
+                {
+                    native.DeleteDc(memoryDc);
+                }
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        Bitmap? bitmap = Interlocked.Exchange(ref _bitmap, null);
+        if (bitmap is null)
+        {
+            return;
+        }
+
+        IntPtr memoryDc = Interlocked.Exchange(ref _memoryDc, IntPtr.Zero);
+        IntPtr oldSelection = Interlocked.Exchange(ref _oldSelection, IntPtr.Zero);
+        IntPtr dibSection = Interlocked.Exchange(ref _dibSection, IntPtr.Zero);
+        try
+        {
+            bitmap.Dispose();
+        }
+        finally
+        {
+            try
+            {
+                if (memoryDc != IntPtr.Zero && oldSelection != IntPtr.Zero)
+                {
+                    _ = _native.SelectObject(memoryDc, oldSelection);
+                }
+            }
+            finally
+            {
+                if (dibSection != IntPtr.Zero)
+                {
+                    _native.DeleteObject(dibSection);
+                }
+
+                if (memoryDc != IntPtr.Zero)
+                {
+                    _native.DeleteDc(memoryDc);
+                }
+            }
+        }
+    }
+}
+
+internal sealed class WindowsLayeredCanvasNative : ILayeredCanvasNative
+{
+    internal static WindowsLayeredCanvasNative Instance { get; } = new();
+
+    private WindowsLayeredCanvasNative()
+    {
+    }
+
+    public IntPtr CreateCompatibleDc() => NativeMethods.CreateCompatibleDC(IntPtr.Zero);
+
+    public IntPtr CreateDibSection(
+        IntPtr deviceContext,
+        ref NativeMethods.BitmapInfoHeader header,
+        out IntPtr bits) =>
+        NativeMethods.CreateDIBSection(
+            deviceContext,
+            ref header,
+            NativeMethods.DibRgbColors,
+            out bits,
+            IntPtr.Zero,
+            0);
+
+    public IntPtr SelectObject(IntPtr deviceContext, IntPtr value) =>
+        NativeMethods.SelectObject(deviceContext, value);
+
+    public void DeleteObject(IntPtr value) => _ = NativeMethods.DeleteObject(value);
+
+    public void DeleteDc(IntPtr deviceContext) => _ = NativeMethods.DeleteDC(deviceContext);
+}
+
 /// <summary>
 /// Persistent, click-through, non-activating flash overlay (BLUEPRINT §2.4,
 /// ADR-003 item 5). <see cref="Show(OverlayContent)"/> updates the same window
@@ -209,6 +392,12 @@ public sealed class OverlayHud : IDisposable
     internal static int MeasureDesiredCanvasWidthForTest(OverlayContent content) =>
         HudWindow.MeasureDesiredCanvasWidth(content, scale: 1f);
 
+    internal static LayeredCanvas CreateLayeredCanvasForTest(
+        int width,
+        int height,
+        ILayeredCanvasNative native) =>
+        LayeredCanvas.Create(width, height, native);
+
     /// <summary>Text-pill convenience overload of <see cref="Show(OverlayContent)"/>.</summary>
     public void Show(string primary, string pill, bool isError) => Show(new OverlayContent(primary, pill, isError));
 
@@ -247,7 +436,7 @@ public sealed class OverlayHud : IDisposable
         // Logical (96-dpi) design units; every use goes through S()/SF() so the
         // canvas renders at the window's startup DPI (S4-5 — at 200 % the old
         // fixed 460×104 bitmap appeared half-size).
-        // Width is dynamic (owner request: the panel hugs its content — a
+        // Width is dynamic (maintainer request: the panel hugs its content — a
         // fixed width left a large blank area right of short text): measured
         // per content, clamped to [min, max], and quantized so tiny text
         // differences during rapid-fire updates don't thrash the canvas.
@@ -267,7 +456,7 @@ public sealed class OverlayHud : IDisposable
         private const float CommandResultGapLogical = 12f;
         private const float CommandMinimumWidthLogical = 120f;
         private const float PrimaryFontPxLogical = 15.33f; // 11.5 pt at 96 dpi
-        // Owner request: the executed-command pill reads at the same size as
+        // Maintainer request: the executed-command pill reads at the same size as
         // the primary line (it stays bold to keep the visual hierarchy).
         private const float PillFontPxLogical = PrimaryFontPxLogical;
 
@@ -286,10 +475,7 @@ public sealed class OverlayHud : IDisposable
         // Mutable as a set: the canvas is torn down and re-created whenever
         // the measured content width changes (see EnsureCanvasWidth).
         private int _canvasWidth;
-        private Bitmap _canvas;
-        private IntPtr _memDc;
-        private IntPtr _dibSection;
-        private IntPtr _oldDibSelection;
+        private LayeredCanvas _layeredCanvas;
 
         private OverlayContent? _last;
         private Palette _lastPalette = Palette.Dark;
@@ -304,7 +490,7 @@ public sealed class OverlayHud : IDisposable
         /// <summary>Panel opacity percent 30–100 (S9-4); scales every layered-window push, fade included.</summary>
         [System.ComponentModel.Browsable(false)]
         [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-        internal int OpacityPercent { get; set; } = 100;
+        internal int OpacityPercent { get; set; } = SettingLimits.OverlayOpacityMaximumPercent;
 
         /// <summary>
         /// The palette one flash renders with, resolved from <see cref="Theme"/>
@@ -360,7 +546,10 @@ public sealed class OverlayHud : IDisposable
 
         /// <summary>Scales a push alpha by <see cref="OpacityPercent"/> (S9-4); the fade multiplies through naturally.</summary>
         private byte ScaleAlpha(byte alpha) =>
-            (byte)(alpha * Math.Clamp(OpacityPercent, 30, 100) / 100);
+            (byte)(alpha * Math.Clamp(
+                OpacityPercent,
+                SettingLimits.OverlayOpacityMinimumPercent,
+                SettingLimits.OverlayOpacityMaximumPercent) / SettingLimits.OverlayOpacityMaximumPercent);
 
         /// <summary>Screen placement; setting re-anchors the window immediately.</summary>
         [System.ComponentModel.Browsable(false)]
@@ -424,7 +613,7 @@ public sealed class OverlayHud : IDisposable
 
             ApplyPosition();
 
-            (_memDc, _dibSection, _oldDibSelection, _canvas) = CreateLayeredCanvas(_canvasWidth, _canvasHeight);
+            _layeredCanvas = CreateLayeredCanvas(_canvasWidth, _canvasHeight);
 
             _holdTimer = new System.Windows.Forms.Timer { Interval = HoldMilliseconds };
             _holdTimer.Tick += OnHoldElapsed;
@@ -451,7 +640,7 @@ public sealed class OverlayHud : IDisposable
 
         internal Rectangle VolumeTrackBounds => Rectangle.Round(VolumeTrackRect());
 
-        internal Bitmap CaptureCanvas() => new(_canvas);
+        internal Bitmap CaptureCanvas() => new(_layeredCanvas.Bitmap);
 
         protected override void WndProc(ref Message m)
         {
@@ -572,7 +761,7 @@ public sealed class OverlayHud : IDisposable
 
         private void Render(OverlayContent content, Palette palette)
         {
-            using Graphics g = Graphics.FromImage(_canvas);
+            using Graphics g = Graphics.FromImage(_layeredCanvas.Bitmap);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.Clear(Color.Transparent);
@@ -642,7 +831,7 @@ public sealed class OverlayHud : IDisposable
                 FormatFlags = StringFormatFlags.NoWrap,
             };
 
-            // The chip hugs its measured text (owner request): comfortable
+            // The chip hugs its measured text (maintainer request): comfortable
             // side padding, and the height grows with the font rather than
             // assuming the row constant stays larger than the line height.
             SizeF pillTextSize = g.MeasureString(pillText, pillFont, int.MaxValue, pillFormat);
@@ -746,7 +935,7 @@ public sealed class OverlayHud : IDisposable
             };
 
             NativeMethods.UpdateLayeredWindow(
-                Handle, IntPtr.Zero, ref dstPoint, ref size, _memDc, ref srcPoint, 0, ref blend, NativeMethods.UlwAlpha);
+                Handle, IntPtr.Zero, ref dstPoint, ref size, _layeredCanvas.MemoryDc, ref srcPoint, 0, ref blend, NativeMethods.UlwAlpha);
         }
 
         /// <summary>
@@ -803,39 +992,23 @@ public sealed class OverlayHud : IDisposable
                 return;
             }
 
-            _canvas.Dispose();
-            NativeMethods.SelectObject(_memDc, _oldDibSelection);
-            NativeMethods.DeleteObject(_dibSection);
-            NativeMethods.DeleteDC(_memDc);
-
+            LayeredCanvas replacement = CreateLayeredCanvas(width, _canvasHeight);
+            LayeredCanvas old = _layeredCanvas;
+            _layeredCanvas = replacement;
             _canvasWidth = width;
-            (_memDc, _dibSection, _oldDibSelection, _canvas) = CreateLayeredCanvas(_canvasWidth, _canvasHeight);
-            ClientSize = new Size(_canvasWidth, _canvasHeight);
-            ApplyPosition();
-        }
-
-        private static (IntPtr memDc, IntPtr dib, IntPtr oldSelection, Bitmap canvas) CreateLayeredCanvas(int width, int height)
-        {
-            IntPtr memDc = NativeMethods.CreateCompatibleDC(IntPtr.Zero);
-
-            var header = new NativeMethods.BitmapInfoHeader
+            try
             {
-                biSize = Marshal.SizeOf<NativeMethods.BitmapInfoHeader>(),
-                biWidth = width,
-                biHeight = -height, // negative = top-down DIB, matching GDI+ scanline order
-                biPlanes = 1,
-                biBitCount = 32,
-                biCompression = NativeMethods.BiRgb,
-            };
-
-            IntPtr dib = NativeMethods.CreateDIBSection(memDc, ref header, NativeMethods.DibRgbColors, out IntPtr bits, IntPtr.Zero, 0);
-            IntPtr oldSelection = NativeMethods.SelectObject(memDc, dib);
-
-            // The Bitmap wraps the DIB section's own memory directly (scan0) so
-            // GDI+ draws land straight in the surface UpdateLayeredWindow reads.
-            var canvas = new Bitmap(width, height, width * 4, PixelFormat.Format32bppPArgb, bits);
-            return (memDc, dib, oldSelection, canvas);
+                ClientSize = new Size(_canvasWidth, _canvasHeight);
+                ApplyPosition();
+            }
+            finally
+            {
+                old.Dispose();
+            }
         }
+
+        private static LayeredCanvas CreateLayeredCanvas(int width, int height) =>
+            LayeredCanvas.Create(width, height, WindowsLayeredCanvasNative.Instance);
 
         private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
         {
@@ -855,12 +1028,7 @@ public sealed class OverlayHud : IDisposable
             {
                 _holdTimer.Dispose();
                 _fadeTimer.Dispose();
-                _canvas.Dispose();
-
-                // Deselect before deleting, standard GDI teardown order.
-                NativeMethods.SelectObject(_memDc, _oldDibSelection);
-                NativeMethods.DeleteObject(_dibSection);
-                NativeMethods.DeleteDC(_memDc);
+                _layeredCanvas.Dispose();
             }
 
             base.Dispose(disposing);

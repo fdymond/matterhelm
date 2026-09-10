@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using MatterHelm.Sidecar;
@@ -307,6 +308,33 @@ public sealed class IpcServerTests
     }
 
     [Fact]
+    public void NonLoopbackEndpointIsRejectedBeforeTheClientSlotIsTaken()
+    {
+        var capture = new TestSupport.LogCapture();
+        using var server = new IpcServer(39531, Token, log: capture.Sink);
+
+        Assert.False(server.IsAllowedRemoteEndpoint(new IPEndPoint(IPAddress.Parse("203.0.113.9"), 41234)));
+        Assert.False(server.IsAllowedRemoteEndpoint(null));
+        Assert.True(server.IsAllowedRemoteEndpoint(new IPEndPoint(IPAddress.Loopback, 41235)));
+
+        Assert.True(server.TryAcquireClientSlot(out HttpStatusCode rejection));
+        Assert.Equal(default, rejection);
+        Assert.Single(capture.Snapshot(), entry => entry.Level == "WARN");
+        Assert.True(capture.Contains("WARN", "address family InterNetwork"));
+        Assert.False(capture.ContainsMessage("203.0.113.9"));
+    }
+
+    [Fact]
+    public void Ipv6LoopbackAndIpv4MappedLoopbackAreAdmittedButNonLoopbackIpv6IsRejected()
+    {
+        using var server = new IpcServer(39531, Token, log: (_, _) => { });
+
+        Assert.True(server.IsAllowedRemoteEndpoint(new IPEndPoint(IPAddress.IPv6Loopback, 41234)));
+        Assert.True(server.IsAllowedRemoteEndpoint(new IPEndPoint(IPAddress.Parse("::ffff:127.0.0.1"), 41235)));
+        Assert.False(server.IsAllowedRemoteEndpoint(new IPEndPoint(IPAddress.Parse("2001:db8::1"), 41236)));
+    }
+
+    [Fact]
     public async Task StopAsyncDrainsAnInFlightActionBeforeCollaboratorsCanBeDisposed()
     {
         int port = TestSupport.GetFreeLoopbackPort();
@@ -336,6 +364,47 @@ public sealed class IpcServerTests
         collaboratorDisposed = true;
 
         Assert.False(touchedDisposedCollaborator);
+    }
+
+    [Fact]
+    public async Task ConcurrentSendsReturnFalseWithoutThrowingWhenStopCancelsTheSendLockWait()
+    {
+        var enteredSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var socket = new OpenWebSocket();
+        using var server = new IpcServer(39531, Token, log: (_, _) => { });
+        server.SetAuthenticatedClientForTest(socket);
+        server.BeforeSendForTestAsync = cancellationToken =>
+        {
+            enteredSend.TrySetResult();
+            return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        Task<bool> first = server.SendAsync(new StateFrame(50, muted: false));
+        await enteredSend.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Task<bool> waiting = server.SendAsync(new StateFrame(51, muted: false));
+        Task stopping = server.StopAsync();
+
+        bool[] results = await Task.WhenAll(first, waiting);
+        await stopping;
+        Assert.Equal([false, false], results);
+    }
+
+    [Fact]
+    public async Task StuckSendTimesOutReturnsFalseAndLogsOneWarning()
+    {
+        var capture = new TestSupport.LogCapture();
+        using var socket = new OpenWebSocket();
+        using var server = new IpcServer(39531, Token, log: capture.Sink)
+        {
+            SendTimeoutForTest = TimeSpan.FromMilliseconds(20),
+            BeforeSendForTestAsync = cancellationToken => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+        };
+        server.SetAuthenticatedClientForTest(socket);
+
+        bool sent = await server.SendAsync(new StateFrame(50, muted: false));
+
+        Assert.False(sent);
+        Assert.Single(capture.Snapshot(), entry =>
+            entry.Level == "WARN" && entry.Message.Contains("timed out", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -410,5 +479,49 @@ public sealed class IpcServerTests
 
         return await task;
     }
-}
 
+    private sealed class OpenWebSocket : WebSocket
+    {
+        private WebSocketState _state = WebSocketState.Open;
+
+        public override WebSocketCloseStatus? CloseStatus => null;
+
+        public override string? CloseStatusDescription => null;
+
+        public override WebSocketState State => _state;
+
+        public override string? SubProtocol => null;
+
+        public override void Abort() => _state = WebSocketState.Aborted;
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            _state = WebSocketState.Closed;
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            _state = WebSocketState.CloseSent;
+            return Task.CompletedTask;
+        }
+
+        public override void Dispose() => _state = WebSocketState.Closed;
+
+        public override Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+}

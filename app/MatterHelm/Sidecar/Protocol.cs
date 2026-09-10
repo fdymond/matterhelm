@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -229,8 +230,8 @@ public static class Protocol
                 "action" => ParseAction(root),
                 "pairing" => ParsePairing(root),
                 "matterStatus" => ParseMatterStatus(root),
-                "ack" or "state" => SidecarParseResult.Fail($"tray-only frame type \"{type}\""),
-                _ => SidecarParseResult.Fail($"unknown frame type \"{type}\""),
+                "ack" or "state" => SidecarParseResult.Fail($"tray-only frame type \"{SanitizeReasonValue(type)}\""),
+                _ => SidecarParseResult.Fail($"unknown frame type \"{SanitizeReasonValue(type)}\""),
             };
         }
     }
@@ -393,8 +394,45 @@ public static class Protocol
             }
 
             default:
-                return SidecarParseResult.Fail($"unknown action name \"{name}\"");
+                return SidecarParseResult.Fail($"unknown action name \"{SanitizeReasonValue(name)}\"");
         }
+    }
+
+    private static string SanitizeReasonValue(string value)
+    {
+        const int MaxLength = 64;
+        var clean = new StringBuilder(Math.Min(value.Length, MaxLength));
+        bool truncated = false;
+        foreach (char character in value)
+        {
+            UnicodeCategory category = char.GetUnicodeCategory(character);
+            if (char.IsControl(character)
+                || category is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)
+            {
+                continue;
+            }
+
+            if (clean.Length == MaxLength)
+            {
+                truncated = true;
+                break;
+            }
+
+            clean.Append(character);
+        }
+
+        if (!truncated)
+        {
+            return clean.ToString();
+        }
+
+        while (clean.Length > 0 && char.IsSurrogate(clean[^1]))
+        {
+            clean.Length--;
+        }
+
+        clean.Append('…');
+        return clean.ToString();
     }
 
     private static SidecarParseResult ParsePairing(JsonElement obj)
@@ -468,7 +506,7 @@ public static class Protocol
         {
             if (Array.IndexOf(allowed, property.Name) < 0)
             {
-                return $"unknown field \"{property.Name}\"";
+                return $"unknown field \"{SanitizeReasonValue(property.Name)}\"";
             }
         }
 
