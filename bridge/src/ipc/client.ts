@@ -1,9 +1,10 @@
 /**
  * WebSocket client to the tray application (docs/BLUEPRINT.md §2.3).
  *
- * Uses Node 22's built-in global `WebSocket` (undici) — no production
- * dependency. Boundary behaviour per docs/ENGINEERING-STANDARDS.md: the tray
- * app being down is a boundary failure, so outbound frames are dropped with
+ * Uses `ws` because Node 22's built-in Undici WebSocket forbids callers from
+ * sending RFC policy close code 1008. Boundary behaviour per
+ * docs/ENGINEERING-STANDARDS.md: the tray app being down is a boundary failure,
+ * so outbound frames are dropped with
  * exactly ONE structured WARN per disconnected episode (an episode ends when
  * the socket next opens), and the client never throws on the send path.
  *
@@ -18,13 +19,16 @@
  *   socket-open would let a hello-rejecting server pin retries at the base
  *   delay forever; requiring an authenticated frame keeps rejects backing
  *   off to the cap.
- * - Inbound frames cross the trust boundary through `parseTrayFrame`;
- *   invalid frames are logged (one WARN each) and ignored, never thrown.
+ * - Inbound frames cross the trust boundary through `parseTrayFrame`; the
+ *   first invalid frame closes that connection with policy code 1008. The
+ *   normal bounded reconnect path then recovers against a healthy peer.
  * - A policy close before the first valid tray frame is the stale-peer
  *   signature: the spawning tray supplied the session token, so repeated
  *   rejection of the well-formed hello diagnoses tray/sidecar version skew.
  *   It is logged once, then summarized every ten rejects.
  */
+import { WebSocket } from "ws";
+
 import { PROTOCOL_VERSION, parseTrayFrame } from "./protocol.js";
 import type {
   ActionFrame,
@@ -66,6 +70,9 @@ const JITTER = 0.25;
  */
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 
+/** Match the tray server's inbound frame cap and reject compressed IPC frames. */
+const MAX_PAYLOAD_BYTES = 64 * 1024;
+
 /** Count-based summary cadence once a stale peer repeatedly rejects hello. */
 const VERSION_REJECTION_SUMMARY_EVERY = 10;
 
@@ -94,6 +101,8 @@ export interface IpcClientOptions {
   onStateChange?: (state: IpcClientState) => void;
   /** Override backoff constants (tests); production uses the defaults. */
   backoff?: BackoffOptions;
+  /** Socket construction seam for boundary unit tests. */
+  createWebSocket?: (url: string) => WebSocket;
 }
 
 /**
@@ -110,6 +119,8 @@ export class IpcClient {
   #dropWarned = false;
   #backpressureWarned = false;
   #versionRejections = 0;
+  #invalidFrameClose: WebSocket | undefined;
+  #previousCloseWasLocalReject = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: IpcClientOptions) {
@@ -136,8 +147,12 @@ export class IpcClient {
    * throws — Matter writes must survive the tray app being away (§2.3).
    */
   send(frame: OutboundFrame): boolean {
-    if (this.#state === "connected" && this.#ws !== undefined) {
-      if (this.#backpressureWarned) {
+    if (
+      this.#state === "connected" &&
+      this.#ws !== undefined &&
+      this.#ws.readyState === WebSocket.OPEN
+    ) {
+      if (this.#invalidFrameClose === this.#ws || this.#backpressureWarned) {
         return false;
       }
       const payload = JSON.stringify(frame);
@@ -194,20 +209,23 @@ export class IpcClient {
   #connect(): void {
     this.#setState("connecting");
     this.#established = false;
-    const ws = new WebSocket(this.#options.url);
+    const ws =
+      this.#options.createWebSocket?.(this.#options.url) ??
+      // IPC frames are small JSON objects; mirror the tray cap and avoid an
+      // unnecessary compression surface on this loopback-only connection.
+      new WebSocket(this.#options.url, {
+        maxPayload: MAX_PAYLOAD_BYTES,
+        perMessageDeflate: false,
+      });
     this.#ws = ws;
     ws.addEventListener("open", () => {
       this.#handleOpen(ws);
     });
     ws.addEventListener("message", (event) => {
-      // undici-types declares `MessageEvent.data` as `any`; downgrade it to
-      // `unknown` so #handleMessage narrows it at the trust boundary.
-      this.#handleMessage(ws, (event as { data: unknown }).data);
+      this.#handleMessage(ws, event.data);
     });
-    // Node 22's undici fires only "error" (no "close") when the connection
-    // fails to establish — e.g. nothing listening — so both events must
-    // schedule the reconnect; the settled flag keeps it to once per socket
-    // when a failure fires both.
+    // Some WebSocket implementations fire only "error" (no "close") when a
+    // connection cannot be established, so either event settles the attempt.
     let settled = false;
     const onDown = (close?: { code: number; reason: string }): void => {
       if (!settled) {
@@ -243,29 +261,34 @@ export class IpcClient {
   }
 
   #handleMessage(ws: WebSocket, data: unknown): void {
-    if (ws !== this.#ws) {
+    if (ws !== this.#ws || ws.readyState !== WebSocket.OPEN) {
       return;
     }
     if (typeof data !== "string") {
-      this.#warnInvalidFrame("non-text message");
+      this.#closeInvalidFrame(ws, "non-text message");
       return;
     }
     let json: unknown;
     try {
       json = JSON.parse(data);
     } catch {
-      this.#warnInvalidFrame("not JSON");
+      this.#closeInvalidFrame(ws, "not JSON");
       return;
     }
     const result = parseTrayFrame(json);
     if (!result.success) {
-      this.#warnInvalidFrame("schema mismatch");
+      this.#closeInvalidFrame(ws, "schema mismatch");
       return;
     }
     if (!this.#established) {
-      // First authenticated tray frame — session established, backoff resets.
+      // First authenticated tray frame — session established; backoff normally resets.
+      // After locally rejecting the preceding peer, retain the attempt count:
+      // one valid frame followed by an invalid one must still back off.
       this.#established = true;
-      this.#attempt = 0;
+      if (!this.#previousCloseWasLocalReject) {
+        this.#attempt = 0;
+      }
+      this.#previousCloseWasLocalReject = false;
       if (this.#versionRejections > 0) {
         this.#options.logger.info(
           { evt: "ipc.version-mismatch.resolved", rejectedHandshakes: this.#versionRejections },
@@ -277,11 +300,13 @@ export class IpcClient {
     this.#options.onFrame(result.data);
   }
 
-  #warnInvalidFrame(reason: string): void {
+  #closeInvalidFrame(ws: WebSocket, reason: string): void {
+    this.#invalidFrameClose = ws;
     this.#options.logger.warn(
       { evt: "ipc.invalid-frame", reason },
-      "ignoring invalid inbound frame",
+      "closing connection after invalid inbound frame",
     );
+    ws.close(1008, "invalid inbound frame");
   }
 
   #noteVersionRejection(close: { code: number; reason: string }): void {
@@ -314,7 +339,13 @@ export class IpcClient {
       return; // stopped, or superseded by a newer socket
     }
     this.#ws = undefined;
-    const versionRejected = !this.#established && close?.code === 1008;
+    const locallyRejectedInvalidFrame = this.#invalidFrameClose === ws;
+    if (locallyRejectedInvalidFrame) {
+      this.#invalidFrameClose = undefined;
+    }
+    this.#previousCloseWasLocalReject = locallyRejectedInvalidFrame;
+    const versionRejected =
+      !locallyRejectedInvalidFrame && !this.#established && close?.code === 1008;
     if (versionRejected) {
       this.#noteVersionRejection(close);
     } else if (this.#state === "connected") {

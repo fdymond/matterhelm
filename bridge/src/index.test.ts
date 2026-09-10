@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import type { handleUnhandledRejection as HandleUnhandledRejection } from "./index.js";
+
 const seam = vi.hoisted(() => ({
   commissioned: true,
   commissionedCallbacks: new Array<(commissioned: boolean) => void>(),
@@ -7,8 +9,11 @@ const seam = vi.hoisted(() => ({
   frames: new Array<unknown>(),
   loggerErrors: new Array<{ obj: Record<string, unknown>; msg: string }>(),
   rejectSpeakerState: false,
+  sharedSpeakerStatePromises: new Array<Promise<void>>(),
   speakerStateCalls: new Array<{ level: number; onOff: boolean }>(),
 }));
+
+let handleUnhandledRejection: typeof HandleUnhandledRejection;
 
 vi.mock("./config.js", () => ({
   loadConfig: () => ({
@@ -86,6 +91,10 @@ vi.mock("./matter/bridge.js", () => ({
       },
       setSpeakerState: (level: number, onOff: boolean) => {
         seam.speakerStateCalls.push({ level, onOff });
+        const shared = seam.sharedSpeakerStatePromises[0];
+        if (shared !== undefined) {
+          return shared;
+        }
         if (seam.rejectSpeakerState) {
           seam.rejectSpeakerState = false;
           return Promise.reject(new Error("injected speaker state failure"));
@@ -108,7 +117,7 @@ describe("composition-root commissioning transitions", () => {
   beforeAll(async () => {
     const stdinOn = vi.spyOn(process.stdin, "on").mockImplementation(() => process.stdin);
     const stdinResume = vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
-    await import("./index.js");
+    ({ handleUnhandledRejection } = await import("./index.js"));
     await vi.waitFor(() => {
       expect(seam.commissionedCallbacks).toHaveLength(1);
       expect(seam.frameCallbacks).toHaveLength(1);
@@ -177,5 +186,53 @@ describe("composition-root commissioning transitions", () => {
     });
     expect(exit).not.toHaveBeenCalled();
     exit.mockRestore();
+  });
+
+  it("logs an unhandled rejection and requests non-zero idempotent shutdown", () => {
+    const logger = { error: vi.fn() };
+    const shutdown = vi.fn();
+    const rejection = new Error("injected unhandled rejection");
+
+    handleUnhandledRejection(rejection, logger, shutdown);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      {
+        evt: "process.unhandled-rejection",
+        err: "Error: injected unhandled rejection",
+      },
+      "unhandled promise rejection; shutting down for supervisor restart",
+    );
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(shutdown).toHaveBeenCalledWith("unhandled-rejection", 1);
+  });
+
+  it("observes a shared coalesced speaker-state promise only once", async () => {
+    seam.loggerErrors.length = 0;
+    let rejectShared = (reason: unknown): void => {
+      void reason;
+    };
+    seam.sharedSpeakerStatePromises.push(
+      new Promise<void>((_resolve, reject) => {
+        rejectShared = reject;
+      }),
+    );
+
+    seam.frameCallbacks[0]?.({ v: 5, type: "state", volume: 10, muted: false });
+    seam.frameCallbacks[0]?.({ v: 5, type: "state", volume: 20, muted: false });
+    seam.frameCallbacks[0]?.({ v: 5, type: "state", volume: 30, muted: true });
+    rejectShared(new Error("shared queued write failed"));
+
+    await vi.waitFor(() => {
+      expect(seam.loggerErrors).toEqual([
+        {
+          obj: {
+            evt: "matter.speaker-state.error",
+            err: "Error: shared queued write failed",
+          },
+          msg: "failed to apply tray state to the speaker endpoint",
+        },
+      ]);
+    });
+    seam.sharedSpeakerStatePromises.length = 0;
   });
 });

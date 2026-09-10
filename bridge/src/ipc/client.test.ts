@@ -10,7 +10,7 @@
  * fake timers cannot freeze.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type { WebSocket as ServerSocket, RawData } from "ws";
 
 import { backoffDelayMs, DEFAULT_BACKOFF, IpcClient } from "./client.js";
@@ -78,6 +78,7 @@ async function drainIo(turns = 200): Promise<void> {
  */
 class MockTrayServer {
   readonly frames: unknown[] = [];
+  readonly closes: { code: number; reason: string }[] = [];
   connections = 0;
   mode: "accept" | "reject" = "accept";
   #wss: WebSocketServer | undefined;
@@ -103,7 +104,8 @@ class MockTrayServer {
       this.connections += 1;
       this.#sockets.add(socket);
       this.#lastSocket = socket;
-      socket.on("close", () => {
+      socket.on("close", (code, reason) => {
+        this.closes.push({ code, reason: reason.toString("utf8") });
         this.#sockets.delete(socket);
         this.#waiter.notify();
       });
@@ -227,6 +229,7 @@ describe("IpcClient backpressure", () => {
     class FakeWebSocket extends EventTarget {
       static latest: FakeWebSocket | undefined;
       bufferedAmount = 0;
+      readyState: number = WebSocket.OPEN;
       readonly sent: string[] = [];
       readonly closes: { code?: number; reason?: string }[] = [];
       readonly url: string;
@@ -248,12 +251,16 @@ describe("IpcClient backpressure", () => {
         });
       }
     }
-    vi.stubGlobal("WebSocket", FakeWebSocket);
     const { logger, calls } = makeLogger();
     const c = new IpcClient({
       url: "ws://127.0.0.1:39531",
       token: TOKEN,
       logger,
+      createWebSocket: (url) => {
+        // The test double implements exactly the socket members IpcClient uses;
+        // the cast avoids reproducing ws's unrelated 30-member public surface.
+        return new FakeWebSocket(url) as unknown as WebSocket;
+      },
       onFrame: () => undefined,
     });
 
@@ -282,6 +289,48 @@ describe("IpcClient backpressure", () => {
     ]);
 
     connectedSocket.dispatchEvent(new Event("close"));
+    c.stop();
+  });
+
+  it("returns false while the remote peer is closing an otherwise connected socket", () => {
+    class FakeWebSocket extends EventTarget {
+      bufferedAmount = 0;
+      readyState: number = WebSocket.OPEN;
+      readonly sent: string[] = [];
+      readonly closes: { code?: number; reason?: string }[] = [];
+
+      send(payload: string): void {
+        this.sent.push(payload);
+      }
+
+      close(code?: number, reason?: string): void {
+        this.closes.push({
+          ...(code === undefined ? {} : { code }),
+          ...(reason === undefined ? {} : { reason }),
+        });
+      }
+    }
+    const socket = new FakeWebSocket();
+    const { logger } = makeLogger();
+    const c = new IpcClient({
+      url: "ws://127.0.0.1:39531",
+      token: TOKEN,
+      logger,
+      createWebSocket: () => {
+        // The test double implements exactly the socket members IpcClient uses.
+        return socket as unknown as WebSocket;
+      },
+      onFrame: () => undefined,
+    });
+
+    c.start();
+    socket.dispatchEvent(new Event("open"));
+    socket.readyState = WebSocket.CLOSING;
+
+    expect(c.state).toBe("connected"); // close handshake has not completed
+    expect(socket.closes).toEqual([]);
+    expect(c.send(playPause)).toBe(false);
+    expect(socket.sent).toHaveLength(1); // hello only
     c.stop();
   });
 });
@@ -366,30 +415,96 @@ describe("IpcClient (integration, real ws mock server)", () => {
     expect(JSON.stringify([...calls.info, ...calls.warn])).not.toContain(TOKEN);
   });
 
-  it("logs one WARN per invalid inbound frame, ignores it, and keeps the session alive", async () => {
-    const port = await server.listen();
-    const { client: c, calls, frames } = createClient(port);
-    c.start();
-    await waiter.until(() => frames.length >= 1, "state-on-connect frame");
-
-    server.sendRaw("this is not json");
-    server.sendRaw(JSON.stringify({ v: 5, type: "state", volume: 400, muted: false }));
-    server.sendBinary(Buffer.from([1, 2, 3]));
-    server.sendRaw(JSON.stringify({ v: 5, type: "ack", id: UUID, ok: false, error: "nope" }));
-
-    await waiter.until(() => frames.length >= 2, "valid ack after garbage");
-    expect(frames).toHaveLength(2); // only the valid frames surfaced
-    const warns = invalidFrameWarns(calls);
-    expect(warns).toHaveLength(3); // exactly one WARN per bad frame
-    expect(warns.map((w) => w.obj.reason).sort()).toEqual([
-      "non-text message",
+  it.each([
+    [
+      "malformed JSON",
+      () => {
+        server.sendRaw("this is not json");
+      },
       "not JSON",
+    ],
+    [
+      "schema-invalid JSON",
+      () => {
+        server.sendRaw(JSON.stringify({ v: 5, type: "state", volume: 400, muted: false }));
+      },
       "schema mismatch",
-    ]);
+    ],
+    [
+      "binary data",
+      () => {
+        server.sendBinary(Buffer.from([1, 2, 3]));
+      },
+      "non-text message",
+    ],
+  ])(
+    "closes with policy code 1008 on the first %s frame and reconnects",
+    async (_case, send, reason) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const port = await server.listen();
+      const {
+        client: c,
+        calls,
+        frames,
+        states,
+      } = createClient(port, {
+        baseMs: 10,
+        capMs: 10,
+      });
+      c.start();
+      await waiter.until(() => frames.length >= 1, "state-on-connect frame");
 
-    expect(c.send(playPause)).toBe(true); // session survived
-    await waiter.until(() => server.frames.length >= 2, "action after garbage");
-    expect(server.frames[1]).toEqual(playPause);
+      send();
+
+      await waiter.until(() => server.closes.length >= 1, "policy close after invalid frame");
+      expect(server.closes[0]).toEqual({ code: 1008, reason: "invalid inbound frame" });
+      expect(frames).toHaveLength(1);
+      expect(invalidFrameWarns(calls)).toEqual([
+        {
+          obj: { evt: "ipc.invalid-frame", reason },
+          msg: "closing connection after invalid inbound frame",
+        },
+      ]);
+      expect(versionMismatchWarns(calls)).toHaveLength(0);
+      expect(c.send(playPause)).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(20);
+      await waiter.until(() => server.connections >= 2, "bounded reconnect after invalid frame");
+      await waiter.until(() => frames.length >= 2, "state from replacement connection");
+      expect(states).toContain("waiting");
+      expect(c.send(playPause)).toBe(true);
+    },
+  );
+
+  it("keeps increasing backoff when each peer sends one valid frame before an invalid frame", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const port = await server.listen();
+    const { client: c, frames, states } = createClient(port, { baseMs: 100, capMs: 800 });
+    c.start();
+    await waiter.until(() => frames.length >= 1, "initial state frame");
+
+    server.sendRaw("not json");
+    await waiter.until(() => count(states, "waiting") >= 1, "waiting after invalid frame 1");
+    await vi.advanceTimersByTimeAsync(130); // attempt 0 maximum is 125 ms
+    await waiter.until(() => frames.length >= 2, "replacement state frame 1");
+
+    server.sendRaw("not json");
+    await waiter.until(() => count(states, "waiting") >= 2, "waiting after invalid frame 2");
+    const afterSecondReject = server.connections;
+    await vi.advanceTimersByTimeAsync(130); // attempt 1 minimum is 150 ms
+    await drainIo();
+    expect(server.connections).toBe(afterSecondReject);
+    await vi.advanceTimersByTimeAsync(130); // attempt 1 maximum is 250 ms
+    await waiter.until(() => frames.length >= 3, "replacement state frame 2");
+
+    server.sendRaw("not json");
+    await waiter.until(() => count(states, "waiting") >= 3, "waiting after invalid frame 3");
+    const afterThirdReject = server.connections;
+    await vi.advanceTimersByTimeAsync(290); // attempt 2 minimum is 300 ms
+    await drainIo();
+    expect(server.connections).toBe(afterThirdReject);
+    await vi.advanceTimersByTimeAsync(220); // attempt 2 maximum is 500 ms
+    await waiter.until(() => frames.length >= 4, "replacement state frame 3");
   });
 
   it("auth reject: closes, backs off with growing delay, reconnects when accepted, and resets backoff after an established session", async () => {

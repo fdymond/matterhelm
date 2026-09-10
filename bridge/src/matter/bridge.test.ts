@@ -12,6 +12,8 @@ import type { ClusterWrite } from "../mapping/actions.js";
 
 import {
   DEFAULT_MOMENTARY_RESET_MS,
+  ECHO_EXPECTATION_CAP,
+  ECHO_EXPECTATION_TTL_MS,
   POWER_MOMENTARY_RESET_MS,
   EchoSuppressor,
   MomentaryResetScheduler,
@@ -60,6 +62,54 @@ describe("EchoSuppressor — value-based FIFO suppression of local writes", () =
     expect(suppressor.check("speaker.onOff", true)).toBe(true);
   });
 
+  it("evicts an unmatched expectation after its TTL and logs at debug", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    };
+    const suppressor = new EchoSuppressor(logger);
+    suppressor.expect("speaker.level", 127);
+
+    vi.advanceTimersByTime(ECHO_EXPECTATION_TTL_MS);
+
+    expect(suppressor.check("speaker.level", 127)).toBe(false);
+    expect(logger.debug).toHaveBeenCalledWith(
+      { evt: "matter.echo-expectation.evicted", key: "speaker.level", reason: "ttl" },
+      "evicted unmatched speaker echo expectation",
+    );
+    vi.useRealTimers();
+  });
+
+  it("caps unmatched expectations and evicts the oldest at debug", () => {
+    let now = 0;
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    };
+    const suppressor = new EchoSuppressor(logger, () => now);
+    for (let value = 0; value < ECHO_EXPECTATION_CAP; value += 1) {
+      suppressor.expect("speaker.level", value);
+      now += 1;
+    }
+
+    suppressor.expect("speaker.level", ECHO_EXPECTATION_CAP);
+
+    expect(suppressor.check("speaker.level", 0)).toBe(false);
+    expect(suppressor.check("speaker.level", 1)).toBe(true);
+    expect(logger.debug).toHaveBeenCalledWith(
+      { evt: "matter.echo-expectation.evicted", key: "speaker.level", reason: "cap" },
+      "evicted unmatched speaker echo expectation",
+    );
+  });
+
   it("serializes racing same-value speaker writes and enqueues one expectation", async () => {
     const suppressor = new EchoSuppressor();
     let level = 0;
@@ -91,6 +141,43 @@ describe("EchoSuppressor — value-based FIFO suppression of local writes", () =
     expect(writes).toEqual([{ level: 100 }]);
     expect(suppressor.check("speaker.level", 100)).toBe(true);
     expect(suppressor.check("speaker.level", 100)).toBe(false);
+  });
+
+  it("coalesces queued speaker updates into one latest-state slot", async () => {
+    const suppressor = new EchoSuppressor();
+    let level = 0;
+    let onOff = true;
+    let releaseWrite = (): void => undefined;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writes: { level?: number; onOff?: boolean }[] = [];
+    const writer = new SerializedSpeakerStateWriter(
+      {
+        getLevel: () => level,
+        getOnOff: () => onOff,
+        setState: async (patch) => {
+          writes.push(patch);
+          if (writes.length === 1) {
+            await writeGate;
+          }
+          level = patch.level ?? level;
+          onOff = patch.onOff ?? onOff;
+        },
+      },
+      suppressor,
+    );
+
+    const active = writer.setState(50, true);
+    const replaced = writer.setState(100, false);
+    const latest = writer.setState(200, true);
+    expect(replaced).toBe(latest);
+    expect(writes).toEqual([{ level: 50 }]);
+
+    releaseWrite();
+    await Promise.all([active, replaced, latest]);
+
+    expect(writes).toEqual([{ level: 50 }, { level: 200 }]);
   });
 
   it("rolls back rejected speaker expectations so a later genuine change dispatches", async () => {

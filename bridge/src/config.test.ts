@@ -325,6 +325,20 @@ describe("parseConfig", () => {
       expect(parseConfig(withEndpoints({ custom })).endpoints.custom).toEqual(custom);
     });
 
+    it("accepts at most 64 custom commands and clearly rejects the 65th", () => {
+      const custom = Array.from({ length: 64 }, (_, index) => ({
+        key: `command-${String(index)}`,
+        name: `Command ${String(index)}`,
+      }));
+      expect(parseConfig(withEndpoints({ custom })).endpoints.custom).toHaveLength(64);
+
+      expect(() => {
+        parseConfig(
+          withEndpoints({ custom: [...custom, { key: "command-overflow", name: "Overflow" }] }),
+        );
+      }).toThrow(/custom: must contain at most 64 custom commands/);
+    });
+
     it("defaults an omitted custom resetAfterActivation field to false", () => {
       expect(
         parseConfig(withEndpoints({ custom: [{ key: "movie-mode", name: "Movie Mode" }] }))
@@ -384,6 +398,16 @@ describe("parseConfig", () => {
       expect(() => {
         parseConfig(withEndpoints({ speaker: { name: "", enabled: true } }));
       }).toThrow(/HTPC_BRIDGE_ENDPOINTS/);
+    });
+
+    it.each(["speaker", "custom"])("rejects an over-64-character %s name", (kind) => {
+      const endpoints =
+        kind === "speaker"
+          ? { speaker: { name: "n".repeat(65) } }
+          : { custom: [{ key: "too-long", name: "n".repeat(65) }] };
+      expect(() => {
+        parseConfig(withEndpoints(endpoints));
+      }).toThrow(/name: must be at most 64 characters/);
     });
 
     it("rejects a non-boolean enabled flag", () => {
@@ -520,6 +544,24 @@ describe("parseConfig", () => {
       expect(
         parseConfig(baseEnv({ HTPC_BRIDGE_UNIQUE_ID_SEED: "   " })).uniqueIdSeed,
       ).toBeUndefined();
+    });
+
+    it("caps the bridge name at 64 characters", () => {
+      expect(parseConfig(baseEnv({ HTPC_BRIDGE_NAME: "n".repeat(64) })).bridgeName).toHaveLength(
+        64,
+      );
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_NAME: "n".repeat(65) }));
+      }).toThrow(/HTPC_BRIDGE_NAME must be at most 64 characters/);
+    });
+
+    it("caps the identity seed at 128 characters", () => {
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_UNIQUE_ID_SEED: "s".repeat(128) })).uniqueIdSeed,
+      ).toHaveLength(128);
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_UNIQUE_ID_SEED: "s".repeat(129) }));
+      }).toThrow(/HTPC_BRIDGE_UNIQUE_ID_SEED must be at most 128 characters/);
     });
 
     it.each([

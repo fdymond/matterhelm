@@ -110,6 +110,10 @@ function resolveBridgeName(configured: string | undefined): string {
 const SPEAKER_ONOFF = "speaker.onOff";
 const SPEAKER_LEVEL = "speaker.level";
 
+/** Bounds unmatched local-write expectations without relying on timers. */
+export const ECHO_EXPECTATION_TTL_MS = 5000;
+export const ECHO_EXPECTATION_CAP = 32;
+
 export interface BridgeOptions {
   /** matter.js storage dir (fabric credentials; delete = factory reset). */
   storageDir: string;
@@ -200,11 +204,20 @@ export interface BridgeHandle {
  * module doc for the design and its concurrency caveat.
  */
 export class EchoSuppressor {
-  readonly #pending = new Map<string, { value: unknown }[]>();
+  readonly #pending = new Map<string, { value: unknown; createdAt: number }[]>();
+  readonly #logger: DiagnosticsLogger | undefined;
+  readonly #now: () => number;
+
+  constructor(logger?: DiagnosticsLogger, now: () => number = () => performance.now()) {
+    this.#logger = logger;
+    this.#now = now;
+  }
 
   /** Records a local write and returns an idempotent cancellation callback. */
   expect(key: string, value: unknown): () => void {
-    const expectation = { value };
+    this.#pruneExpired();
+    this.#evictAtCapacity();
+    const expectation = { value, createdAt: this.#now() };
     const queue = this.#pending.get(key);
     if (queue === undefined) {
       this.#pending.set(key, [expectation]);
@@ -231,6 +244,7 @@ export class EchoSuppressor {
    * events in commit order, so our own write's event is still en route.
    */
   check(key: string, value: unknown): boolean {
+    this.#pruneExpired();
     const queue = this.#pending.get(key);
     if (queue === undefined || queue.length === 0) {
       return false;
@@ -244,6 +258,58 @@ export class EchoSuppressor {
     }
     return false;
   }
+
+  #pruneExpired(): void {
+    const expiresBefore = this.#now() - ECHO_EXPECTATION_TTL_MS;
+    for (const [key, queue] of this.#pending) {
+      while ((queue[0]?.createdAt ?? Number.POSITIVE_INFINITY) <= expiresBefore) {
+        queue.shift();
+        this.#logEviction(key, "ttl");
+      }
+      if (queue.length === 0) {
+        this.#pending.delete(key);
+      }
+    }
+  }
+
+  #evictAtCapacity(): void {
+    if (this.#size() < ECHO_EXPECTATION_CAP) {
+      return;
+    }
+    let oldestKey: string | undefined;
+    let oldestAt = Number.POSITIVE_INFINITY;
+    for (const [key, queue] of this.#pending) {
+      const createdAt = queue[0]?.createdAt;
+      if (createdAt !== undefined && createdAt < oldestAt) {
+        oldestAt = createdAt;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey === undefined) {
+      return;
+    }
+    const queue = this.#pending.get(oldestKey);
+    queue?.shift();
+    if (queue?.length === 0) {
+      this.#pending.delete(oldestKey);
+    }
+    this.#logEviction(oldestKey, "cap");
+  }
+
+  #size(): number {
+    let size = 0;
+    for (const queue of this.#pending.values()) {
+      size += queue.length;
+    }
+    return size;
+  }
+
+  #logEviction(key: string, reason: "ttl" | "cap"): void {
+    this.#logger?.debug(
+      { evt: "matter.echo-expectation.evicted", key, reason },
+      "evicted unmatched speaker echo expectation",
+    );
+  }
 }
 
 interface SpeakerStateTarget {
@@ -252,42 +318,97 @@ interface SpeakerStateTarget {
   setState(patch: { level?: number; onOff?: boolean }): Promise<void>;
 }
 
-/** Serializes local speaker writes so dedup reads always observe prior commits. */
+class SpeakerStateRequest {
+  level0to254: number;
+  onOff: boolean;
+  readonly promise: Promise<void>;
+  #resolve: () => void = () => undefined;
+  #reject: (reason: unknown) => void = () => undefined;
+
+  constructor(level0to254: number, onOff: boolean) {
+    this.level0to254 = level0to254;
+    this.onOff = onOff;
+    this.promise = new Promise<void>((resolve, reject) => {
+      this.#resolve = resolve;
+      this.#reject = reject;
+    });
+  }
+
+  resolve(): void {
+    this.#resolve();
+  }
+
+  reject(reason: unknown): void {
+    this.#reject(reason);
+  }
+}
+
+/** Serializes speaker writes with one coalescing latest-state slot. */
 export class SerializedSpeakerStateWriter {
   readonly #speaker: SpeakerStateTarget;
   readonly #suppressor: EchoSuppressor;
-  #tail: Promise<void> = Promise.resolve();
+  #active = false;
+  #pending: SpeakerStateRequest | undefined;
 
   constructor(speaker: SpeakerStateTarget, suppressor: EchoSuppressor) {
     this.#speaker = speaker;
     this.#suppressor = suppressor;
   }
 
-  async setState(level0to254: number, onOff: boolean): Promise<void> {
-    const pending = this.#tail.then(async () => {
-      const patch: { level?: number; onOff?: boolean } = {};
-      const cancelExpectations: (() => void)[] = [];
-      if (this.#speaker.getLevel() !== level0to254) {
-        patch.level = level0to254;
-        cancelExpectations.push(this.#suppressor.expect(SPEAKER_LEVEL, level0to254));
+  setState(level0to254: number, onOff: boolean): Promise<void> {
+    if (this.#active) {
+      if (this.#pending === undefined) {
+        this.#pending = new SpeakerStateRequest(level0to254, onOff);
+      } else {
+        this.#pending.level0to254 = level0to254;
+        this.#pending.onOff = onOff;
       }
-      if (this.#speaker.getOnOff() !== onOff) {
-        patch.onOff = onOff;
-        cancelExpectations.push(this.#suppressor.expect(SPEAKER_ONOFF, onOff));
+      return this.#pending.promise;
+    }
+
+    this.#active = true;
+    const request = new SpeakerStateRequest(level0to254, onOff);
+    void this.#drain(request);
+    return request.promise;
+  }
+
+  async #drain(initial: SpeakerStateRequest): Promise<void> {
+    let request: SpeakerStateRequest | undefined = initial;
+    while (request !== undefined) {
+      try {
+        await this.#apply(request.level0to254, request.onOff);
+        request.resolve();
+      } catch (error) {
+        request.reject(error);
       }
-      if (patch.level !== undefined || patch.onOff !== undefined) {
-        try {
-          await this.#speaker.setState(patch);
-        } catch (error) {
-          for (const cancel of cancelExpectations) {
-            cancel();
-          }
-          throw error;
-        }
+      request = this.#pending;
+      this.#pending = undefined;
+    }
+    this.#active = false;
+  }
+
+  async #apply(level0to254: number, onOff: boolean): Promise<void> {
+    const patch: { level?: number; onOff?: boolean } = {};
+    const cancelExpectations: (() => void)[] = [];
+    if (this.#speaker.getLevel() !== level0to254) {
+      patch.level = level0to254;
+      cancelExpectations.push(this.#suppressor.expect(SPEAKER_LEVEL, level0to254));
+    }
+    if (this.#speaker.getOnOff() !== onOff) {
+      patch.onOff = onOff;
+      cancelExpectations.push(this.#suppressor.expect(SPEAKER_ONOFF, onOff));
+    }
+    if (patch.level === undefined && patch.onOff === undefined) {
+      return;
+    }
+    try {
+      await this.#speaker.setState(patch);
+    } catch (error) {
+      for (const cancel of cancelExpectations) {
+        cancel();
       }
-    });
-    this.#tail = pending.catch(() => undefined);
-    await pending;
+      throw error;
+    }
   }
 }
 
@@ -475,7 +596,7 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     uniqueId: identity.uniqueId,
   });
 
-  const suppressor = new EchoSuppressor();
+  const suppressor = new EchoSuppressor(options.logger);
 
   const emit = (event: EndpointEvent): void => {
     const write = endpointEventToClusterWrite(event);
