@@ -1,6 +1,6 @@
 # Dependency updates (S10-3). Grouped weekly PRs so a quiet week costs one
-# review, not six. Works while the repo is private; the security-alert feed
-# is a separate repo setting (Settings → Advanced Security).
+# review, not six. The security-alert feed is a separate repository setting
+# (Settings → Advanced Security).
 version: 2
 updates:
   # Matter sidecar. matter.js is pinned exactly and is the one dependency
@@ -11,6 +11,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
       dev-tooling:
         patterns:
@@ -37,6 +42,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       test-tooling:
         patterns:
@@ -50,6 +59,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       actions:
         patterns:

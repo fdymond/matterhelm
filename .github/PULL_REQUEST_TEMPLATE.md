@@ -18,7 +18,8 @@ with evidence pasted below, not just checked off:
 - [ ] Relevant demo(s) re-run and passing (exit 0), if this touches UI,
       sidecar↔executor wiring, or config/protocol plumbing — or N/A.
       (`--demo-wired`, `--demo-overlay`, `--demo-pairing-window`,
-      `--demo-settings-window`, `--demo-sidecar-chaos`)
+      `--demo-settings-window`, `--demo-sidecar-chaos`,
+      `--demo-welcome-window`)
 - [ ] Docs updated if behavior changed (README status, `docs/BLUEPRINT.md`,
       `BACKLOG.md` story status) — or N/A.
 - [ ] New architectural decision or deviation from `docs/BLUEPRINT.md` has an

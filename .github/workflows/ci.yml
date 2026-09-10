@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bridge-verify:
     strategy:
@@ -16,8 +23,8 @@ jobs:
       run:
         working-directory: bridge
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -54,14 +61,14 @@ jobs:
   app-build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
       - run: dotnet build app/MatterHelm/MatterHelm.csproj -c Release
       - run: dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release --collect:"XPlat Code Coverage"
       - name: Coverage report (ReportGenerator)
-        uses: danielpalme/ReportGenerator-GitHub-Action@5.5.11
+        uses: danielpalme/ReportGenerator-GitHub-Action@d3ebf1f760f7d8ab92cc44d9bcfee7ad73722a31 # 5.5.11
         with:
           reports: app/MatterHelm.Tests/TestResults/**/coverage.cobertura.xml
           targetdir: coveragereport
@@ -72,7 +79,7 @@ jobs:
       # ADR-006 §3: app is UI/interop-heavy (WinForms tray UI, Win32 P/Invoke
       # actions) — those paths are exercised manually/E2E, not unit tests; the
       # pure-logic bar lives in code review, not this gate. Threshold is set
-      # a few points below the measured local baseline (~50% line coverage
+      # a few points below the measured local baseline (~58% line coverage
       # with the current test suite) to catch regressions without being
       # brittle to incidental line-count drift; raise as UI/interop code
       # gains test seams.
@@ -90,4 +97,31 @@ jobs:
           if ($pct -lt $threshold) {
             Write-Error "App line coverage $pct% is below the $threshold% threshold (ADR-006 §3)."
             exit 1
+          }
+
+  package:
+    name: Package
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Build distribution
+        run: ./build.ps1 -SkipTests
+      - name: Compile installer and assert package metadata
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.0.0 /Q installer\matterhelm.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          foreach ($path in @('dist/THIRD-PARTY-NOTICES.txt', 'dist/sidecar-layout.json')) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Packaging did not produce required artifact '$path'."
+            }
           }

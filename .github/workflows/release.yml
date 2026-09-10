@@ -1,6 +1,6 @@
 name: release
 
-# Tag-triggered release. Push a `v*` tag (e.g. `v0.1.0`) to run the full
+# Tag-triggered release. Push a `v*` tag (e.g. `v0.7.1`) to run the full
 # verify/build/test gate and publish a GitHub Release with auto-generated
 # notes. Mirrors ci.yml's setup steps (node 22, dotnet 10.0.x) so this job
 # exercises exactly what CI already proved green on main.
@@ -9,24 +9,56 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a tag release between provenance attestation and publication.
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - name: Assert release tag matches package versions
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          [xml]$project = Get-Content app/MatterHelm/MatterHelm.csproj -Raw
+          $appVersion = $project.SelectSingleNode('//Version').InnerText
+          $bridgeVersion = (Get-Content bridge/package.json -Raw | ConvertFrom-Json).version
+          if ($tagVersion -ne $appVersion) {
+            throw "Release tag version '$tagVersion' does not match app/MatterHelm/MatterHelm.csproj Version '$appVersion'."
+          }
+          if ($tagVersion -ne $bridgeVersion) {
+            throw "Release tag version '$tagVersion' does not match bridge/package.json version '$bridgeVersion'."
+          }
+          Write-Host "Release version verified: $tagVersion"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: bridge/package-lock.json
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+
+      - name: Bridge dependencies
+        working-directory: bridge
+        run: npm ci
+
+      - name: Bridge verify
+        working-directory: bridge
+        run: npm run verify
 
       - name: App build (Release, warnings-as-errors)
         run: dotnet build app/MatterHelm/MatterHelm.csproj -c Release
@@ -34,12 +66,12 @@ jobs:
       - name: App tests
         run: dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
 
-      # S3-1: build.ps1 owns bridge dependency installation, verification, and
-      # packaging, then produces the single self-contained dist/ folder (Node
+      # Bridge and app tests are explicit gates above, so build.ps1 skips its
+      # duplicate bridge verification and produces the self-contained dist/ (Node
       # SEA sidecar exe + dotnet-publish single-file tray exe; no dev tools
       # required on the target machine).
       - name: Build dist
-        run: ./build.ps1
+        run: ./build.ps1 -SkipTests
 
       - name: Zip dist (portable)
         run: Compress-Archive -Path dist/* -DestinationPath matterhelm-${{ github.ref_name }}-win-x64.zip
@@ -68,8 +100,16 @@ jobs:
           Set-Content SHA256SUMS.txt $lines -Encoding ascii
           Get-Content SHA256SUMS.txt
 
+      - name: Attest release build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            matterhelm-${{ github.ref_name }}-win-x64.zip
+            dist-installer/MatterHelm-Setup-*.exe
+            SHA256SUMS.txt
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           generate_release_notes: true
           files: |
