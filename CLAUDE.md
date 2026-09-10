@@ -5,6 +5,8 @@ This repo is built by AI sub-agents under an integrator. Read this first, then
 (quality bar). `BACKLOG.md` is the work queue; `docs/DEVELOPMENT-PLAN.md`
 defines Done.
 
+`AGENTS.md` points here; this file remains the binding agent playbook.
+
 ## Ground rules for every agent
 
 1. **One story per agent.** Your assignment names a story ID; its acceptance
@@ -36,18 +38,23 @@ npm test -- src/mapping/actions.test.ts   # single test file (vitest)
 npm test -- -t "volume"                   # tests matching a name
 ```
 
-Node 22 LTS. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the tray app
-builds with
+Node 22.13+ LTS; `@matter/main` is pinned at 0.17.7. Re-verify ADR-010 on every
+matter.js upgrade. dotnet is at `"C:\Program Files\dotnet\dotnet.exe"`; the
+tray app builds with
 `dotnet build app/MatterHelm/MatterHelm.csproj -c Release`
-(warnings-as-errors). This product is fully standalone (ADR-001): never
+and tests with
+`dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release`
+(warnings-as-errors). Demo harnesses run from
+`app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe`.
+This product is fully standalone (ADR-001): never
 reference, read config from, or depend on code outside this repository.
 
-**Current state**: both applications are implemented and ship together.
-`npm run verify` and the .NET build/test commands are live merge gates; a
-failure is actionable unless the story report demonstrates a specific
-environment or concurrent-work limitation. The C# projects currently target
-`net10.0-windows10.0.17763.0`; re-read the project at release time before
-stating the Windows floor in public documentation.
+**Current state**: v0.7.1 ships the completed Sprint 11 product; the bridge and
+tray app are implemented and ship together. Current test counts are published
+by CI; app line coverage is about 58 % with a 45 % CI floor. `npm run verify`
+and the .NET build/test commands remain live merge gates. Both C# projects target
+`net10.0-windows10.0.17763.0` (Windows 10 1809+ x64); re-read the projects at
+release time before stating that floor in public documentation.
 
 ## Architecture invariants (enforced in review)
 
@@ -55,9 +62,16 @@ stating the Windows floor in public documentation.
 - matter.js types stay behind `matter/adapter.ts`; protocol types behind
   `ipc/protocol.ts`; both boundaries are the ONLY places their packages are
   imported.
-- All inbound IPC frames zod-parsed; all trust boundaries validated.
+- All inbound IPC frames are parsed at their boundary (zod in the bridge,
+  typed records in the app); all trust boundaries are validated.
 - Pure logic (`mapping/`, protocol schemas) has ≥ 90 % test coverage.
-- IPC binds to 127.0.0.1 only; token via env; token never logged/persisted.
+- IPC stays on the `localhost` loopback only: the tray explicitly rejects a
+  non-loopback remote endpoint before client-slot admission; token via env;
+  token never logged/persisted; either peer closes on its first invalid frame.
+- `BridgeHost` remains the app façade/composition root; lifecycle, action/macro
+  dispatch, and state publication belong in `BridgeLifecycleCoordinator`,
+  `BridgeActionDispatcher`, and `VolumeStatePublisher`. `MediaKeys` remains a
+  façade over `FocusedMediaRouter` and `WindowsForegroundMediaCommandSender`.
 - Normative specs: device model = BLUEPRINT §2.2, IPC frames = BLUEPRINT §2.3.
   `app/.../Sidecar/Protocol.cs` must mirror `bridge/src/ipc/protocol.ts`
   exactly — changing one side without the other is protocol drift (review

@@ -1,6 +1,7 @@
 # MatterHelm
 
 [![CI](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml/badge.svg)](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/fdymond/matterhelm/actions/workflows/codeql.yml/badge.svg)](https://github.com/fdymond/matterhelm/actions/workflows/codeql.yml)
 [![Latest release](https://img.shields.io/github/v/release/fdymond/matterhelm)](https://github.com/fdymond/matterhelm/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -12,8 +13,9 @@ custom actions directly on the PC.
 No cloud, no OAuth server, no paid certification: pairing is a one-time
 QR-code scan — Matter over your local network via a
 [matter.js](https://github.com/matter-js/matter.js) virtual bridge, executed
-natively by a tiny Windows tray app. Fully self-contained (`docs/adr/001`):
-no external services, no companion apps.
+natively by a small Windows tray app. Fully self-contained by
+[ADR-001](docs/adr/001-standalone-tray-app.md): no external services and no
+companion apps.
 
 ```
 Google Home app / Nest speaker
@@ -22,8 +24,9 @@ Google Home app / Nest speaker
 bridge/  Node 22 + matter.js sidecar      (Matter Aggregator: Speaker + switches)
         │  localhost WebSocket, token-auth
         ▼
-app/     C# .NET 10 WinForms tray app     (supervisor + executor + UI)
-        ├─ ActionExecutor → SMTC + media keys / CoreAudio / key chords / system commands
+app/     C# .NET 10 WinForms tray app     (lifecycle + dispatch + UI)
+        ├─ BridgeLifecycleCoordinator / BridgeActionDispatcher / VolumeStatePublisher
+        ├─ ActionExecutor → focused media router / CoreAudio / key chords / system commands
         └─ Overlay HUD    → click-through pop-ups: incoming command + result
 ```
 
@@ -49,8 +52,10 @@ app/     C# .NET 10 WinForms tray app     (supervisor + executor + UI)
 - **Local-first diagnostics** — structured logs, metrics snapshots with
   resource gauges, one-click privacy-scrubbed diagnostics export. Nothing
   ever leaves the machine.
-- **Lean** — measured budgets, enforced: tray ≈ 15 MB private, one sidecar
-  process ≈ 95 MB, idle CPU < 0.5 % (see `docs/adr/007`).
+- **Lean** — budgets: tray ≤ 32 MB private, sidecar ≤ 120 MB (one process),
+  idle CPU < 0.5 %, measured per release
+  ([ADR-007](docs/adr/007-resource-budgets-measured.md)); latest measurement
+  2026-09-10: tray 18.5 MB, sidecar 90.8 MB, idle 0.0 % / 0.1 %.
 
 ## Setup from scratch
 
@@ -65,7 +70,7 @@ detail plus troubleshooting.
 | **Windows 10 version 1809 (build 17763) or later**, x64 | The current app target is `net10.0-windows10.0.17763.0`; Windows 10 and 11 are supported |
 | A **Google Nest hub** on the same LAN — Nest Hub/Mini/Audio, Nest Wifi Pro, or Google TV Streamer | Google requires a hub to commission Matter devices; a phone alone cannot (`docs/adr/002`) |
 | **IPv6 enabled** on the active network adapter | A hard Matter requirement, even though all traffic stays local. It's on by default — only check this if pairing later fails |
-| The **Google Home app**, signed into the account that owns your home | Does the pairing scan |
+| The **Google Home app**, signed into the account that manages your home | Does the pairing scan |
 
 ### 2. Register the test IDs (one-time, free)
 
@@ -114,7 +119,7 @@ are the same thing done by hand. (Tray menu → **Setup guide…** reopens it.)
 
 ### 4. Name your devices before pairing
 
-Right-click the tray icon → **Settings** → **Devices**. The names here become
+Right-click the tray icon → **Settings…** → **Devices**. The names here become
 your voice targets and are what the Home app offers during pairing, so set
 them now — especially if more than one PC will run MatterHelm (see below).
 Untick anything you don't want published.
@@ -131,18 +136,18 @@ Untick anything you don't want published.
    the hub can't discover the bridge.
 3. The pairing window shows the phone-side steps, a QR code, an 11-digit manual
    code, and a live status line that follows the bridge through to paired.
-4. In the Home app: **+ Add** → **Matter-enabled device**, scan the QR (or
-   "Set up without QR code" and type the manual code).
+4. In the Home app: **+** → **Add device** → **Matter-enabled device**, scan
+   the QR (or "Set up without QR code" and type the manual code).
 5. Tap through the **"not Matter-certified"** notice — expected for a
    self-hosted device. A hard *"Not a Matter-certified device"* failure
    instead means step 2 didn't take.
 6. Pick a home/room and confirm the device names. The tray icon turns
    **green**.
 
-Tray legend: **gray** = disabled; **amber** = starting or awaiting lifecycle
-status; **blue** = healthy and awaiting pairing; **green** = commissioned and
-connected; **red** = a sidecar crash loop or missing commissionable
-advertisement.
+Tray legend: **monochrome (theme-matched)** = disabled; **amber** = starting or
+awaiting lifecycle status; **blue** = healthy and awaiting pairing; **green** =
+commissioned and connected; **red** = a sidecar crash loop or missing
+commissionable advertisement.
 
 You'll get tiles for **HTPC Speaker**, **HTPC Play Pause**, **HTPC Next**,
 **HTPC Previous**, **HTPC Power**, plus one per custom command.
@@ -152,13 +157,13 @@ You'll get tiles for **HTPC Speaker**, **HTPC Play Pause**, **HTPC Next**,
 > "Hey Google, set HTPC Speaker volume to 40 %"
 > "Hey Google, turn on HTPC Play Pause"
 
-Play/Pause On requests Play and Off requests Pause in the focused program
-first. MatterHelm verifies or falls back through a Windows media session only
-when its owner matches the focused app; a different app's stale session cannot
-suppress or prove the command. If focused delivery fails, the current session
-becomes the absolute fallback target. Sessionless players such as Kodi remain
-usable but explicitly unverifiable. Next and
-Previous retain their displayed state and fire once on either user transition.
+Play/Pause sends the requested Play or Pause command to the focused program
+first. It uses an absolute Windows media-session fallback only when the session
+belongs to the same app; sessionless players such as Kodi can receive the
+focused command, but MatterHelm cannot verify the result.
+
+Next and Previous retain their displayed state and fire once on either user
+transition.
 
 For natural phrasing like *"pause the HTPC"*, set up Google Home routines —
 see [docs/routines.md](docs/routines.md).
@@ -209,50 +214,47 @@ beside it, then start it — a fresh identity is minted.
 
 ## Building from source
 
-```bash
-cd bridge && npm ci && npm run verify        # sidecar: lint + types + 393 tests
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release   # 826 tests
-./build.ps1                                  # dist/: portable folder, SEA sidecar
+```powershell
+Push-Location bridge
+npm ci
+npm run verify     # sidecar: lint + types + tests
+Pop-Location
+dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release  # all discovered tests
+.\build.ps1        # dist/: portable folder, SEA sidecar
 ```
 
-> **0.5.0 gate evidence** (integrator, standard commands, clean environment):
-> bridge `npm run verify` 391/391 green (lint + typecheck + tests, zero
-> warnings); app suite 720/720 green; `build.ps1` SEA packaging succeeds;
-> overlay, pairing-window and wired demos PASS. Dedicated Play/Pause were
-> additionally verified against a live Windows media session in the packaged
-> build: absolute play with a session, honest failure without one.
+Dev requirements: Node 22.13+ LTS, .NET 10 SDK, Windows. CI runs the same gates
+on every push (bridge verify on Ubuntu and Windows, bridge coverage on Ubuntu,
+and app build + tests + coverage on Windows).
 
-Dev requirements: Node 22 LTS, .NET 10 SDK, Windows. CI runs the same gates
-on every push (bridge verify + coverage on ubuntu/windows, app build + tests
-+ coverage on windows).
+## How it is built
+
+MatterHelm is developed with AI coding agents under human review, using the
+transparent workflow in [`CLAUDE.md`](CLAUDE.md). Every change is held to the
+same review, test, coverage, and documentation gates regardless of who or what
+wrote it.
 
 ## Status
 
-**0.5.0 is unreleased.** Its documentation and hardware release gates are in
-progress; see the changelog's `[Unreleased]` section and current E2E checklist.
-The latest tagged release is **v0.4.4** (deep-review hardening of
-lifecycle/memory paths, streamlined onboarding, filtered adapter dropdown,
-honest display-power labelling; v0.4.3 before it: DDC/CI display power — no
-more Modern-Standby sleep on "displays off" — single-pill overlay, mDNS
-adapter dropdown; v0.4.2 before it: Windows mDNS discovery fix — the bridge now answers
-mDNS queries instead of announcing into the void — tray auto-update,
-advertisement health status, live pairing window with auto-close, blue
-awaiting-pairing tray state, power-action fidelity with screensaver
-support; v0.4.1 before it: first-run guide, rebuilt pairing window,
-factory-reset re-pair fix). Commissioned and exercised against real
-Nest hub hardware, re-paired end-to-end after the discovery fix. Automated
-test inventory is 1,111 (391 bridge + 720 app), but clean 0.5.0 release-gate
-results remain pending an integrator run outside this restricted sandbox.
-Measured resource budgets are recorded in `docs/adr/007`, and the current
-scripted hardware E2E checklist is `docs/e2e-log.md`. See
-[`CHANGELOG.md`](CHANGELOG.md) for history and
-[`BACKLOG.md`](BACKLOG.md) for what's next.
+The current release is **v0.7.1** (2026-09-01). MatterHelm has been commissioned
+and exercised on real Google Nest hardware; known limits are unsigned binaries
+that may trigger SmartScreen, the one-time Google test-VID registration, and
+unverifiable delivery to sessionless players such as Kodi.
+
+Current automated gates and coverage are published by
+[CI](https://github.com/fdymond/matterhelm/actions/workflows/ci.yml); per-release
+results belong in the corresponding release notes. See
+[`CHANGELOG.md`](CHANGELOG.md) for release history.
+
+## Roadmap
+
+The maintained work index and proposed queue are in [`BACKLOG.md`](BACKLOG.md).
 
 ## Contributing
 
 Issues and PRs welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
 build/test workflow, engineering bar, commit conventions, and the
-protocol-parity and ADR rules that govern changes. Questions → 
+protocol-parity and ADR rules that govern changes. Questions →
 [`SUPPORT.md`](SUPPORT.md).
 
 ## Security

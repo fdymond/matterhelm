@@ -38,7 +38,9 @@ serves one of those four words; anything that doesn't is ceremony and gets cut.
 - Logging: pino, structured, one line per event
   (`{evt: "action", name, ok}`), silent when idle. Log level via config.
 - Dependencies: production deps require justification in the PR/story report;
-  pin exact versions; `npm audit` clean at release.
+  pin exact versions; `npm audit` clean at release. The current bridge uses
+  `@matter/main` 0.17.7; every upgrade must re-verify the ADR-010 Windows mDNS
+  workaround before merge.
 - Errors: never swallow; `catch` blocks either handle meaningfully or add
   context and rethrow. No empty catches.
 
@@ -51,7 +53,12 @@ UI thread via `SynchronizationContext` and fired outside locks, P/Invoke over
 new dependencies (a NuGet needs justification). Build with
 **warnings-as-errors**; WinForms is not trim-compatible — never add
 `PublishTrimmed`. UI never blocks on IPC or process supervision; the overlay
-HUD is click-through, non-activating, and updates in place.
+HUD is click-through, non-activating, and updates in place. Both projects
+target `net10.0-windows10.0.17763.0` (Windows 10 version 1809+ x64).
+
+- App logs retain seven days, cap a day at twenty 5 MiB segments with
+  oldest-first eviction, and summarize identical WARN/ERROR bursts after 20
+  lines/minute.
 
 ## Testing
 
@@ -62,20 +69,27 @@ HUD is click-through, non-activating, and updates in place.
 - Tests are specification: name them for behavior
   (`"volume write of 254 maps to setVolume 100"`), not for methods.
 - Fake timers for all time-dependent logic; no sleeps in tests; suite < 30 s.
+- v0.7.1 tag: 393 bridge / 826 app; current counts are published by CI. App
+  line coverage is about 58 %; CI enforces a 45 % floor.
 
 ## Git & releases
 
 - Conventional Commits; imperative subject ≤ 72 chars; body = why.
 - Small merges: one story = one merge to `main`; `main` always green.
 - SemVer from 0.1.0; protocol version is independent (`protocol.ts`) and only
-  ever bumped with an ADR.
+  ever bumped with an ADR. v0.7.1 is the current release; IPC message revision
+  5 is mirrored by the bridge and app.
 - No secrets in the repo, ever. The IPC token is generated at runtime by the
   supervisor and passed via environment — never logged, never persisted.
 
 ## Security
 
-- WS server/client bound to `127.0.0.1` only; token-authenticated hello; close
-  on first invalid frame. zod-validate every field of every inbound frame.
+- WS server/client stay on the `localhost` loopback only. Because HTTP.sys may
+  bind more broadly than the literal prefix, reject non-loopback remote
+  endpoints with HTTP 403 before single-client admission and log only the
+  address family. Use a token-authenticated hello; close either peer on its
+  first invalid frame (the Node client sends policy code 1008), then recover
+  through bounded reconnect. Validate every inbound field at its boundary.
 - Matter storage dir contains fabric credentials — user-profile scoped
   (`%APPDATA%`), never in the repo or dist archives.
 - The sidecar executes **no** shell commands and takes **no** network input

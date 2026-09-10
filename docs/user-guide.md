@@ -4,9 +4,10 @@ MatterHelm turns your Windows HTPC into a **locally-paired Google Home
 device**. Once it's set up you can say "Hey Google, set HTPC volume to
 40 %", tap the devices in the Google Home app, or build routines like
 "movie time" — and the app carries out the volume/media/power action
-directly on your PC. Nothing about this involves the cloud beyond Google's
-own Home app/hub: pairing is a one-time local QR-code scan, the same way you'd
-pair any other Matter device.
+directly on your PC. The control path stays on your LAN through Google's
+Home app/hub; the only separate network feature is an optional release check
+to GitHub. Pairing is a one-time local QR-code scan, the same way you'd pair
+any other Matter device.
 
 This guide is written for someone setting the app up for the first time, not
 a developer. If you hit something this guide doesn't cover, see
@@ -29,9 +30,9 @@ repository root.
   receives the resulting Matter command.
 - It is **not** a media player. Play, Pause, and Play/Pause first address the
   focused program. MatterHelm uses Windows System Media Transport Controls
-  (SMTC) only when the session owner matches that focused app, or as the target
-  after focused delivery fails. A delivered command to an app with no session
-  is explicitly unverifiable.
+  (SMTC) only when the session belongs to that focused app, or uses the captured
+  current session when no foreground target can be captured. A delivered
+  command to an app with no session is explicitly unverifiable.
 
 ## Prerequisites
 
@@ -43,7 +44,7 @@ Before you install anything, make sure you have:
 2. A **Google Nest hub device** — a Nest Hub, Nest Mini, Nest Audio, Nest
    Wifi Pro, or Google TV Streamer — on the **same Wi-Fi/LAN** as the PC.
    A phone alone is not enough: Google requires a hub device to act as the
-   Matter "border" for locally-commissioned devices like this one.
+   Matter controller for locally commissioned devices like this one.
 3. **IPv6 enabled end to end.** Matter requires IPv6 on the network interface
    MatterHelm uses **and** on the LAN path between the phone/Nest hub and the
    PC. The router must pass local IPv6 traffic and Neighbor Discovery (ND)
@@ -51,8 +52,9 @@ Before you install anything, make sure you have:
    `ipconfig` and confirm the selected adapter has a "Link-local IPv6
    Address". See [IPv6 and Neighbor Discovery](#ipv6-and-neighbor-discovery)
    if pairing produces only a generic timeout.
-4. The **Google Home app** on your phone, signed into the account that owns
-   your home, with Bluetooth and local-network permissions granted to it.
+4. The **Google Home app** on your phone, signed into an account that is a
+   member of your home, with Bluetooth and local-network permissions granted
+   to it.
 5. A one-time, **free** Google Home Developer Console registration (below) —
    this is not a paid or certified-manufacturer program, just a small form
    that tells Google "this test device is safe to pair."
@@ -84,9 +86,10 @@ about five minutes and only needs to be done once per Google account.
 6. If you picked different values (or already use `0xFFF1`/`0x8000` for
    another test device), set the matching pair in MatterHelm: Settings →
    Advanced → **Vendor ID (VID)** / **Product ID (PID)**. They accept hex
-   (`0x8003`) or decimal. Changing them after pairing re-pairs the bridge.
-7. Confirm the phone's Google account is the **owner** (or a member) of this
-   project — commissioning only works for accounts in the project that
+   (`0x8003`) or decimal. If the bridge is already paired, save the matching
+   values, then factory-reset and pair it again.
+7. Confirm the phone's Google account is a **member** of this project —
+   commissioning only works for accounts in the project that
    registered the VID/PID.
 
 If a step doesn't match what's on screen, look for wording like "test
@@ -101,15 +104,19 @@ options.
      start-with-Windows checkbox, a Start-menu entry, and a clean uninstall
      that keeps your pairing and settings.
    - **Portable zip** (`matterhelm-v<version>-win-x64.zip`): unzip anywhere
-     (e.g. `C:\Apps\MatterHelm\`). The folder contains `MatterHelm.exe` plus
-     a `sidecar\` folder — keep them together.
+      (e.g. `C:\Apps\MatterHelm\`). The folder contains `MatterHelm.exe` plus
+      a `sidecar\` folder — keep them together. Both packages also carry
+      `THIRD-PARTY-NOTICES.txt`; `sidecar-layout.json` tells the tray whether
+      this build uses `sidecar\bridge.exe` or the
+      `sidecar\node.exe` + `sidecar\bridge.cjs` fallback.
 
    Both are self-contained — no Node.js or .NET runtime needed. You can
    verify a download against the release's `SHA256SUMS.txt`:
    `certutil -hashfile <file> SHA256`.
 2. Run `MatterHelm.exe` (the installer offers to). The helm icon
    appears in the system tray (the hidden-icons area near the clock) —
-   that's the whole UI surface.
+   that's the main control surface; a fresh unpaired install also opens the
+   one-time **Welcome** window.
 3. **Windows Firewall will likely prompt** the first time the bridge starts
    ("Windows Defender Firewall has blocked some features of this app").
    Click **Allow access** for **Private networks** (you don't need Public/
@@ -130,8 +137,10 @@ verified against `SHA256SUMS.txt` from that same release before it can run.
   MatterHelm and its bridge cleanly, then starts the verified installer in
   silent mode. The installer shows progress and does not restart Windows.
 - A **portable** copy downloads the matching zip, closes MatterHelm and its
-  bridge, replaces the files in the current portable folder from a temporary
-  helper, and relaunches `MatterHelm.exe`.
+  bridge, stages it through a temporary helper, copies the new files over the
+  current portable folder, removes the known files belonging to the other
+  sidecar layout, and relaunches `MatterHelm.exe`. Unrelated files that you put
+  in the portable folder are left alone.
 
 MatterHelm also checks quietly about one minute after startup and every 24
 hours. A newer release produces one subtle tray notification; it is never
@@ -139,11 +148,10 @@ downloaded automatically. To disable background checks, set
 `"updateCheckEnabled": false` in `config.json` and choose **Reload config**;
 manual checks remain available.
 
-Until the GitHub repository becomes public, release checks return
-"unavailable" unless a tester starts MatterHelm with the optional
-`MATTERHELM_UPDATE_TOKEN` environment variable set to a GitHub token that can
-read the repository. The token is used only in memory for GitHub requests and
-is never saved, logged, or displayed. Normal public releases require no token.
+If the release feed is not reachable anonymously (for example a private fork),
+set the optional `MATTERHELM_UPDATE_TOKEN` environment variable to a
+GitHub token that can read the repository. The token is used only in memory for
+GitHub requests and is never saved, logged, or displayed.
 
 ### Upgrading from 0.4.x
 
@@ -160,10 +168,11 @@ Version 0.5.0 changes how switch state maps to actions:
 - **Power** now models awake state. Reversible modes use Off to engage and On
   to reverse; pause-plus-displays-off never resumes playback. Sleep fires once
   on Off and the tile promptly returns to On.
-- Local IPC message revision moved to v4. The tray and sidecar ship together,
-  so no user action is required. A stale sidecar left running from another
-  copy is rejected and logs a version mismatch; exit the other copy and start
-  the matching package.
+- The current local IPC message revision is v5: v4 added dedicated Play/Pause
+  variants and v5 added the custom switch edge. The tray and sidecar ship
+  together, so no user action is required. A stale sidecar left running from
+  another copy is rejected and logs a version mismatch; exit the other copy
+  and start the matching package.
 
 ## Enabling the bridge and pairing
 
@@ -226,12 +235,13 @@ session's source-app identity before using session state. It waits 400 ms, then
 checks only a session belonging to that same app. A different app's session
 cannot suppress delivery, verify it, or receive fallback after the focused
 command was delivered. If delivery to a specific focused window fails, only a
-session owned by that same focused app is an eligible fallback; MatterHelm
+   session belonging to that same focused app is an eligible fallback; MatterHelm
 fails honestly instead of sending Play/Pause to another app. A failed delivery
 with no focused target may still use the captured current session. When the
 focused window times out specifically, MatterHelm waits 200 ms and retries the
-appcommand once; ordinary refusals are not retried. All session fallbacks are
-absolute Play/Pause operations; Play/Pause never sends a second toggle.
+appcommand once; ordinary refusals are not retried. The entire route has a
+four-second deadline. All session fallbacks are absolute Play/Pause operations;
+Play/Pause never sends a second toggle.
 
 For an unverifiable target, **success means only that Windows delivered the
 appcommand to the focused window**. Google receives an OK and the overlay shows
@@ -254,8 +264,8 @@ The **Power off behavior** setting defines both halves of that toggle:
 
 | Configured action | Power Off | Power On | Automatic reset |
 |---|---|---|---|
-| **Displays off** | Powers compatible displays off in hardware through DDC/CI, without telling Windows that the screens are off | Restores DDC/CI-managed displays, sends a harmless net-zero mouse nudge, and releases any fallback keep-awake hold | No; state is retained |
-| **Pause, then displays off** | Sends dedicated Pause, then uses the same DDC/CI-first display handling | Restores the displays and releases any fallback hold; playback remains paused | No; state is retained |
+| **Turn off displays** | Powers compatible displays off in hardware through DDC/CI, without telling Windows that the screens are off | Restores DDC/CI-managed displays, sends a harmless net-zero mouse nudge, and releases any fallback keep-awake hold | No; state is retained |
+| **Pause, then turn off displays** | Sends dedicated Pause, then uses the same DDC/CI-first display handling | Restores the displays and releases any fallback hold; playback remains paused | No; state is retained |
 | **Start screensaver** | Remembers the focused window, then starts the screensaver configured in Windows | Stops the running screensaver, then validates and restores the remembered window | No; state is retained |
 | **Sleep** | Dispatches sleep once | No action | Yes; the tile is promptly written back to On without dispatching another action |
 
@@ -267,16 +277,16 @@ Off command can therefore run sleep again.
 
 Screensaver focus restoration is intentionally narrow. Immediately before
 MatterHelm starts a screensaver - from the Power device or a custom **Start
-screensaver** command - it remembers the foreground window handle, owning
+screensaver** command - it remembers the foreground window handle, associated
 process ID/name, and title in memory. After MatterHelm handles Power On or a
 custom **Stop screensaver** command, it first stops the saver, verifies that
-the handle is still a real window owned by the same process, restores it if it
+the handle is still a real window belonging to the same process, restores it if it
 is minimized, and asks Windows to make it foreground. If normal activation is
 refused, MatterHelm retries while temporarily attached to the current
 foreground thread's input queue. Immediately after a saver closes Windows may
 briefly have no foreground input queue, so MatterHelm revalidates the captured
-HWND/PID/process name and retries every 100 ms for up to 1.5 seconds. The log
-records the target and successful route at INFO, or the final
+HWND/PID/process name and retries 15 times at 100 ms intervals (up to 1.5
+seconds). The log records the target and successful route at INFO, or the final
 validation/Windows-refusal reason at WARN. Dismissing the screensaver remains
 successful even when this best-effort focus restore is refused, so a macro
 continues to its next step. The capture is consumed after that bounded attempt,
@@ -359,11 +369,11 @@ Hovering the icon shows the current state in words:
 
 | Colour | Meaning |
 |---|---|
-| **Gray** | Bridge disabled |
+| **Taskbar-theme monochrome** | Bridge disabled (near-white on a dark taskbar, near-black on a light taskbar) |
 | **Amber** | Bridge starting or waiting for sidecar status |
 | **Blue** | Enabled and running but not commissioned; tooltip: "running, not paired yet" |
 | **Green** | Paired and connected |
-| **Red** | Sidecar crash/restart loop, or the pairing advertisement is not visible; check the log |
+| **Red** | Sidecar crash/restart loop, pairing advertisement not visible, or an IPC listener owned by another session/process; check the log for the named reason |
 
 ## Settings tour
 
@@ -371,29 +381,37 @@ Right-click the tray icon → **Settings…** opens a single window with a
 search box and a left-hand list of categories. Changes are staged until you
 click **Save** (closing the window with unsaved changes asks first).
 
-- **General** — **Enable bridge**, the bridge's IPC port (only matters if
-  39531 collides with something else on your PC), the sidecar's log detail
-  level, and this app's own log detail level (applies immediately, no restart).
-- **Devices** — edit the **Bridge name**, rename or disable any of the five
-  built-in devices, choose whether Power uses displays off, pause then displays
-  off, the Windows screensaver, or sleep, and set the reset delay used by custom
-  commands that opt into momentary behavior (default 0 = immediately).
+- **General** — **Enable bridge** (off by default), **IPC port** (default
+  `39531`), **Log level** for the sidecar (default `info`), and **App log
+  level** (default `info`; applies immediately without a restart).
+- **Devices** — **Bridge name** (default **HTPC Matter Bridge**), then the
+  **Google Home devices** section with enabled-by-default **Speaker (volume +
+  mute)**, **Play/pause**, **Next
+  track**, **Previous track**, and **Power** name rows. **Power off behavior**
+  defaults to **Pause, then turn off displays**; its other choices are **Turn
+  off displays**, **Start screensaver**, and **Sleep**. **Tap reset delay
+  (ms)** applies only to opted-in momentary custom commands and defaults to
+  `0` (immediately; valid range `0`–`2000`).
 - **Custom devices** — manage custom commands:
   - **Add…** creates a new command, which becomes its own Google Home
     device once you save. Saving a topology-changing edit restarts an enabled
     bridge immediately; Google Home may still require factory reset/re-pairing
     before it discovers an added or removed endpoint.
-  - Each custom command needs a unique key (used internally, not shown to
-    Google) and one action. By default its switch retains state and either
-    transition runs the action once. Check **Reset the switch after it runs
-    (momentary button)** to make only On run it and automatically return the
-    tile to Off; that automatic reset does not run the action again.
-    - **Media key** — one of play/pause (toggle), dedicated play, dedicated
+  - The editor fields are **Key (kebab-case)** (shown as **Key (locked)**
+    after creation), **Name**, **Enabled**, **Switch behavior**, and **Action**.
+    A new command is enabled and retained by default. Its unique key is used
+    internally, not shown to Google, and cannot be changed after creation.
+    The **Action** selector starts at **Press a media key** with **Play/pause**.
+    Either switch transition runs the action once. Under **Switch behavior**,
+    check **Reset the switch after it runs (momentary button)** to make only On
+    run it and automatically return the tile to Off; that automatic reset does
+    not run the action again.
+    - **Press a media key** — one of play/pause (toggle), dedicated play, dedicated
       pause, next, previous, stop, mute, volume up, or volume down. Play,
       Pause, and Play/Pause use the focused-first, verified-session-fallback
       route described above. This can expose another transport target under a
       different name.
-    - **Launch** — starts a program (e.g. your media center's exe) with
+    - **Launch a program** — starts a program (e.g. your media center's exe) with
       optional arguments. **Browse…** picks a normal program; **Store app…**
       lists apps installed from the Microsoft Store (Spotify, Media Player,
       …), which cannot be launched from their own install folder and need
@@ -423,8 +441,10 @@ click **Save** (closing the window with unsaved changes asks first).
       no-op. The captured position is in memory only and is lost when
       MatterHelm exits.
     - **Command sequence (macro)** — runs several of the above in order
-      from one voice command or tile tap. Build the step list with **Add…**,
-      then choose the step type from its dropdown. **Mouse move** uses the
+      from one voice command or tile tap. The editor has one **Add…** button;
+      it opens the shared step dialog, whose type dropdown offers **Press a
+      media key**, **Launch a program**, **Key sequence**, **System command**,
+      **Mouse move**, and **Wait**. **Mouse move** uses the
       same target picker described above. Each
       step is a media key, launch, key sequence, system command, mouse move,
       or a **Wait** of 1–5000 ms for pacing between steps; up to 16 steps are
@@ -436,18 +456,23 @@ click **Save** (closing the window with unsaved changes asks first).
       If any step fails, the macro stops there and the log names the failing
       step. A macro containing waits runs in the background so it never delays
       other commands — the overlay shows "running N steps" when it starts and
-      the outcome when it finishes. Example — "movie time": launch Kodi →
+      the outcome when it finishes. At most eight delay-bearing macros run at
+      once, and a given custom command is single-flight. A repeated activation
+      is nacked as `macro already running for custom command: <key>`; when the
+      global cap is full it is nacked as
+      `macro capacity reached (8 concurrent delay-bearing macros)`. Example —
+      "movie time": launch Kodi →
       wait 2000 ms → `F11` for fullscreen → move the pointer to the top left.
   - Uncheck a command's box to keep it configured but stop publishing it to
     Google Home (its tile disappears from Home the next time the bridge
     restarts).
 - **Overlay** — the small on-screen pop-up that flashes briefly whenever a
   command arrives. Its header is always **MatterHelm**; below it is one
-  command/result pill or a volume fill bar. Toggle it, choose which screen corner/edge it
-  appears at, pick its theme (follows the Windows light/dark setting by
-  default, or force light/dark), set its opacity (100 = solid, lower =
-  see-through), and use **Preview** to see a sample without waiting for a
-  real command.
+  command/result pill or a volume fill bar. **Overlay pop-ups** is on by
+  default. **Overlay position** defaults to **Bottom center**; **Overlay
+  theme** defaults to **Follow system** (or force **Dark**/**Light**); and
+  **Overlay opacity** defaults to `100 %` (valid range `30`–`100 %`). Use
+  **Preview** to see the staged choices without waiting for a real command.
 - **Advanced**:
   - **mDNS network interface** — keep **Auto (recommended)** unless your PC
     has more than one active adapter (e.g. Wi-Fi *and* Ethernet, or a
@@ -457,28 +482,62 @@ click **Save** (closing the window with unsaved changes asks first).
     unplugged or renamed is shown as **(not detected)**; choose Auto or a
     detected adapter to replace it.
   - **Matter storage** — read-only, shows where the pairing data lives (see
-     [Factory reset](#factory-reset--re-pairing)).
+     [Factory reset](#factory-reset--re-pairing)); the default is
+     `%APPDATA%\MatterHelm\matter`.
   - **Vendor ID (VID)** / **Product ID (PID)** — the Matter identifiers that
-    must match the Google Home Developer Console integration. Saving a change
-    requires a fresh pairing.
+    must match the Google Home Developer Console integration. Their defaults
+    are `0xFFF1` / `0x8000`; after changing them on a paired bridge, factory-
+    reset and pair again.
   - **Device identity seed** — read-only stable endpoint identity for this
     install. It is shown for clone/collision troubleshooting.
   - **Config file** / **Config folder** — opens `config.json` or its folder
     directly, for anyone who wants to hand-edit it (the app also does this
     safely through the UI).
-  - **Export diagnostics…** — saves a zip of logs, metrics, a small system
-    manifest (OS/.NET/Node versions — no username or machine name), and
-    your config, for troubleshooting. Nothing is uploaded anywhere; hand
-    the zip to whoever's helping you debug an issue. Your pairing
-    credentials are never included.
+  - **Export diagnostics** — saves a zip of redacted logs/metrics, a small system
+    manifest (OS, .NET runtime, app version, sidecar version when available,
+    and locale — no username or machine name), and a sanitised `config.json`,
+    for troubleshooting. The config keeps its shape but redacts the identity
+    seed, launch arguments, and profile paths. Logs are streamed through
+    case-insensitive redaction for commissioning credentials (including
+    `discriminator` in text or as a JSON key), profile paths, and IPv4/IPv6
+    literals. Standalone block-art lines and lines with long QR-like block runs
+    become `<qr-art>`. User and machine names are replaced only as whole words,
+    while occurrences inside profile-path segments are still replaced. Nothing
+    is uploaded anywhere;
+    hand the zip to whoever is helping you debug an issue. There is no UI for
+    the code-only raw-config opt-in.
   - **Reload config** — re-reads `config.json` from disk, discarding any
     unsaved edits in the window.
   - **Factory reset** — see the next section.
 
+For hand-edited configuration, `config.json` may be at most 1 MiB and may hold
+at most 64 custom commands. Built-in, bridge, and custom display names may be
+at most 64 characters; launch arguments at most 2048 characters; and the
+identity seed at most 128 characters. Invalid values produce validation/WARN
+errors and safe defaults or dropped entries instead of crashing the tray. The
+sidecar independently revalidates the shared endpoint count/name and identity-
+seed limits before it starts.
+
+If `config.json` is larger than 1 MiB, invalid JSON, or valid JSON whose root is
+not an object, MatterHelm moves it to `config.json.rejected-<timestamp>` and
+runs on in-memory defaults. Every save is then refused with
+`config.json was rejected on load and moved to <name>; restore or delete it, then restart`
+until a later successful load, and the tray logs one startup WARN. Restore a
+corrected file or delete the rejected file and restart **before pairing**:
+while saves are blocked, a freshly minted device identity seed is not persisted,
+so the next restart would not match the identity commissioned by Google Home.
+
+App logs retain seven days. Each day is capped at twenty 5 MiB segments; when
+another segment is needed, the oldest is evicted. After 20 identical WARN or
+ERROR lines within one minute, repeats are suppressed and later summarized as
+`suppressed <N> repeats of: <message>`. A failed segment eviction is cached for
+30 seconds without dropping writes, and exit or day rollover flushes any pending
+repeat summary.
+
 ## Factory reset / re-pairing
 
-If you need to start pairing over — a new phone, a botched setup, moving
-the PC to a different Google home, or just wanting a clean slate — use
+If you need to start pairing over — after a botched setup, when moving the PC
+to a different Google home, or just to get a clean slate — use
 **Factory reset**, available two places: the tray menu (in both paired and
 unpaired states) and Settings → Advanced → **Factory reset**. Both ask you to
 confirm first, since this is
@@ -505,9 +564,14 @@ destructive:
 code — wait for the code to appear before you scan. The old code stops
 working the moment you confirm the reset, so a code you photographed or left
 on screen beforehand will fail in the Home app with **"can't find device"**.
-If the reset fails (rare — usually something briefly holding the storage folder
-open, like antivirus scanning it right after the bridge stops), nothing is
-deleted and the failure is logged; just try again a few seconds later.
+If the reset reports failure (usually something briefly holding the storage
+folder open, such as antivirus scanning it right after the bridge stops), the
+failure is logged and MatterHelm restores the previous enabled state. The live
+Matter directory is renamed to a unique staging path before deletion: if that
+rename fails, nothing in the live directory was touched and the old pairing
+data remains intact. If the later staged-directory deletion fails, the reset
+is already complete and a WARN reports `residue left at '<path>'`; the residue
+can be removed after the process holding it open releases it.
 
 ## Running MatterHelm on more than one PC
 
@@ -633,15 +697,28 @@ office PC"* vs *"…pause the HTPC"*.
   automatically. Use **Auto (recommended)** to return to automatic selection.
   If the current choice says **(not detected)**, the adapter was unplugged or
   renamed — select Auto or another detected adapter.
-- **The tray icon is red.** Either the sidecar is crash-looping (two or more
-  restarts without successfully reconnecting), or the bridge is unpaired but
-  its Matter/mDNS advertisement cannot be seen. Check the app log (Settings →
-  Advanced → Config folder → `logs\`) for the specific cause, and verify the
-  selected network interface, IPv6, and the firewall rules above.
-- **Enable bridge is checked but the icon stays gray.** The local IPC listener
-  could not bind, commonly because another program already uses the configured
-  port. The bridge stays disabled; check the app log, then choose a free IPC
-  port in Settings → General and save.
+- **The tray icon is red.** The sidecar may be crash-looping (two or more
+  restarts without successfully reconnecting), the unpaired bridge's Matter/
+  mDNS advertisement may be invisible, or another session/process may own a
+  required port. Check the app log (Settings → Advanced → Config folder →
+  `logs\`) for the specific cause, then verify the selected network interface,
+  IPv6, firewall rules, and port ownership.
+- **Enable bridge is checked and the log says the IPC port is owned elsewhere.**
+  The exact error is `bridge: cannot listen on port <port> (the IPC port is
+  owned elsewhere); bridge stays disabled.` The enabled preference is left
+  unchanged so a temporary conflict is not mistaken for a user choice. This
+  commonly means MatterHelm is already running under another signed-in Windows
+  user or RDP session, or another process has the configured port. Exit that
+  copy/session, or choose a free IPC port in Settings → General, then restart
+  the bridge. Only one Matter sidecar on the machine can own its Matter port at
+  a time, so close any other MatterHelm session before retrying.
+- **The log says `config.json was rejected on load`.** MatterHelm moved an
+  oversized, invalid-JSON, or non-object file to the timestamped rejected name
+  shown in the message and is running on in-memory defaults. Settings saves are
+  intentionally blocked: restore a corrected file or delete the rejected copy,
+  then restart MatterHelm. Do this **before pairing**; otherwise the fresh
+  identity seed cannot be saved and the next restart will not match the
+  commissioned identity.
 - **A command fires twice.** MatterHelm does not run an action from its own
   automatic reset. For a normal retained custom switch, however, both user
   transitions intentionally fire once, so a routine that sends On and then
@@ -677,14 +754,17 @@ office PC"* vs *"…pause the HTPC"*.
   Home/Assistant services are, of course, involved the same way they are for
   any Google Home device; that's between you and Google, not this app.
 - The **diagnostics export** (Settings → Advanced → Export diagnostics…)
-  never uploads anything — it just saves a zip to a location you choose.
-  It intentionally excludes anything that could identify your PC (no
-  username, no machine name, no file paths besides what you've typed into
-  your own config, e.g. a custom command's launch path) and scrubs any
-  commissioning codes that might otherwise have been logged. Your live
-  session's pairing token is never written to disk or logged in the first
-  place, so it can't leak into a bundle.
-- `config.json` is included in full in a diagnostics export. It also contains
-  internal preferences that are not shown as editable Settings rows, such as
-  `onboardingShown` and `updateCheckEnabled`; it does **not** contain Matter
-  fabric credentials, which live separately under the Matter storage folder.
+  never uploads anything — it just saves a zip to a location you choose. Its
+  generated manifest contains no username, machine name, or file paths. Every
+  bundled log/metrics line redacts commissioning credentials, machine/user
+  names, profile paths, and IP literals. The included `config.json` is
+  sanitised by default: its structure remains useful, while `uniqueIdSeed`,
+  launch arguments, and user-profile paths are redacted. Still inspect the zip
+  before sharing because operational details may remain. The code has an
+  explicit raw-config opt-in for controlled diagnostics, but no UI exposes it.
+  Your live session's IPC token is never written to disk or logged, so it
+  cannot leak into a bundle through those inputs.
+- The sanitised `config.json` can still show internal preferences that are not
+  editable Settings rows, such as `onboardingShown` and
+  `updateCheckEnabled`; it does **not** contain Matter fabric credentials,
+  which live separately under the Matter storage folder.

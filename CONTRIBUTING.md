@@ -1,10 +1,10 @@
 # Contributing to MatterHelm
 
-MatterHelm is currently a private, solo-maintained repository built with AI
-sub-agents under human review (see `CLAUDE.md` for that internal workflow).
-This document describes the workflow any contributor — human or agent —
-follows once the repo opens up, and it is also the accurate description of
-how the code has been built so far.
+MatterHelm welcomes contributions. It is maintained by one person in spare
+time, so small, focused pull requests with complete evidence are the easiest
+to review. Maintainers may use AI coding agents under human review (see
+[`CLAUDE.md`](CLAUDE.md)); the engineering and evidence bar is identical for
+every contribution.
 
 ## Prerequisites
 
@@ -13,6 +13,37 @@ how the code has been built so far.
 - Windows for `app/` work (WinForms + Win32 P/Invoke); `bridge/` is
   OS-neutral and CI runs it on both `ubuntu-latest` and `windows-latest`.
 
+## Where things live
+
+- `bridge/src/index.ts` composes the isolated `matter/`, `mapping/`, and
+  `ipc/` layers. `ipc/client.ts` owns fail-closed WebSocket admission and
+  reconnect; `matter/bridge.ts` owns Matter endpoints and bounded state writes.
+- `app/MatterHelm/BridgeHost.cs` is the façade/composition root.
+  `BridgeLifecycleCoordinator`, `BridgeActionDispatcher`, and
+  `VolumeStatePublisher` own lifecycle, protocol-action dispatch/macros, and
+  coalesced speaker-state publication respectively.
+- `app/MatterHelm/Actions/MediaKeys.cs` is a façade over
+  `FocusedMediaRouter` and `WindowsForegroundMediaCommandSender`.
+  `Ui/SettingsCatalog.cs`, `BridgeRestartPolicy.cs`, `SettingLimits.cs`, and
+  `Ui/KeySequenceCanonicalizer.cs` keep policy out of the WinForms shell;
+  `Sidecar/SidecarLaunchSpec.cs`, `Sidecar/SidecarEnvironment.cs`, and
+  `Infrastructure/SerialActionQueue.cs` own their named boundaries.
+
+## Contribution workflow
+
+1. Fork the repository, create a branch in your fork, and make the change
+   there.
+2. Scope the branch to one issue or one story from [`BACKLOG.md`](BACKLOG.md).
+   Keep unrelated discoveries for a separate issue or proposed backlog item.
+3. If work is happening concurrently, agree on disjoint file ownership before
+   editing. Do not modify files assigned to another contributor.
+4. Use [Conventional Commits](https://www.conventionalcommits.org/) for each
+   commit.
+5. Run the relevant build, test, coverage, and demo gates below.
+6. Open a pull request and complete the
+   [Definition of Done checklist](.github/PULL_REQUEST_TEMPLATE.md), including
+   the exact command output and any relevant screenshots or demo output.
+
 ## Build & test
 
 ```bash
@@ -20,16 +51,34 @@ how the code has been built so far.
 cd bridge
 npm ci                  # exact pinned deps
 npm run verify          # lint + typecheck + tests — the merge bar
-npm run coverage         # vitest with coverage (mapping/ + ipc/protocol.ts + config.ts ≥ 90% lines)
+npm run coverage         # vitest coverage (mapping/, ipc/protocol.ts, config.ts, timing.ts, matter/diagnostics.ts ≥ 90% lines)
 npm run bundle           # esbuild single-file bundle -> dist/bridge.cjs
 
 # app (C#/.NET tray application)
 dotnet build app/MatterHelm/MatterHelm.csproj -c Release
 dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
+
+# complete Windows distribution (strict Node SEA packaging by default)
+./build.ps1
+# explicit fallback to sidecar/node.exe + sidecar/bridge.cjs if SEA injection fails
+./build.ps1 -AllowNodeLayoutFallback
 ```
 
 Both builds are **warnings-as-errors** / **zero-warnings**. A warning is a
 decision postponed, and postponed decisions don't merge.
+
+`build.ps1` treats a `postject` failure as a build failure unless
+`-AllowNodeLayoutFallback` is supplied. On Windows PowerShell 5.1, do not wrap
+the script or its `postject` invocation in `2>&1`: native stderr can become a
+terminating `ErrorRecord`; the script scopes this hazard internally and judges
+`postject` by its process exit code.
+
+### What CI runs
+
+Pushes and pull requests run bridge verification on Windows and Ubuntu, plus a
+Windows Release app build, tests, and coverage. The separate **Package** job
+runs `./build.ps1 -SkipTests`, compiles the Inno Setup installer with version
+`0.0.0`, and asserts that the notices and sidecar-layout manifest were emitted.
 
 ### Demo suite — acceptance evidence, not just unit tests
 
@@ -38,11 +87,12 @@ scripted, self-checking demo harnesses (exit 0 = pass) invoked as flags on the
 built exe, e.g.:
 
 ```bash
-app/MatterHelm/bin/Release/net10.0-windows/MatterHelm.exe --demo-wired
-app/MatterHelm/bin/Release/net10.0-windows/MatterHelm.exe --demo-overlay
-app/MatterHelm/bin/Release/net10.0-windows/MatterHelm.exe --demo-pairing-window
-app/MatterHelm/bin/Release/net10.0-windows/MatterHelm.exe --demo-settings-window
-app/MatterHelm/bin/Release/net10.0-windows/MatterHelm.exe --demo-sidecar-chaos
+app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-wired
+app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-overlay
+app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-pairing-window
+app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-settings-window
+app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-sidecar-chaos
+app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-welcome-window
 ```
 
 If your change touches UI, wiring between the sidecar and the executor, or
@@ -95,9 +145,9 @@ folded silently into the current change.
 
 `bridge/src/ipc/protocol.ts` and `app/MatterHelm/Sidecar/Protocol.cs` define
 the same wire protocol and must mirror each other exactly. Changing one
-without the other is protocol drift and is a review blocker. A breaking
-protocol change bumps the `protocol`/`v` version in the `hello` frame on
-**both** sides and needs an ADR explaining the change (see below).
+without the other is protocol drift and is a review blocker. Additive message
+evolution bumps `v` on both sides; a breaking change bumps `hello.protocol`
+on both sides and needs an ADR explaining the change (see below).
 
 ## Architecture Decision Records
 
@@ -107,9 +157,30 @@ spec), or any non-obvious architectural choice, gets a one-page ADR in
 Decision, Consequences). Don't silently improvise architecture — write it
 down so the next agent or reviewer has the "why."
 
+## Releases
+
+A pushed `v*` tag is accepted only when the tag without its leading `v` exactly
+matches both `<Version>` in `app/MatterHelm/MatterHelm.csproj` and `version` in
+`bridge/package.json`; either mismatch fails before packaging. Release
+concurrency is keyed by workflow and tag, and an in-progress tag build is never
+cancelled. The release build is strict SEA packaging and
+`THIRD-PARTY-NOTICES.txt` must cover the bundled npm packages, Node.js, QRCoder,
+.NET runtime, WindowsDesktop runtime, and Windows SDK projection.
+
+## Good first contributions
+
+Start with the [`Proposed` section of BACKLOG.md](BACKLOG.md#proposed-from-agent-reports-integrator-triaged)
+and open or comment on an issue before beginning non-trivial work. The
+maintainer can confirm scope and avoid overlap with work already in progress.
+
 ## Filing issues / proposing changes
 
-Use the GitHub issue templates (bug report / feature request) once the repo
-is public. Until then, discuss scope with the maintainer before starting
-non-trivial work — file ownership across concurrent efforts is expected to
-stay disjoint (see `CLAUDE.md` ground rule 2).
+Use the GitHub issue templates for bug reports and feature requests. Search
+existing issues first, describe the user impact, and keep one independently
+reviewable change per issue and pull request.
+
+## Licensing
+
+The project does not require a Contributor License Agreement (CLA) or
+Developer Certificate of Origin (DCO). Contributions are accepted under the
+repository's [MIT License](LICENSE): inbound and outbound terms are MIT.

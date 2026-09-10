@@ -1,8 +1,12 @@
 # ADR-012: retain switch state with explicit momentary exceptions
 
-- **Status**: accepted; media route amended by ADR-013
+- **Status**: accepted; supersedes reset-policy portions of
+  [ADR-002](002-google-ceremony-reality.md),
+  [ADR-004](004-settings-ui-and-custom-commands.md), and
+  [ADR-008](008-onoff-command-interception.md); media route amended by
+  [ADR-013](013-focused-first-media-and-retained-mouse-move.md)
 - **Date**: 2026-08-30
-- **Story**: S10-30, amended by S10-32 (owner-directed behaviour changes)
+- **Story**: S10-30, amended by S10-32 (maintainer-directed behaviour changes)
 
 ## Context
 
@@ -11,17 +15,18 @@ observable as a second user action: an On activation ran a toggle action, then
 the reset/report cycle could produce an Off command that ran the toggle again.
 For Play/Pause this meant playback started and then paused a few seconds later.
 The attempted S10-29 temporal suppression of a trailing Off was reverted by
-owner decision because timing cannot reliably distinguish controller intent
+maintainer decision because timing cannot reliably distinguish controller intent
 from an echo. Matter OnOff endpoints already carry the state needed to express
 the behavior without a suppression window. Windows appcommands labelled Play
 toggle in measured Spotify and YouTube sessions, so any SMTC fallback must use
-an absolute verb. ADR-013 later added an ownership-aware focused appcommand
+an absolute verb. [ADR-013](013-focused-first-media-and-retained-mouse-move.md)
+later added an application-identity-aware focused appcommand
 attempt for focus-driven players while preserving absolute session fallback.
 
 ## Decision
 
 Amend BLUEPRINT §§2.2–2.3 and supersede only the momentary/reset portions of
-ADR-008 and its S8-4 amendment. ADR-008's command-interception decision remains
+[ADR-008](008-onoff-command-interception.md) and its S8-4 amendment. ADR-008's command-interception decision remains
 binding.
 
 - Play/Pause, Next, and Previous always retain their Matter OnOff state and

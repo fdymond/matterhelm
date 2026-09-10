@@ -1,13 +1,14 @@
 # ADR-009: per-install Matter identity, configurable VID/PID
 
-- **Status**: accepted
+- **Status**: accepted; amends
+  [ADR-002](002-google-ceremony-reality.md)
 - **Date**: 2026-08-23
-- **Story**: S10-4 (owner-directed, from the S10 portability review)
+- **Story**: S10-4 (maintainer-directed, from the S10 portability review)
 
 ## Context
 
 A pre-launch review asked whether an install works on someone else's Google
-Home account, and whether this machine's config is bound to the owner's
+Home account, and whether this machine's config is bound to the maintainer's
 setup. Most of the answer was clean — pairing codes are minted per install
 at first boot (verified: two fresh sidecars produced different QR/manual
 codes), fabric credentials live only in `%APPDATA%`, the shipped artifact
@@ -65,8 +66,8 @@ behaves exactly as before.
 
 - **Easier**: two PCs in one home can each pair — distinct seeds give
   distinct endpoint identities (verified: legacy + two minted seeds produce
-  0 collisions across 15 endpoint ids), and a distinct PID from the test
-  range separates them further. Anyone registering their own Developer
+  0 collisions across 15 endpoint ids); a distinct PID is not required.
+  Anyone registering their own Developer
   Console project can point the app at their own VID/PID without a rebuild.
 - **Harder**: three more env vars and a config field to keep in lockstep
   across the two processes; identity is now data rather than a constant, so
@@ -80,5 +81,5 @@ behaves exactly as before.
   fabric still exists and the legacy constant is re-pinned on next start;
   reverting the code entirely restores the old constant-seed behavior with
   no storage migration.
-- **Amends ADR-002**, which claimed a VID/PID knob that did not exist —
+- **Amends [ADR-002](002-google-ceremony-reality.md)**, which claimed a VID/PID knob that did not exist —
   it exists now.

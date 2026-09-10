@@ -16,7 +16,7 @@ self-hosted, low-ceremony** routes. Research conducted 2026-07-26.
 | **1. Matter virtual device (matter.js)** | Matter spec mature; Google's *consumer* support narrower than the spec | **Good** — matter.js is pure TypeScript, no native deps, documented on Windows 11 + Node 20+ | On/Off toggles (mute, power, momentary play/pause/next/prev via auto-reset switches) + real **Speaker** device type (On/Off = mute, Level Control = volume 0–100%, genuinely voice/slider controllable). **No** working play/pause/seek semantics — Matter's Media Playback / Content Launcher / Keypad Input clusters exist in the spec but Google Home's supported-cluster docs and 2025–26 release notes show no support | **Fully local**, zero cloud, zero Google account/developer ceremony — pairs with a click-through "Uncertified device" warning | Low — Matter is a multi-vendor CSA standard, not Google-controlled |
 | 2. Home Assistant as bridge (HA Matter Hub or Nabu Casa) | Mature, active | Fine if HA runs elsewhere (Linux/Docker); adds an always-on service | Same voice-control ceiling as Route 1 via Matter mapping; Nabu Casa's Google Assistant integration gives real voice + routines for exposed entities | HAMH local; Nabu Casa is a paid cloud relay ($6.50/mo) | Low-moderate; heavy dependency stack if you don't already run HA |
 | 3. Direct Google Smart Home Action (cloud-to-cloud) | Console migrated to Google Home Developer Console (Dec 2024); still open to individuals | High ceremony: real OAuth2 server, publicly reachable HTTPS fulfillment, GCP project, automated Home Test Suite before even personal use | No higher capability ceiling than Routes 1–2 (traits are on/off/volume-shaped) | Cloud + public hosting (exactly what we want to avoid) | Google deprecation record is poor (Conversational Actions killed 2023; Local Home SDK docs stale ~2023) |
-| 4. Assistant Relay | **Dead** — repo archived by owner Aug 28 2025 | n/a | n/a | n/a | Not viable |
+| 4. Assistant Relay | **Dead** — repo archived by its maintainer Aug 28 2025 | n/a | n/a | n/a | Not viable |
 | 5. Cast/DIAL receiver on Windows | Native `Windows.Media.Casting`/DIAL APIs exist; OSS receivers mostly Linux (e.g. Shanocast) | Possible, niche | Wrong problem shape: makes the PC a *cast destination*, not a voice-actionable device | Local | Different use case; not the primary mechanism |
 
 ## Recommendation
@@ -77,7 +77,7 @@ Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
    no confirmed real-world sighting for bridged endpoints — S0-3 must verify
    voice + slider explicitly before Sprint 1 leans on it.
 
-## Addendum 2026-08-30 (0.5.0 shipped model)
+## Addendum 2026-08-30 (model later shipped in 0.5.0)
 
 - The app target supports Windows 10 version 1809 (build 17763) and later,
   x64; it is not Windows-11-only.
@@ -91,6 +91,21 @@ Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
   route. Session fallback is absolute and owner-pinned; different-app session
   state cannot suppress or verify focused delivery. Sessionless focused
   players are delivered to but explicitly unverifiable.
+
+## Addendum 2026-09-10 (v0.7.1 current reality)
+
+- The recommended Route 1 remains the shipped architecture and has been
+  commissioned and exercised on real Google Nest hardware.
+- The app is C#/.NET 10 WinForms targeting
+  `net10.0-windows10.0.17763.0` (Windows 10 version 1809+ x64). The bridge
+  requires Node 22.13+ and pins `@matter/main` 0.17.7; ADR-010's Windows mDNS
+  workaround must be re-verified on every matter.js upgrade.
+- IPC message revision 5 is mirrored between the bridge and app. v0.7.1 tag:
+  393 bridge / 826 app; current counts are published by CI. App line coverage
+  is about 58 % against a 45 % CI threshold.
+- The honest public limits remain the one-time Google test-VID registration,
+  unsigned binaries that can trigger SmartScreen, and unverifiable delivery
+  to sessionless players such as Kodi.
 
 ## Sources
 

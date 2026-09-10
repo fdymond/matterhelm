@@ -1,12 +1,13 @@
 # ADR-006: Development telemetry, diagnostics, and the reconnect-latency verdict
 
-- **Status**: accepted
+- **Status**: accepted; diagnostics privacy amended by
+  [ADR-014](014-public-launch-hardening.md)
 - **Date**: 2026-07-29
-- **Story**: S5-0 (owner-directed; two cited research reports, 2026-07-29)
+- **Story**: S5-0 (maintainer-directed; two cited research reports, 2026-07-29)
 
 ## Context
 
-The owner wants full development telemetry/debugging/logging, analytics,
+The maintainer wants full development telemetry/debugging/logging, analytics,
 coverage and validation. Research (Matter/matter.js + .NET 10 diagnostics,
 primary sources) fixed the design. A separate finding re-scopes the
 "flaky/slow hub" complaint (§4).
@@ -51,12 +52,19 @@ primary sources) fixed the design. A separate finding re-scopes the
   Microsoft.Extensions.Logging migration is deliberately deferred (backlog)
   — category filtering isn't yet worth churning ~100 call sites; revisit if
   categories are needed.
-- **Diagnostics bundle**: Settings → Advanced → "Export diagnostics…" zips
-  app+sidecar logs, metrics file, an environment manifest (OS/.NET/Node/app
-  versions, locale; UTC timestamps; no username-bearing paths), and the
+- **Diagnostics bundle**: Settings → Advanced → **Export diagnostics** zips
+  app+sidecar logs, metrics files, an environment manifest (OS, .NET runtime,
+  app version, sidecar version when available, locale, and a UTC generation
+  timestamp; no username-bearing paths), and the
   config. Privacy: the IPC token is runtime-only and must be unreachable from
   the bundle path — enforced by a test that scans a produced bundle for the
   live session token. Everything stays local; nothing uploads.
+
+> **Public-launch amendment:** ADR-014 makes the config sanitised by default
+> (identity seed, launch arguments, and profile paths redacted), with raw config
+> available only through an explicit code-level opt-in and no UI. Every bundled
+> log/metrics line now also redacts commissioning credentials, machine/user
+> names, profile paths, and IP literals case-insensitively.
 
 ### 3. Coverage & validation (S5-3)
 

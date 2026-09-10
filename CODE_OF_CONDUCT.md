@@ -57,7 +57,7 @@ of abusive, harassing, or otherwise unacceptable behavior may be reported by
 opening a GitHub issue on this repository, or — if the report itself is
 sensitive — via GitHub's private
 [report abuse](https://github.com/contact/report-abuse) flow addressed to the
-repository owner. All complaints will be reviewed and investigated promptly
+maintainer. All complaints will be reviewed and investigated promptly
 and fairly.
 
 The maintainer is obligated to respect the privacy and security of the

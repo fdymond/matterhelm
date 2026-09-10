@@ -1,6 +1,9 @@
 # ADR-002: Google-side prerequisites — Nest hub required, test-VID Developer Console setup required
 
-- **Status**: accepted; momentary endpoint policy superseded by ADR-012
+- **Status**: accepted; endpoint reset policy superseded by
+  [ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md); identity and
+  configurable VID/PID details amended by
+  [ADR-009](009-per-install-matter-identity.md)
 - **Date**: 2026-07-26
 - **Story**: pre-S0-3 (integrator feasibility research, 2026-07-26)
 

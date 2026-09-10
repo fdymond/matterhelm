@@ -1,8 +1,10 @@
 # ADR-003: Tray-app native technique choices (WS server, CoreAudio, input, overlay, QR, publish)
 
-- **Status**: accepted
+- **Status**: accepted; media-transport choice superseded by
+  [ADR-013](013-focused-first-media-and-retained-mouse-move.md)
 - **Date**: 2026-07-26
-- **Amended**: 2026-08-30 by S10-31 and ADR-013/S11-3
+- **Amended**: 2026-08-30 by S10-31 and
+  [ADR-013](013-focused-first-media-and-retained-mouse-move.md)/S11-3
 - **Story**: pre-Sprint-2 (integrator feasibility research, 2026-07-26); S10-31; S11-2; S11-3
 
 ## Context
@@ -26,6 +28,10 @@ re-deciding or picking footgun variants.
    `UnregisterControlChangeNotify` on dispose, marshal `OnNotify` to the UI
    thread, and register `IMMNotificationClient` to re-acquire the endpoint on
    default-device change.
+> **Superseded media design:** item 3 is retained as history. The current
+> same-app fallback rules and four-second deadline are defined by
+> [ADR-013](013-focused-first-media-and-retained-mouse-move.md).
+
 3. **Media transport**: `SendInput` with `VK_MEDIA_*` remains the system-wide
    mechanism for next, previous, and stop. Play, Pause, and Play/Pause first
    send bounded `WM_APPCOMMAND` to the captured foreground HWND. The tray
@@ -41,7 +47,7 @@ re-deciding or picking footgun variants.
    state computed before focused delivery; a fallback toggle is forbidden.
    A different-app session is ignored after successful focused delivery, but
    becomes the intended target if focused delivery itself fails. The captured
-   session owner is pinned across action and verification, and the whole route
+   session identity is pinned across action and verification, and the whole route
    has one three-second cancellation deadline. Sessionless focused delivery is
    acknowledged as unverifiable, not playback-verified. The WinRT projection is compiled by the current versioned
    `net10.0-windows10.0.17763.0` TFM.
@@ -71,7 +77,8 @@ re-deciding or picking footgun variants.
   pitfalls listed as review checkpoints; zero NuGets except QRCoder.
 - **Harder**: hand-rolled CoreAudio interop is the hairiest piece (~4 COM
   interfaces) — S2-2 review must check ref-counting and thread marshalling.
-- **Focused-player limitation**: non-SMTC apps such as Kodi receive the
+- **Focused-player limitation (superseded by
+  [ADR-013](013-focused-first-media-and-retained-mouse-move.md))**: non-SMTC apps such as Kodi receive the
   appcommand but cannot be verified. Kodi's measured Pause behavior is a
   toggle; immediate identical dedicated verbs to the same process are
   suppressed for two seconds, but later repeats can still invert playback.
