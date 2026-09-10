@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for taking the time to report a bug. The diagnostics bundle
         below is the single most useful thing you can attach — it's
-        privacy-scrubbed (no machine name, no username, no file paths, no
+        privacy-scrubbed (no machine name, username, or user-profile paths; no
         tokens or commissioning secrets) before it's written, so it's safe
         to upload here.
 
@@ -29,7 +29,7 @@ body:
     attributes:
       label: MatterHelm tray app version
       description: Right-click the tray icon → About, or the version in the diagnostics bundle manifest.
-      placeholder: "e.g. 0.1.0"
+      placeholder: "e.g. 0.7.1"
     validations:
       required: true
 
@@ -38,7 +38,7 @@ body:
     attributes:
       label: Bridge (sidecar) version
       description: From `bridge/package.json` if running from source, or the diagnostics manifest's sidecarVersion field.
-      placeholder: "e.g. 0.0.1"
+      placeholder: "e.g. 0.7.1"
     validations:
       required: false
 
@@ -72,12 +72,10 @@ body:
       description: |
         In the tray app: Settings → Advanced → "Export diagnostics" produces
         a zip (`matterhelm-diagnostics-<timestamp>Z.zip`) containing logs,
-        metrics, an environment manifest, and your config.json. It is
-        privacy-scrubbed (no machine name/username/paths; commissioning
-        secrets redacted) except for config.json, which is included verbatim
-        since it's user-authored (review it yourself if you've put anything
-        sensitive in a custom command path). Attach the zip here, or paste
-        relevant excerpts.
+        metrics, an environment manifest, and a sanitised config.json
+        (identity seed, launch arguments and user-profile paths redacted).
+        Review it before attaching. Attach the zip here, or paste relevant
+        excerpts.
       placeholder: Drag and drop the exported zip here, or paste relevant log lines.
     validations:
       required: false

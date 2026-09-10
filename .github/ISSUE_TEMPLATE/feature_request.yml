@@ -34,6 +34,6 @@ body:
     id: alternatives
     attributes:
       label: Workarounds you've tried
-      description: Is there a custom command (Settings → Custom Commands) or config option that gets you partway there already?
+      description: Is there a custom command (Settings → Custom devices) or config option that gets you partway there already?
     validations:
       required: false

@@ -1,1 +1,8 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Questions / setup help
+    url: https://github.com/fdymond/matterhelm/blob/main/SUPPORT.md
+    about: Get help with setup and usage questions.
+  - name: Security vulnerability
+    url: https://github.com/fdymond/matterhelm/security/advisories/new
+    about: Privately report a security vulnerability.
