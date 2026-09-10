@@ -10,20 +10,21 @@ code only — it grants no rights to the Matter name or mark.
 
 **Icon (resolved 2026-08-23):** MatterHelm's icon is an original ship's-helm
 glyph and does not use or imitate the Matter certification mark. (An earlier
-private build rendered the certification mark; that drawing is retained in
-the source history and as an archived, unshipped reference in
-`Ui/TrayIcons.cs`, and must not be re-enabled for any distributed build.)
+private build rendered the certification mark. The helm replaced it on
+2026-08-23; the archived renderer of the mark was deleted from `TrayIcons.cs`
+in September 2026 and exists only in git history. It must not be re-enabled
+for any distributed build.)
 
 **Name (open):** the product name contains the word "Matter", used
 descriptively to indicate protocol compatibility — as is common across the
 ecosystem (matter.js, python-matter-server, Home Assistant Matter Hub).
 MatterHelm is an independent project, not affiliated with, endorsed, or
-certified by the CSA. Before any public release, give the name a final look
-against the CSA's brand guidelines (see docs/launch-checklist.md).
+certified by the CSA.
 
 ## Third-party components
 
-MatterHelm links open-source components (matter.js, zod, pino in `bridge/`;
-QRCoder in `app/`). See `bridge/package.json` / `app/MatterHelm/MatterHelm.csproj`
-for the current pinned versions and their own licenses; none are bundled or
-modified in this repository.
+MatterHelm bundles open-source components, including matter.js, zod, and pino
+in the sidecar, Node.js as its runtime, and QRCoder in the tray app.
+The self-contained .NET publish bundles the .NET runtime (MIT, Microsoft).
+`THIRD-PARTY-NOTICES.txt` ships with the binary distribution and contains the
+exact bundled versions, declared licenses, and license/notice text.

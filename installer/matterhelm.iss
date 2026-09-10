@@ -49,7 +49,15 @@ Name: "startup"; Description: "Start MatterHelm when you sign in to Windows"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\*"; DestDir: "{app}"; Excludes: "THIRD-PARTY-NOTICES.txt"; Flags: recursesubdirs ignoreversion
+
+[InstallDelete]
+; Remove both known sidecar payload shapes before [Files] installs the one
+; declared by sidecar-layout.json, so a layout-changing upgrade leaves no stale peer.
+Type: files; Name: "{app}\sidecar\bridge.exe"
+Type: files; Name: "{app}\sidecar\node.exe"
+Type: files; Name: "{app}\sidecar\bridge.cjs"
 
 [Icons]
 Name: "{autoprograms}\MatterHelm"; Filename: "{app}\MatterHelm.exe"
