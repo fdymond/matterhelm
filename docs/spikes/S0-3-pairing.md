@@ -1,5 +1,9 @@
 # S0-3 spike: commission an uncertified matter.js bridge with Google Home
 
+> **Dated historical spike (2026-07-26).** This records the original
+> experiment and its evidence; it is not current setup or troubleshooting
+> guidance. Use the [user guide](../user-guide.md) for the shipped product.
+
 **Status**: completed 2026-07-26 for pairing/persistence; Speaker and transport
 UX validation moved to the current product E2E checklist
 **Spike code**: `bridge/spike/pairing-spike.ts` (throwaway; see BACKLOG S0-3, ADR-002)
@@ -36,8 +40,8 @@ Every incoming cluster write is printed as a line starting with `EVENT`, e.g.
   requirement). Check: Settings → Network & internet → your adapter →
   Edit IP assignment, or run `ipconfig` and confirm the adapter shows a
   "Link-local IPv6 Address".
-- Node 22 available (the repo's tooling already uses
-  `C:\Users\legen\tools\node-v22.23.1-win-x64`).
+- Node 22 available (if using a portable installation, add `<node-dir>` to
+  `PATH` for the current terminal).
 
 ## Part A — one-time Google Home Developer Console setup
 
@@ -75,7 +79,7 @@ moved)* were accurate as of 2026-07.
 Open a terminal:
 
 ```powershell
-cd C:\Users\legen\Repos\htpc\windows-google-home-matter\bridge
+cd bridge
 npx tsx spike/pairing-spike.ts
 ```
 
@@ -163,14 +167,14 @@ Factory reset for a re-run from scratch: stop the spike and delete
   `bridge/spike/spike-storage\`, remove any half-added device from the Home
   app, start over.
 
-## RESULTS (run of 2026-07-26; integrator-recorded from owner report + logs)
+## RESULTS (run of 2026-07-26; integrator-recorded from maintainer report + logs)
 
 Run date: 2026-07-26 · Hub: Google Nest Hub (2nd gen) · Phone/app version: not recorded
 
 | # | Command / step | Observed (terminal + app/voice response) | Verdict |
 | --- | ------------------------------------ | ---------------------------------------- | ------- |
-| C | Pairing (QR scan, uncertified consent screen) | Owner completed pairing via the Dev Console recipe; storage gained `commissionedFabrics`, root certs, and a session-resumption record (fabric id 0x62931c1e9b4ddb1f) — operational CASE session was established | **PASS** |
-| D1–D6 | Validation script | Not executed on the spike: the owner's spike session was terminated before validation (integrator process-kill error) and the hub did not reconnect afterwards (see below). Validation moved to the product bridge after S1-5 landed the same day. | **MOVED → product E2E** |
+| C | Pairing (QR scan, uncertified consent screen) | The maintainer completed pairing via the Dev Console recipe; storage gained `commissionedFabrics`, root certs, and a session-resumption record (fabric id `<fabric id>`) — operational CASE session was established | **PASS** |
+| D1–D6 | Validation script | Not executed on the spike: the maintainer's spike session was terminated before validation (integrator process-kill error) and the hub did not reconnect afterwards (see below). Validation moved to the product bridge after S1-5 landed the same day. | **MOVED → product E2E** |
 | E | Restart → no re-pair needed | Relaunch printed `SPIKE already commissioned — storage persisted, no re-pairing needed.`; identical passcode/discriminator across restarts | **PASS** |
 | — | **Hub requirement confirmed?** | Not falsified by test (no hub-off attempt); ADR-002's docs-based answer stands. Hub used: Nest Hub 2. | Docs-confirmed |
 | — | **Hub reconnection after abrupt bridge death** | After the spike process was force-killed and relaunched (same identity, advertising operational mDNS every ~90 s, port open, firewall allowed), the Nest Hub 2 made **zero** reconnection attempts in >60 min; device stayed "offline" in the Home app | **FAIL — carried as product risk** |

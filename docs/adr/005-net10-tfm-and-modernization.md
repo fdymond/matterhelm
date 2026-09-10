@@ -2,7 +2,7 @@
 
 - **Status**: accepted
 - **Date**: 2026-07-28
-- **Story**: S4-0/S4-4 (owner-directed quality pass; integrator research 2026-07-28)
+- **Story**: S4-0/S4-4 (maintainer-directed quality pass; integrator research 2026-07-28)
 
 ## Context
 

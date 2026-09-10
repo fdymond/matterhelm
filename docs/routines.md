@@ -14,10 +14,10 @@ Google Home app → Automations → **+ New** → *When I say to Google Assistan
 
 | You say ("Hey Google, …") | Routine action | Shipped meaning |
 |---|---|---|
-| "play the HTPC" / "resume the HTPC" | Turn **on** *HTPC Play Pause* | Sends Play to the focused app; same-owner SMTC verifies/falls back, while sessionless delivery is logged unverifiable |
+| "play the HTPC" / "resume the HTPC" | Turn **on** *HTPC Play Pause* | Sends Play to the focused app; same-app SMTC verifies/falls back, while sessionless delivery is logged unverifiable |
 | "pause the HTPC" | Turn **off** *HTPC Play Pause* | Sends Pause to the focused app; avoid repeated Pause for Kodi because its appcommand toggles |
-| "next on the HTPC" / "skip this track" | Change *HTPC Next* to its other state | Next fires on either user transition and retains the new state |
-| "back one on the HTPC" | Change *HTPC Previous* to its other state | Previous fires on either user transition and retains the new state |
+| "next on the HTPC" / "skip this track" | Turn **on** *HTPC Next* (Off also works) | Every received On or Off command fires Next; the chosen state is retained |
+| "back one on the HTPC" | Turn **on** *HTPC Previous* (Off also works) | Every received On or Off command fires Previous; the chosen state is retained |
 | "movie time" | Activate a custom command endpoint (e.g. *Movie Mode*), optionally plus lights | Retained custom commands fire on either transition by default |
 | "shut down the theater" | Turn **off** *HTPC Power* | Runs the configured Power Off behavior |
 | "wake the theater" | Turn **on** *HTPC Power* | Reverses displays-off/screensaver modes; does not resume playback |
@@ -31,7 +31,7 @@ once and locally returns the tile to Off after the configured delay (default
 ## Tiles and retained state
 
 The built-in Play/Pause, Next, Previous, and reversible Power endpoints are
-real retained switches in 0.5.0; their shown state is meaningful and they do
+retained switches in the current release; their shown state is meaningful and they do
 not auto-reset. Next and Previous use both edges as triggers, while Play/Pause
 uses On=Play and Off=Pause. Custom commands are also retained/both-edge unless
 their reset checkbox is enabled.

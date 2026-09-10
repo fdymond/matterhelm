@@ -1,13 +1,16 @@
 # ADR-004: Settings window + configurable/custom commands (protocol v2)
 
-- **Status**: accepted; schema/UI amended by shipped follow-ups and custom
-  reset semantics superseded by ADR-012
+- **Status**: accepted; custom reset semantics superseded by
+  [ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md), and action
+  schema/UI amended by [ADR-013](013-focused-first-media-and-retained-mouse-move.md);
+  IPC-client failure behavior amended by
+  [ADR-014](014-public-launch-hardening.md)
 - **Date**: 2026-07-28
-- **Story**: owner direction (post-S2); implemented by S4-1…S4-4
+- **Story**: maintainer direction (post-S2); implemented by S4-1…S4-4
 
 ## Context
 
-The owner wants (a) a full settings UI — categorized navigation, search
+The maintainer wants (a) a full settings UI — categorized navigation, search
 filter, editing for every option — and (b) command configurability: built-in
 commands can be enabled/disabled and users can add **custom commands** that
 appear as additional Google Home devices. Today endpoints are a fixed set of
@@ -39,6 +42,11 @@ side can be built by parallel stories without drift.
   ]
 }
 ```
+
+> **Current amendment:** [ADR-013](013-focused-first-media-and-retained-mouse-move.md)
+> later added `mouseMove`, including one-shot mouse steps inside `sequence`,
+> and protocol v5's required custom `on` edge. The v2 design below is retained
+> as history.
 
 Custom action types (executor-side, tray app only — the sidecar never
 executes anything) now are:
@@ -90,6 +98,11 @@ shimming — no shipped users; both sides land together.
 - `protocol.ts` and `Protocol.cs` change in the same pair of stories; S4-R
   re-verifies mirror parity.
 
+> **Public-launch amendment:** ADR-014 requires the Node IPC client to close
+> its first malformed, binary, or schema-invalid tray frame with policy code
+> 1008 and recover through the existing bounded reconnect path. This does not
+> change message revision v5 or handshake protocol 1.
+
 ### 4. Settings window (`Ui/SettingsWindow`)
 
 One resizable window (not modal), Fluent-informed within WinForms limits:
@@ -119,7 +132,7 @@ One resizable window (not modal), Fluent-informed within WinForms limits:
   product feature; endpoint identity survives renames (stable keys).
 - **Harder**: protocol v2 had to land atomically across both sides (S4-1/S4-2
   in lockstep, S4-R parity check); Config gained a migration path. Protocol v2
-  is historical shipped behavior; the current exact parser revision is v4.
+  is historical shipped behavior; the current exact parser revision is v5.
 - **Risk**: Google Home has to tolerate bridged endpoints appearing/
   disappearing on re-enable (matter.js supports dynamic bridged endpoints —
   ECOSYSTEMS confirms bridge support; validated at E2E).

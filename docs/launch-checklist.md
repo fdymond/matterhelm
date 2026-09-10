@@ -1,79 +1,104 @@
-# Public-launch checklist — 0.5.0
+# Public-launch checklist
 
-Do not tag, publish, or announce 0.5.0 until every blocker is checked with
-evidence from the exact release candidate. Historical 0.3/0.4 evidence does
-not satisfy a 0.5.0 row.
+This checklist governs the switch of
+<https://github.com/fdymond/matterhelm> from private to public. It is not a
+version-bump or release checklist: v0.7.1 remains the current release. Do not
+flip repository visibility until each unchecked launch-decision row is
+completed or explicitly waived by the maintainer.
 
-## Release blockers
+## Verified preparation
 
-- [ ] **Documentation/version gate:** README, `[Unreleased]` changelog,
-  user/distribution guides, BLUEPRINT §§2.2–2.3, ADR status/supersession,
-  backlog, E2E and this checklist agree with the final code. Set version/date
-  only at tag time.
-- [ ] **Windows floor re-check:** copy the final `TargetFramework` values from
-  both C# projects into README/user/distribution docs and record them here.
-  Documentation pass value: `net10.0-windows10.0.17763.0`; concurrent source
-  work means the integrator must re-check it.
-- [ ] **Bridge merge gate:** run `cd bridge; npm.cmd run verify`; expected
-  inventory is 391 tests. Documentation sandbox evidence is alternate runner
-  391/391, but standard Vitest startup hit `spawn EPERM`; paste a clean standard
-  summary here: **PLACEHOLDER**.
-- [ ] **App merge gate:** run
-  `& 'C:\Program Files\dotnet\dotnet.exe' test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release`;
-  expected inventory is 720 tests. Documentation sandbox result was 674 pass /
-  46 fail from invalid `HttpListener` handles and downstream timeouts; paste a
-  clean normal-environment summary here: **PLACEHOLDER**.
-- [ ] **Protocol parity:** verify exact-v5 frame union/fields in
-  `bridge/src/ipc/protocol.ts`, `app/MatterHelm/Sidecar/Protocol.cs`, and
-  BLUEPRINT §2.3; focused parity tests green.
-- [ ] **Exact artifacts:** build and retain names/hashes for
-  `MatterHelm-Setup-<version>.exe`,
-  `matterhelm-v<version>-win-x64.zip`, and `SHA256SUMS.txt`. Confirm the zip
-  includes app files, sidecar, `LICENSE`, `NOTICE`, and `README-dist.md`.
-- [ ] **0.4.x upgrade:** run `docs/e2e-log.md` against an existing installed
-  copy with old custom commands. Confirm config/fabric retention, default
-  retained/both-edge migration, reset opt-in, new Play/Pause and Power
-  meanings, and protocol-v4 matching-sidecar startup.
-- [ ] **Fresh first run/pairing:** unpaired menu shows **Pair with Google
-  Home…** (starts/persists bridge) and hides **Enable bridge**. Validate
-  gray/amber/blue/green/red states and fresh pairing on real Google/Nest
-  hardware.
-- [ ] **0.5.0 behavior hardware pass:** complete every non-destructive row in
-  `docs/e2e-log.md`, including retained switches, SMTC success/safe failure,
-  custom reset, all Power modes, DDC mixed-monitor policy, mDNS selection and
-  factory-reset auto-re-pair flow.
-- [ ] **Updater:** exercise installed and portable updates with the exact
-  assets; hash mismatch must fail safely. Confirm daily/manual checks remain
-  consent-gated.
-- [ ] **Clean-machine smoke:** installer and portable run without preinstalled
-  Node/.NET and without admin rights; firewall guidance is accurate.
-- [ ] **Security/release hygiene:** `npm audit`, dependency/license review,
-  secret scan of current full history, and privacy-scrubbed diagnostics export
-  pass on the final tree.
-- [ ] **Trademark/name review:** human/legal confirmation that MatterHelm name,
-  NOTICE, README non-affiliation wording, and original helm icon are acceptable.
+- [x] **Clean automated baseline:** v0.7.1's clean suites were green; current
+  counts are published by CI rather than frozen in this preparation document.
+  App line coverage was about 58 %, above CI's 45 % threshold
+  (verified 2026-09-10).
+- [x] **Windows floor:** both C# projects target
+  `net10.0-windows10.0.17763.0`, and the installer minimum is Windows build
+  17763: Windows 10 version 1809+ x64.
+- [x] **Protocol parity:** `bridge/src/ipc/protocol.ts` and
+  `app/MatterHelm/Sidecar/Protocol.cs` both declare IPC message revision 5.
+- [x] **Published v0.7.1 artifacts:** the release includes
+  `MatterHelm-Setup-0.7.1.exe`, `matterhelm-v0.7.1-win-x64.zip`, and
+  `SHA256SUMS.txt`.
+- [x] **Distribution contents and notices:** `build.ps1` copies `LICENSE`,
+  `NOTICE`, and `docs/README-dist.md`, generates
+  `THIRD-PARTY-NOTICES.txt` for all bundled npm production packages, Node.js,
+  and QRCoder, and writes `sidecar-layout.json`. The release workflow zips that
+  folder and builds the Inno Setup installer.
+- [x] **Dependency audit:** `npm audit` reports 0 vulnerabilities after Vitest
+  4.1.11 removed the GHSA-82fw-gwwq-j7x9 findings; no vulnerable NuGet packages
+  were reported in the verified 2026-09-10 audit.
+- [x] **History and secret review:** the full-history scan found no tokens,
+  keys, pairing codes, or hostnames. Three commits contain a personal Windows
+  path and six contain RFC1918 test addresses; these are non-secret historical
+  context, so the decision is no history rewrite. The live S0-3 spike document
+  now uses portable paths.
+- [x] **Diagnostics privacy:** the export stays local and sanitises
+  `config.json` by default (identity seed, launch arguments, and profile paths
+  redacted). Its manifest omits identity/paths, and every bundled log/metrics
+  line redacts commissioning credentials, machine/user names, profile paths,
+  and IPv4/IPv6 literals. Raw config needs a code-only opt-in with no UI.
+- [x] **Loopback admission:** `IpcServer` verifies the request remote endpoint
+  and returns HTTP 403 for non-loopback callers before the single-client slot;
+  its one WARN records the address family only. The Node peer closes the first
+  invalid inbound frame with policy code 1008 and reconnects with bounded
+  backoff.
+- [x] **CI hardening:** GitHub Actions are SHA-pinned and least-privilege;
+  CodeQL covers JavaScript/TypeScript and C#, with dependency review, Scorecard,
+  and release provenance attestations in dedicated workflows.
+- [x] **Release integrity:** v0.7.1 has SHA-256 checksums, and the updater
+  verifies the selected package and rechecks its hash before applying it. The
+  release workflow now attests build provenance for the next release onward.
 
-## Strongly recommended before announcement
+## Launch decisions and integrated checks
 
-- [ ] Capture current Settings, overlay, pairing and Home-tile screenshots.
-- [ ] Enable Discussions, Dependabot/security alerts, secret scanning/push
-  protection, and `main` branch protection as available.
-- [ ] Record installer/portable sizes and rerun ADR-007 CPU/private-memory/cold
-  start budgets on the release artifacts.
-- [ ] Decide code-signing path or explicitly accept the documented SmartScreen
-  warning for this release.
+- [x] **Integrated documentation pass:** README, user/distribution guides,
+  BLUEPRINT, amended/new ADRs, CHANGELOG, BACKLOG, E2E log, and this checklist
+  describe the public-readiness behavior. A link check covers every file
+  changed by the pass.
+- [ ] **Commit launch files:** Commit the untracked files (three new workflows,
+  `AGENTS.md`, ADR-014, new source/test files) — the CodeQL badge only resolves
+  once `codeql.yml` is on `main`.
+- [ ] **Trademark/name review (human/legal):** resolve the open `NOTICE`
+  “Name” item against the CSA brand guidelines and confirm the project name,
+  non-affiliation language, and original helm icon are acceptable.
+- [ ] **Exact-release hardware E2E (human):** run the current
+  [`e2e-log.md`](e2e-log.md) checklist using the exact v0.7.1 installer or
+  portable asset and real Google/Nest hardware. Prior real-hardware exercise
+  is useful evidence, but does not replace this launch sign-off.
+- [ ] **Screenshots (human):** capture current Settings, overlay, pairing, and
+  Google Home tile views, scrub personal information, and decide where they
+  belong. No screenshots are currently present, so README must not link to
+  any until this is complete.
+- [ ] **Code-signing decision (human):** either arrange Authenticode signing
+  for future binaries or explicitly accept and retain the documented
+  SmartScreen warning for unsigned builds.
 
-## Already present (must still be spot-checked)
+## Post-flip settings
 
-- [x] MIT `LICENSE`, trademark/third-party `NOTICE`, `CONTRIBUTING`, `SECURITY`,
-  Contributor Covenant, `SUPPORT`, issue forms, PR template, and CODEOWNERS.
-- [x] CI/release workflows, installer + portable packaging, checksums,
-  Dependabot, measured resource budgets, and local privacy-scrubbed diagnostics.
-- [x] Original helm tray icon and non-affiliation language.
+- [ ] Add branch protection or a repository ruleset for `main` that requires
+  pull requests and the relevant `ci` checks before merge.
+- [ ] Enable Dependabot alerts and Dependabot security updates.
+- [ ] Enable secret scanning and push protection.
+- [ ] Enable code scanning and confirm the CodeQL workflow reports results.
+- [ ] Confirm the dependency-review workflow now runs on pull requests after
+  the repository is public and fails only high-severity changes in runtime
+  dependency scope.
+- [ ] Enable private vulnerability reporting so the SECURITY/SUPPORT advisory
+  link is available to unauthenticated reporters.
+- [ ] Decide whether to enable Discussions; it is optional while the issue
+  tracker remains the primary support channel.
+- [ ] Enable automatic deletion of head branches after merge.
+- [ ] Prefer squash merging so one focused issue/story lands as one
+  Conventional Commit on `main`.
+- [ ] Retire the user-guide note that anonymous release checks are unavailable
+  while the repo is private (user-guide → *Updating*).
 
-## Post-launch
+## After launch
 
-- [ ] Submit a winget manifest after the first public installer release.
+- [ ] Verify the README badges, issue chooser, private vulnerability-reporting
+  route, release downloads, and documentation links as an unauthenticated
+  visitor.
+- [ ] Establish a sustainable issue-triage cadence for the solo maintainer.
 - [ ] Monitor Google test-VID policy, Matter/matter.js changes, controller
   reconnect behavior, and upstream resolution of ADR-010.
-- [ ] Establish issue triage cadence and label approachable issues.

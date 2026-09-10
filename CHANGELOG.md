@@ -8,6 +8,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/) from
 versioned independently of the app/bridge SemVer and only ever bumped with an
 ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
+## [Unreleased]
+
+### Added
+
+- Added CodeQL scanning for JavaScript/TypeScript and C#, dependency review,
+  OpenSSF Scorecard, and release provenance attestations; all GitHub Actions
+  are SHA-pinned with least-privilege workflow permissions.
+- Release builds now generate and ship `THIRD-PARTY-NOTICES.txt` for bundled
+  npm packages, Node.js, and QRCoder, plus `sidecar-layout.json` declaring the
+  SEA or Node/bundle sidecar payload.
+- Added public project metadata and the cross-agent `AGENTS.md` entry point.
+
+### Changed
+
+- Speaker-state writes, volume-state sends, delay-bearing macros, and app logs
+  now have explicit coalescing, timeout, concurrency, retention, and repeat-
+  suppression bounds. Configuration now rejects oversized files/lists/names,
+  launch arguments, and identity seeds with validation errors instead of
+  crashes. Whole-file rejection now moves oversized, invalid-JSON, or non-object
+  config to a timestamped rejected file, runs on in-memory defaults, and blocks
+  all saves until a successful reload; users must recover it before pairing so
+  a newly minted identity seed can be persisted.
+- `BridgeHost` and `MediaKeys` were decomposed into focused lifecycle,
+  dispatch, state-publication, foreground-routing, settings-policy, sidecar-
+  environment, and serial-queue components.
+- Installer and portable upgrades select the sidecar from
+  `sidecar-layout.json` and remove the other layout's known files. SEA
+  packaging now invokes an exact local `postject` development dependency and
+  fails on injection errors unless `-AllowNodeLayoutFallback` is explicit.
+- Third-party notices now cover the bundled .NET runtime, WindowsDesktop
+  runtime, and Windows SDK projection in addition to npm, Node.js, and QRCoder.
+
+### Removed
+
+- The archived Matter-mark tray-icon renderer (never shipped as the icon) was
+  deleted from the source tree.
+
+### Fixed
+
+- Address-in-use startup failures now show a red error state with the specific
+  reason in the log, without persisting **Enable bridge** as off, including
+  conflicts from another signed-in/RDP session.
+- Factory reset now renames live Matter storage before deleting it: failed
+  staging leaves pairing data untouched, while failed staged cleanup completes
+  the reset and reports the residue path.
+- An unhandled sidecar promise rejection now exits non-zero so the supervisor's
+  bounded backoff can restart it.
+- Diagnostics now replace standalone/long QR block-art lines with `<qr-art>`,
+  redact text and JSON-key `discriminator` values, and anchor user/machine-name
+  replacement to word boundaries while retaining profile-path coverage.
+- Log eviction failures are cached for 30 seconds without dropping writes, and
+  exit/day rollover emits any pending suppressed-repeat summary.
+- IPC sends now fail unless the socket is OPEN, and local policy closes preserve
+  reconnect backoff.
+
+### Security
+
+- IPC now rejects non-loopback HTTP.sys clients with 403 before single-client
+  admission. The Node peer closes its first malformed, binary, or schema-
+  invalid inbound frame with policy code 1008 and then reconnects normally.
+- Diagnostics exports now sanitise `config.json` by default and stream all
+  bundled logs/metrics through commissioning-credential, identity, profile-
+  path, and IP-literal redaction; raw config requires a code-only opt-in.
+- Update downloads remain handle-protected through verification/application,
+  and `MATTERHELM_UPDATE_TOKEN` is scrubbed from sidecar/helper environments.
+- Updated Vitest to 4.1.11 to resolve GHSA-82fw-gwwq-j7x9.
+
 ## [0.7.1] — 2026-09-01
 
 Field fixes from real HTPC logs, plus a first-show centring bug the logs
@@ -45,10 +112,10 @@ indirectly exposed.
   one dialog and one target picker.
 
 ### Documentation
-- Troubleshooting for `SendInput … (Win32 error 5)`: Windows refuses synthetic
-  input into an elevated window, so a hotkey command cannot reach an app run as
-  administrator (Philips Hue Sync is the common case). Run the target app
-  non-elevated.
+- Troubleshooting for `SendInput … (Win32 error 5)`: an elevated target and
+  Windows UIPI restrictions are a likely cause, but error 5 does not prove UIPI
+  specifically. Run the target app non-elevated rather than elevating
+  MatterHelm.
 
 
 ## [0.7.0] — 2026-08-31
@@ -88,14 +155,14 @@ indirectly exposed.
 ### Fixed
 - **Media commands now try the focused app first.** Players that do not publish
   a Windows media session — Kodi is the measured example — received nothing
-  from the dedicated verbs. They are now sent to the focused window first,
-  verified, and only then routed to a media session.
+  from the dedicated verbs. They are now sent to the focused window first and
+  verified against, or eligible to fall back to, only a matching app session.
 - **Commands can no longer act on the wrong application.** Verification read
   the GLOBAL media session, so with Kodi playing and a stale paused session
   belonging to another app, a dedicated Pause concluded "already paused" and
   did nothing — while an earlier build would instead start that other app
-  playing. Verification is now scoped to the focused app; a session owned by
-  someone else counts as unverifiable rather than as evidence.
+  playing. Verification is now scoped to the focused app; a different app's
+  session counts as unverifiable rather than as evidence.
 - playPause no longer falls back to a toggle, which could cancel out a focused
   toggle that arrived late.
 - An immediately repeated dedicated verb to the same unverifiable target is
@@ -121,7 +188,7 @@ Packaging fix for 0.5.0. Two files that belonged to the 0.5.0 change set were
 left unstaged and therefore missing from that release:
 
 ### Fixed
-- The installer now enforces . 0.5.0 targets the
+- The installer now enforces Windows 10 version 1809 (build 17763). 0.5.0 targets the
   Windows media-session APIs introduced in Windows 10 1809, but its published
   Setup exe would still install on older builds and then fail at runtime.
   Installing 0.5.1 on an unsupported build is now refused cleanly up front.
@@ -132,8 +199,8 @@ left unstaged and therefore missing from that release:
 
 ## [0.5.0] — 2026-08-30
 
-This section is the 0.5.0 release candidate. Version and release date remain
-unset until tagging.
+Version 0.5.0 established retained switch semantics and the dedicated
+Play/Pause protocol variants described below.
 
 ### Upgrade notes from 0.4.x
 
@@ -178,7 +245,7 @@ unset until tagging.
 - First-run bridge control is contextual: unpaired installs show **Pair with
   Google Home…**, which starts and persists the bridge; commissioned installs
   show **Enable bridge**.
-- Tray state legend is gray/disabled, amber/starting, blue/awaiting pairing,
+- Tray state legend is taskbar-theme monochrome/disabled, amber/starting, blue/awaiting pairing,
   green/connected, and red/crash-loop or missing advertisement.
 
 ### Documentation
@@ -258,7 +325,7 @@ of a batch of onboarding and hardware-honesty work.
 ## [0.4.2] — 2026-08-26
 
 The release that makes pairing actually work. A field-debugging session on the
-owner's network uncovered that matter.js 0.17.7 on Windows never answers mDNS
+maintainer's network uncovered that matter.js 0.17.7 on Windows never answers mDNS
 queries — devices were only ever discoverable by luck during the announcement
 burst after startup (S10-9, ADR-010). With that fixed, the whole re-pairing
 story got hardened end to end, an auto-updater arrived, and a five-dimension
@@ -628,3 +695,18 @@ for the authoritative, up-to-date version):
 - Continued hardware end-to-end validation, logged in `docs/e2e-log.md`
   (the full scripted checklist has not yet been executed against the
   packaged dist — needs the human, a Nest hub, and a phone).
+
+[Unreleased]: https://github.com/fdymond/matterhelm/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/fdymond/matterhelm/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/fdymond/matterhelm/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/fdymond/matterhelm/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/fdymond/matterhelm/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/fdymond/matterhelm/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/fdymond/matterhelm/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/fdymond/matterhelm/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/fdymond/matterhelm/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/fdymond/matterhelm/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/fdymond/matterhelm/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/fdymond/matterhelm/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/fdymond/matterhelm/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/fdymond/matterhelm/releases/tag/v0.1.0

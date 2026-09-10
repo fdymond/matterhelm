@@ -2,7 +2,7 @@
 
 - **Status**: accepted
 - **Date**: 2026-07-26
-- **Story**: pre-Sprint-0 (owner direction)
+- **Story**: pre-Sprint-0 (maintainer direction)
 
 ## Context
 
@@ -10,7 +10,7 @@ The original blueprint made this project a *sidecar* of a separate,
 pre-existing (private) voice-control application on the same machine: the
 Matter bridge forwarded Google Home actions over IPC into that app's command
 router, and that app supplied the tray UI, overlay, config, and process
-supervision. The owner directed that the Google Home / Matter integration be
+supervision. The maintainer directed that the Google Home / Matter integration be
 **its own app, fully independent of any other repository or code**, with its
 own tray application and its own command overlay pop-ups.
 

@@ -1,11 +1,13 @@
 # ADR-008: dispatch plug actions from OnOff commands, not attribute changes
 
-- **Status**: accepted; momentary/reset semantics superseded by ADR-012
+- **Status**: accepted; momentary/reset semantics superseded by
+  [ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md)
 - **Date**: 2026-08-16
-- **Story**: S8-1 (owner-directed: "is there any alternative to using on/off
+- **Story**: S8-1 (maintainer-directed: "is there any alternative to using on/off
   switch logic to trigger functionality?")
 
-The command-interception decision remains binding. ADR-012 explicitly
+The command-interception decision remains binding.
+[ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md) explicitly
 supersedes this ADR's former all-momentary reset scheduler, its 300-ms default,
 and the S8-4 rule that all built-ins/custom endpoints share identical both-edge
 semantics.
@@ -109,12 +111,13 @@ predicted: the Home app's tile is a **toggle over Google's own state model**,
 and that model lags or ignores the bridge's instant auto-reset. With the tile
 stuck showing "on", the next tap arrives as an `Off` command — which the
 mapping dropped as a non-action, so every other tap was dead and the user had
-to toggle off manually before the next press worked (owner-reported;
+to toggle off manually before the next press worked (maintainer-reported;
 re-typing the device to "Switch" in the Home app changes the icon only, not
 the toggle semantics).
 
 Historical decision: every then-momentary built-in/custom endpoint dispatched
-both On and Off. ADR-012 supersedes that shared policy. Current behavior is:
+both On and Off. [ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md)
+supersedes that shared policy. Current behavior is:
 Play/Pause maps On to Play and Off to Pause; Next/Previous and retained custom
 commands dispatch on both edges; reset-enabled custom commands dispatch only
 On; reversible Power maps each edge to its direction; irreversible Power

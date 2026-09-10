@@ -1,8 +1,9 @@
 # ADR-007: Measured resource budgets (G6 amendment) + bundled sidecar dev path
 
-- **Status**: accepted
+- **Status**: accepted; pipeline bounds added by
+  [ADR-014](014-public-launch-hardening.md)
 - **Date**: 2026-08-04
-- **Story**: S6-1 (owner-directed deep review/optimization; measurements on the
+- **Story**: S6-1 (maintainer-directed deep review/optimization; measurements on the
   target machine at 200 % DPI)
 
 ## Context
@@ -41,6 +42,16 @@ state — no leaks.
 3. **Perf-budget gate for releases (S3-3)** checks these numbers with the
    same measurement method (private bytes, settled ≥ 2 min idle, plus the
    churn probe PASS).
+
+> **Public-launch amendment:** ADR-014 adds bounded state coalescing, echo
+> expectations, IPC send timeouts, macro concurrency, and segmented logs. The
+> 2026-09-10 post-hardening measurement used a packaged 0.7.1-line build,
+> settled for 75 seconds, then measured 30 seconds idle. Tray private memory
+> was 18.5 MB (same-day pre-refactor baseline 19.0 MB), working set 74 MB,
+> handles 664 (baseline 673), GDI objects 43 (43), and threads 28. Sidecar
+> private memory was 90.8 MB (baseline 92.4 MB), with 227 handles. Idle CPU was
+> 0.00 % for the tray and 0.10 % for the sidecar. The budgets (tray ≤ 32 MB,
+> sidecar ≤ 120 MB, idle CPU < 0.5 %) hold.
 
 ## Consequences
 

@@ -1,8 +1,14 @@
 # ADR-013: focused-first media routing and retained mouse movement
 
-- **Status**: accepted, amended by S11-3, S11-5, S11-6, and S11-8
+- **Status**: accepted; amends
+  [ADR-003](003-tray-app-native-tech-choices.md),
+  [ADR-004](004-settings-ui-and-custom-commands.md), and
+  [ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md); amended by
+  S11-3, S11-5, S11-6, and S11-8
 - **Date**: 2026-08-30
-- **Story**: S11-2 (owner-directed), S11-3 release remediation, S11-5 macro mouse steps, S11-6 screensaver focus restoration, S11-8 field remediation
+- **Story**: S11-2 (maintainer-directed), S11-3 release remediation, S11-5 macro mouse steps, S11-6 screensaver focus restoration, S11-8 field remediation
+- **Related**: [ADR-011](011-blue-awaiting-pairing-tray-state.md) introduced
+  `matterStatus` at v3; this ADR advances the exact message revision to v5
 
 ## Context
 
@@ -21,23 +27,25 @@ a toggle, while Kodi publishes no SMTC session.
 
 ## Decision
 
-Amend BLUEPRINT §§2.2–2.4 and supersede ADR-012/ADR-003 only where they require
+Amend BLUEPRINT §§2.2–2.4 and supersede
+[ADR-012](012-retained-switch-state-and-opt-in-custom-reset.md)/[ADR-003](003-tray-app-native-tech-choices.md)
+only where they require
 SMTC-only media routing or a key-only custom frame.
 
 - Capture the foreground HWND and resolve its owning PID, executable name, and
   application user model id when available. Every SMTC observation includes
-  its `SourceAppUserModelId`. Log the ownership comparison at the initial and
+  its `SourceAppUserModelId`. Log the application-identity comparison at the initial and
   post-focused observation points.
 - Short-circuit an absolute verb, verify focused delivery, or use an
   unhandled-delivery fallback only when the session belongs to the captured
-  foreground app. A different or unresolved owner is unverifiable: it cannot
+  foreground app. A different or unresolved app identity is unverifiable: it cannot
   suppress delivery, prove success, or receive fallback after a successfully
   delivered focused command.
 - When delivery was aimed at a specific foreground window and fails, only a
   captured session owned by that same foreground app is an intended fallback.
-  A different-owner session is never actioned. When no foreground target could
+  A different-app session is never actioned. When no foreground target could
   be captured, the captured current session remains the intended fallback.
-  Pin every fallback to its captured `SourceAppUserModelId`; an owner change
+  Pin every fallback to its captured `SourceAppUserModelId`; a source-app identity change
   before or after the action fails verification instead of redirecting or
   proving it.
 - Treat Win32 `ERROR_TIMEOUT` from the focused `WM_APPCOMMAND` as a transient
@@ -102,8 +110,9 @@ SMTC-only media routing or a key-only custom frame.
   acknowledgement means delivery, not observed playback change.
 - Chrome, Spotify, or another background session can no longer suppress,
   verify, or receive fallback for a Kodi-targeted command. A failed Kodi
-  delivery succeeds only through a Kodi-owned session; otherwise it fails with
-  the target/fallback reason.
+  delivery could succeed only through a session belonging to Kodi—which Kodi
+  does not currently publish—so it otherwise fails with the target/fallback
+  reason.
 - The two-second guard makes immediate repeated dedicated verbs idempotent for
   unverifiable targets. Residual limitation: Kodi Pause can still resume
   playback when the same dedicated Pause is sent again after the window, after

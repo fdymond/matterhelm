@@ -10,35 +10,42 @@ It runs as a tray app and needs no separate Node.js or .NET installation.
 - IPv6 enabled on the selected LAN adapter and across the local path.
 - Google Home app access to the home and a free Google Home Developer Console
   Matter integration whose VID/PID matches MatterHelm's defaults
-  (`0xFFF1`/`0x8000`).
+  (`0xFFF1`/`0x8000`); the account used to pair must be a project member.
 
 ## Package contents
 
 The portable zip contains the self-contained published tray-app files,
 `MatterHelm.exe`, and either a bundled sidecar executable or the supported
-fallback sidecar bundle/runtime under `sidecar\`. It also includes `LICENSE`,
-`NOTICE`, and this `README-dist.md`. Keep the extracted files together.
+fallback sidecar bundle/runtime under `sidecar\`. `sidecar-layout.json`
+declares which payload is active: `sidecar\bridge.exe` for SEA, or
+`sidecar\node.exe` plus `sidecar\bridge.cjs` for the fallback. It also includes
+`LICENSE`, `NOTICE`, this `README-dist.md`, and
+`THIRD-PARTY-NOTICES.txt`, which records the exact bundled npm packages
+(including matter.js), Node.js, and QRCoder with their license text. Keep the
+extracted files together.
 
 ## First run and pairing
 
-1. Extract the complete zip to a writable folder and run `MatterHelm.exe`.
-2. Right-click the helm tray icon and choose **Pair with Google Home…**. On an
-   unpaired install this is the bridge-start action: it enables and persists
-   the bridge and opens the pairing window. **Enable bridge** is hidden until
-   commissioning succeeds.
+1. For a portable copy, extract the complete zip to a writable folder. Run
+   `MatterHelm.exe` (the installer can launch it for you).
+2. On a fresh, unpaired install the **Welcome** window opens once. Choose
+   **Start bridge & pair**. You can reopen it with **Setup guide…**, or use the
+   equivalent tray action **Pair with Google Home…**. Either route enables and
+   persists the bridge and opens the pairing window; **Enable bridge** remains
+   hidden until commissioning succeeds.
 3. Allow the Windows Firewall prompt for **Private** networks.
 4. Wait for the tray to turn blue and for the QR/manual code to appear, then in
    Google Home choose **+ Add → Matter-enabled device** and scan or enter it.
 5. Complete room/name setup. The tray turns green when commissioned and
    connected.
 
-Tray states: **gray** = bridge disabled; **amber** = starting or awaiting
-lifecycle status; **blue** = healthy and awaiting pairing; **green** = paired
-and connected; **red** = crash/restart loop or commissionable advertisement
-missing.
+Tray states: **taskbar-theme monochrome** = bridge disabled; **amber** =
+starting or awaiting lifecycle status; **blue** = healthy and awaiting
+pairing; **green** = paired and connected; **red** = crash/restart loop or
+commissionable advertisement missing.
 
 Play/Pause is retained: On requests Play and Off requests Pause in the focused
-program first. Windows media-session checks/fallback are ownership-aware, so a
+program first. Windows media-session checks/fallback are same-app only, so a
 different app's session cannot suppress or prove the command. Sessionless
 players are delivered to but explicitly unverifiable. Next/Previous
 retain state and fire on either user transition.
