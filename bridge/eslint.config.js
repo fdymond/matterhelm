@@ -70,7 +70,7 @@ export default defineConfig(
       ],
     },
   },
-  // The next three blocks all configure `no-restricted-imports`. Flat config
+  // The blocks below configure `no-restricted-imports`. Flat config
   // does not merge a rule's options across matching blocks — the LAST
   // matching block for a given file wins outright (verified: a naive
   // two-block split silently dropped the @matter restriction for every file
@@ -78,11 +78,51 @@ export default defineConfig(
   // set and states its own COMPLETE `no-restricted-imports` value for that
   // set, rather than relying on merge-by-file-set.
   {
-    // Everything except adapter.ts (may use matter.js) and *.test.ts (may use
-    // ws, the mock-WS-peer devDep): neither @matter/*/@project-chip/* nor ws
-    // is legal here.
+    // General source may import neither matter.js directly nor ws. Those
+    // packages stay behind their adapter/client boundaries.
     files: ["src/**/*.ts"],
-    ignores: ["src/matter/adapter.ts", "src/**/*.test.ts"],
+    ignores: ["src/matter/adapter.ts", "src/ipc/client.ts", "src/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@matter/**", "@project-chip/**"],
+              message:
+                "matter.js (@matter/*, @project-chip/*) imports are only allowed in src/matter/adapter.ts — add the wrapper there instead (docs/ENGINEERING-STANDARDS.md principle 1).",
+            },
+            {
+              group: ["ws", "ws/**"],
+              message:
+                "ws imports are only allowed in src/ipc/client.ts and tests — keep WebSocket transport behind the IPC client boundary.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // adapter.ts is the matter.js boundary, but ws remains IPC-client-only.
+    files: ["src/matter/adapter.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["ws", "ws/**"],
+              message:
+                "ws imports are only allowed in src/ipc/client.ts and tests — keep WebSocket transport behind the IPC client boundary.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // client.ts is the ws boundary, but matter.js remains adapter-only.
+    files: ["src/ipc/client.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -94,39 +134,12 @@ export default defineConfig(
                 "matter.js (@matter/*, @project-chip/*) imports are only allowed in src/matter/adapter.ts — add the wrapper there instead (docs/ENGINEERING-STANDARDS.md principle 1).",
             },
           ],
-          paths: [
-            {
-              name: "ws",
-              message:
-                "ws is a test-only devDependency — src/ uses the global WebSocket, not this package.",
-            },
-          ],
         },
       ],
     },
   },
   {
-    // adapter.ts is the one legal matter.js import site; it still must not
-    // pull in the test-only ws package.
-    files: ["src/matter/adapter.ts"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "ws",
-              message:
-                "ws is a test-only devDependency — src/ uses the global WebSocket, not this package.",
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    // Tests may use ws (mock WS peer) but must still reach matter.js only
-    // through matter/adapter.ts, never directly.
+    // Tests must still reach matter.js only through matter/adapter.ts.
     files: ["src/**/*.test.ts"],
     rules: {
       "no-restricted-imports": [

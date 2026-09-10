@@ -36,6 +36,23 @@ import { PendingAckTimings, makeAckTimingObserver, makeActionDispatcher } from "
 /** Hard-exit ceiling for graceful shutdown (BLUEPRINT §2.1 stdin tether). */
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
+interface ProcessErrorLogger {
+  error(obj: Record<string, unknown>, msg: string): void;
+}
+
+/** Handles the process-level rejection boundary without coupling tests to process.exit. */
+export function handleUnhandledRejection(
+  reason: unknown,
+  logger: ProcessErrorLogger,
+  shutdown: (reason: string, exitCode: number) => void,
+): void {
+  logger.error(
+    { evt: "process.unhandled-rejection", err: String(reason) },
+    "unhandled promise rejection; shutting down for supervisor restart",
+  );
+  shutdown("unhandled-rejection", 1);
+}
+
 async function main(): Promise<void> {
   let config: Config;
   try {
@@ -47,17 +64,6 @@ async function main(): Promise<void> {
   }
 
   const logger = makeLogger(config.logLevel);
-
-  // Install at the composition root, after the one process logger exists and
-  // before any long-lived subsystem starts work. Individual async boundaries
-  // still catch with richer context; this last line of defense keeps one stray
-  // rejection from terminating the supervised sidecar.
-  process.on("unhandledRejection", (reason: unknown) => {
-    logger.error(
-      { evt: "process.unhandled-rejection", err: String(reason) },
-      "unhandled promise rejection; sidecar will continue running",
-    );
-  });
 
   // `client` and the matter bridge each call into the other once running
   // (bridge -> client.send on a cluster write; client -> bridge on an
@@ -178,6 +184,7 @@ async function main(): Promise<void> {
   // ADR-004: with the speaker endpoint disabled, tray state frames stay
   // tolerated but apply to nothing — logged at debug exactly once.
   let speakerDisabledLogged = false;
+  let observedSpeakerStateWrite: Promise<void> | undefined;
 
   handlers.onFrame = (frame) => {
     if (frame.type === "state") {
@@ -196,12 +203,22 @@ async function main(): Promise<void> {
         { evt: "ipc.state", volume: frame.volume, muted: frame.muted, ...attrs },
         "applying tray state to speaker endpoint",
       );
-      void bridgeHandle.setSpeakerState(attrs.currentLevel, attrs.onOff).catch((err: unknown) => {
-        logger.error(
-          { evt: "matter.speaker-state.error", err: String(err) },
-          "failed to apply tray state to the speaker endpoint",
-        );
-      });
+      const write = bridgeHandle.setSpeakerState(attrs.currentLevel, attrs.onOff);
+      if (write !== observedSpeakerStateWrite) {
+        observedSpeakerStateWrite = write;
+        void write
+          .catch((err: unknown) => {
+            logger.error(
+              { evt: "matter.speaker-state.error", err: String(err) },
+              "failed to apply tray state to the speaker endpoint",
+            );
+          })
+          .finally(() => {
+            if (observedSpeakerStateWrite === write) {
+              observedSpeakerStateWrite = undefined;
+            }
+          });
+      }
       return;
     }
     logger.debug(
@@ -233,15 +250,12 @@ async function main(): Promise<void> {
     }
   });
 
-  client.start();
-  await bridgeHandle.start();
-  maybeEmitPairing();
-  emitMatterStatus();
-  advertisementHealth.setCommissioned(commissioned);
-  logger.info({ evt: "bridge.started", ipcPort: config.ipcPort }, "bridge started");
-
   let shuttingDown = false;
-  function shutdown(reason: string): void {
+  let shutdownExitCode = 0;
+  function shutdown(reason: string, exitCode = 0): void {
+    if (exitCode !== 0) {
+      shutdownExitCode = exitCode;
+    }
     if (shuttingDown) {
       return;
     }
@@ -258,7 +272,7 @@ async function main(): Promise<void> {
       .close()
       .then(() => {
         clearTimeout(hardExit);
-        process.exit(0);
+        process.exit(shutdownExitCode);
       })
       .catch((err: unknown) => {
         logger.error({ evt: "shutdown.error", err: String(err) }, "error while closing the bridge");
@@ -266,6 +280,19 @@ async function main(): Promise<void> {
         process.exit(1);
       });
   }
+
+  // Install after shutdown owns every constructed subsystem and before any
+  // of them starts long-lived work. The supervisor restarts a non-zero exit.
+  process.on("unhandledRejection", (reason: unknown) => {
+    handleUnhandledRejection(reason, logger, shutdown);
+  });
+
+  client.start();
+  await bridgeHandle.start();
+  maybeEmitPairing();
+  emitMatterStatus();
+  advertisementHealth.setCommissioned(commissioned);
+  logger.info({ evt: "bridge.started", ipcPort: config.ipcPort }, "bridge started");
 
   // The tray app supervisor tethers the child via stdin: closing its end of
   // the pipe (or the process dying) is our signal to self-terminate even if

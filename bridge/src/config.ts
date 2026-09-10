@@ -33,9 +33,12 @@ const PORT_MIN = 1024;
 const PORT_MAX = 65535;
 const DEFAULT_IPC_PORT = 39531;
 const DEFAULT_LOG_LEVEL = "info";
+const MAX_CUSTOM_COMMANDS = 64;
+const MAX_ENDPOINT_NAME_LENGTH = 64;
+const MAX_IDENTITY_SEED_LENGTH = 128;
 
 /**
- * `HTPC_BRIDGE_MOMENTARY_RESET_MS` bounds and default (S7-1, owner request).
+ * `HTPC_BRIDGE_MOMENTARY_RESET_MS` bounds and default (S7-1, maintainer request).
  * 0 = reset on the next tick after the On command — safe since ADR-008 made
  * the window presentation-only (dispatch happens on the command itself), and
  * the fastest tile snap-back Google's controller model allows (S8-2).
@@ -72,6 +75,10 @@ const MatterLogLevelSchema = z.enum(MATTER_LOG_LEVELS);
  * a matter.js internal that changes between releases.
  */
 const MatterLogFacilitiesSchema = z.record(z.string().min(1), MatterLogLevelSchema);
+const EndpointNameSchema = z
+  .string()
+  .min(1)
+  .max(MAX_ENDPOINT_NAME_LENGTH, `must be at most ${String(MAX_ENDPOINT_NAME_LENGTH)} characters`);
 
 /**
  * One ordinary built-in entry inside `HTPC_BRIDGE_ENDPOINTS` (ADR-004 §2). The tray
@@ -81,7 +88,7 @@ const MatterLogFacilitiesSchema = z.record(z.string().min(1), MatterLogLevelSche
  * keys and wrong types stay fatal.
  */
 const BuiltinEndpointSchema = z.strictObject({
-  name: z.string().min(1).optional(),
+  name: EndpointNameSchema.optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -97,7 +104,7 @@ const PowerEndpointSchema = BuiltinEndpointSchema.extend({
  */
 const CustomEndpointSchema = z.strictObject({
   key: CustomCommandKeySchema,
-  name: z.string().min(1),
+  name: EndpointNameSchema,
   resetAfterActivation: z.boolean().optional().default(false),
 });
 
@@ -108,7 +115,10 @@ const EndpointsSchema = z.strictObject({
   next: BuiltinEndpointSchema.optional(),
   previous: BuiltinEndpointSchema.optional(),
   power: PowerEndpointSchema.optional(),
-  custom: z.array(CustomEndpointSchema).optional(),
+  custom: z
+    .array(CustomEndpointSchema)
+    .max(MAX_CUSTOM_COMMANDS, `must contain at most ${String(MAX_CUSTOM_COMMANDS)} custom commands`)
+    .optional(),
 });
 
 /** Validated, defaulted bridge configuration — §2.3's env contract table. */
@@ -445,10 +455,20 @@ function parseVendorOrProductId(raw: string | undefined, name: string): number |
   return parsed;
 }
 
-/** : any non-empty string; unset/empty = the bridge's legacy default. */
-function parseUniqueIdSeed(raw: string | undefined): string | undefined {
+/** A trimmed optional env string with a caller-specific resource cap. */
+function parseBoundedOptionalString(
+  raw: string | undefined,
+  name: string,
+  maxLength: number,
+): string | undefined {
   const trimmed = raw?.trim();
-  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+  if (trimmed === undefined || trimmed === "") {
+    return undefined;
+  }
+  if (trimmed.length > maxLength) {
+    throw new Error(`${name} must be at most ${String(maxLength)} characters`);
+  }
+  return trimmed;
 }
 
 function parseMdnsInterface(raw: string | undefined): string | undefined {
@@ -466,8 +486,16 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
   const matterPort = parsePortEnv(env.HTPC_BRIDGE_MATTER_PORT, "HTPC_BRIDGE_MATTER_PORT");
   const logLevel = parseLogLevel(env.HTPC_BRIDGE_LOG_LEVEL);
   const matterLogFacilities = parseMatterLogFacilities(env.HTPC_BRIDGE_MATTER_LOG_FACILITIES);
-  const uniqueIdSeed = parseUniqueIdSeed(env.HTPC_BRIDGE_UNIQUE_ID_SEED);
-  const bridgeName = parseUniqueIdSeed(env.HTPC_BRIDGE_NAME);
+  const uniqueIdSeed = parseBoundedOptionalString(
+    env.HTPC_BRIDGE_UNIQUE_ID_SEED,
+    "HTPC_BRIDGE_UNIQUE_ID_SEED",
+    MAX_IDENTITY_SEED_LENGTH,
+  );
+  const bridgeName = parseBoundedOptionalString(
+    env.HTPC_BRIDGE_NAME,
+    "HTPC_BRIDGE_NAME",
+    MAX_ENDPOINT_NAME_LENGTH,
+  );
   const vendorId = parseVendorOrProductId(env.HTPC_BRIDGE_VENDOR_ID, "HTPC_BRIDGE_VENDOR_ID");
   const productId = parseVendorOrProductId(env.HTPC_BRIDGE_PRODUCT_ID, "HTPC_BRIDGE_PRODUCT_ID");
   return {
