@@ -31,8 +31,8 @@
   "dependencies": {
     "@matter/main": "0.17.7",
     "pino": "10.3.1",
-    "ws": "8.21.1",
-    "zod": "4.4.3"
+    "ws": "8.21.3",
+    "zod": "4.6.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
