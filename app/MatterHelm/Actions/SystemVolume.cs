@@ -5,6 +5,26 @@ namespace MatterHelm.Actions;
 /// <summary>Master-volume state in the IPC protocol shape (percent 0–100 + muted).</summary>
 public readonly record struct VolumeState(int VolumePercent, bool Muted);
 
+internal readonly record struct EndpointVolumeState(float Scalar, bool Muted);
+
+/// <summary>Controlled boundary around the CoreAudio endpoint-volume and default-device surfaces.</summary>
+internal interface ISystemVolumeBackend : IDisposable
+{
+    event EventHandler<EndpointVolumeState>? VolumeChanged;
+
+    event EventHandler? DefaultDeviceChanged;
+
+    float GetVolumeScalar();
+
+    bool GetMuted();
+
+    void SetVolumeScalar(float scalar);
+
+    void SetMuted(bool muted);
+
+    bool Reacquire();
+}
+
 internal sealed class EndpointReacquireScheduler
 {
     private readonly Action _reacquire;
@@ -58,8 +78,8 @@ internal sealed class EndpointReacquireScheduler
 /// <summary>
 /// System master volume via hand-rolled CoreAudio COM interop (ADR-003: no NAudio):
 /// get/set volume and mute on the default render endpoint, observe changes through
-/// <see cref="IAudioEndpointVolumeCallback"/>, and re-acquire the endpoint when the
-/// default device changes (<see cref="IMMNotificationClient"/>).
+/// <c>IAudioEndpointVolumeCallback</c>, and re-acquire the endpoint when the
+/// default device changes (<c>IMMNotificationClient</c>).
 /// </summary>
 /// <remarks>
 /// <see cref="VolumeChanged"/> is raised on an audio-service thread, never the UI
@@ -70,32 +90,36 @@ internal sealed class EndpointReacquireScheduler
 /// </remarks>
 public sealed class SystemVolume : IDisposable
 {
-    private const uint ClsctxAll = 0x17;
-
-    /// <summary>Guards endpoint acquire/release/use; the endpoint can be swapped by a device-change notification.</summary>
+    /// <summary>Guards endpoint acquire/release/use; the endpoint can be swapped by a device-change notification. CoreAudioSystemVolumeBackend is not thread-safe and relies on the facade's <c>_gate</c>.</summary>
     private readonly Lock _gate = new();
-
-    private readonly IMMDeviceEnumerator _deviceEnumerator;
-
-    // ADR-003: strong references to both registered callbacks. Only the CCW is
-    // handed to COM — if the GC collected these, notifications would go silent.
-    private readonly EndpointVolumeCallback _volumeCallback;
-    private readonly DefaultDeviceListener _deviceListener;
+    private readonly ISystemVolumeBackend _backend;
+    private readonly Action<string, string> _log;
     private readonly EndpointReacquireScheduler _reacquireScheduler;
-
-    private IAudioEndpointVolume? _endpointVolume;
     private bool _disposed;
 
     /// <summary>Binds to the current default render endpoint and starts observing changes.</summary>
     public SystemVolume()
+        : this(new CoreAudioSystemVolumeBackend(Log.Write), Log.Write)
     {
-        _volumeCallback = new EndpointVolumeCallback(this);
-        _deviceListener = new DefaultDeviceListener(this);
-        _reacquireScheduler = new EndpointReacquireScheduler(ReacquireEndpointAndNotify);
-        _deviceEnumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-        _deviceEnumerator.RegisterEndpointNotificationCallback(_deviceListener);
+    }
+
+    private SystemVolume(
+        ISystemVolumeBackend backend,
+        Action<string, string>? log = null,
+        Action<Action>? queueWork = null)
+    {
+        _backend = backend;
+        _log = log ?? Log.Write;
+        _reacquireScheduler = new EndpointReacquireScheduler(ReacquireEndpointAndNotify, queueWork);
+        _backend.VolumeChanged += OnBackendVolumeChanged;
+        _backend.DefaultDeviceChanged += OnDefaultDeviceChanged;
         AcquireEndpoint();
     }
+
+    internal static SystemVolume CreateForTest(
+        ISystemVolumeBackend backend,
+        Action<string, string>? log = null,
+        Action<Action>? queueWork = null) => new(backend, log, queueWork);
 
     /// <summary>
     /// Raised for every master volume/mute change (including changes made through this
@@ -108,10 +132,7 @@ public sealed class SystemVolume : IDisposable
     {
         lock (_gate)
         {
-            IAudioEndpointVolume endpoint = RequireEndpointLocked();
-            endpoint.GetMasterVolumeLevelScalar(out float scalar);
-            endpoint.GetMute(out bool muted);
-            return new VolumeState(ToPercent(scalar), muted);
+            return new VolumeState(ToPercent(_backend.GetVolumeScalar()), _backend.GetMuted());
         }
     }
 
@@ -127,8 +148,7 @@ public sealed class SystemVolume : IDisposable
         float scalar = Math.Clamp(percent, 0, 100) / 100f;
         lock (_gate)
         {
-            Guid eventContext = Guid.Empty;
-            RequireEndpointLocked().SetMasterVolumeLevelScalar(scalar, ref eventContext);
+            _backend.SetVolumeScalar(scalar);
         }
     }
 
@@ -137,8 +157,7 @@ public sealed class SystemVolume : IDisposable
     {
         lock (_gate)
         {
-            Guid eventContext = Guid.Empty;
-            RequireEndpointLocked().SetMute(muted, ref eventContext);
+            _backend.SetMuted(muted);
         }
     }
 
@@ -153,17 +172,9 @@ public sealed class SystemVolume : IDisposable
             }
 
             _disposed = true;
-            try
-            {
-                _deviceEnumerator.UnregisterEndpointNotificationCallback(_deviceListener);
-            }
-            catch (COMException ex)
-            {
-                Log.Warn($"UnregisterEndpointNotificationCallback failed: 0x{ex.HResult:X8}");
-            }
-
-            ReleaseEndpointLocked();
-            Marshal.ReleaseComObject(_deviceEnumerator);
+            _backend.VolumeChanged -= OnBackendVolumeChanged;
+            _backend.DefaultDeviceChanged -= OnDefaultDeviceChanged;
+            _backend.Dispose();
         }
     }
 
@@ -174,74 +185,169 @@ public sealed class SystemVolume : IDisposable
     {
         lock (_gate)
         {
-            if (_disposed)
+            if (!_disposed)
             {
-                return;
-            }
-
-            ReleaseEndpointLocked();
-            try
-            {
-                _deviceEnumerator.GetDefaultAudioEndpoint(EDataFlow.Render, ERole.Multimedia, out IMMDevice device);
-                try
-                {
-                    Guid iid = typeof(IAudioEndpointVolume).GUID;
-                    device.Activate(ref iid, ClsctxAll, 0, out object activated);
-                    _endpointVolume = (IAudioEndpointVolume)activated;
-                    _endpointVolume.RegisterControlChangeNotify(_volumeCallback);
-                }
-                finally
-                {
-                    Marshal.ReleaseComObject(device);
-                }
-            }
-            catch (COMException ex)
-            {
-                // E.g. E_NOTFOUND: no render device at all. Degrade; the
-                // IMMNotificationClient will trigger a re-acquire when one appears.
-                Log.Warn($"No default audio endpoint (0x{ex.HResult:X8}); volume actions unavailable until a device change.");
+                _backend.Reacquire();
             }
         }
     }
-
-    /// <summary>
-    /// Default render device changed: rebind on the thread pool. Releasing WASAPI
-    /// objects inside the notification callback itself risks deadlocking the
-    /// audio service (MMDevice API documentation).
-    /// </summary>
-    private void ScheduleEndpointReacquire() => _reacquireScheduler.Schedule();
 
     private void ReacquireEndpointAndNotify()
     {
         try
         {
-            AcquireEndpoint();
+            bool acquired;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                acquired = _backend.Reacquire();
+            }
 
             // The new endpoint carries independent volume/mute state. Avoid a
             // second error when device removal legitimately leaves no endpoint.
-            bool hasEndpoint;
-            lock (_gate)
-            {
-                hasEndpoint = _endpointVolume is not null;
-            }
-
-            if (hasEndpoint)
+            if (acquired)
             {
                 VolumeChanged?.Invoke(this, GetState());
             }
         }
         catch (Exception ex)
         {
-            Log.Error($"Re-acquiring audio endpoint failed: {ex.Message}");
+            _log("ERROR", $"Re-acquiring audio endpoint failed: {ex.Message}");
         }
     }
 
-    private void RaiseVolumeChanged(VolumeState state) => VolumeChanged?.Invoke(this, state);
+    private void OnBackendVolumeChanged(object? sender, EndpointVolumeState state) =>
+        VolumeChanged?.Invoke(this, new VolumeState(ToPercent(state.Scalar), state.Muted));
 
-    private IAudioEndpointVolume RequireEndpointLocked() =>
+    private void OnDefaultDeviceChanged(object? sender, EventArgs e)
+    {
+        // Default render device changed: rebind on the thread pool. Releasing WASAPI
+        // objects inside the notification callback itself risks deadlocking the
+        // audio service (MMDevice API documentation).
+        try
+        {
+            _reacquireScheduler.Schedule();
+        }
+        catch (Exception ex)
+        {
+            _log("ERROR", $"Queuing audio endpoint re-acquisition failed: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>Production implementation of the controlled SystemVolume boundary.</summary>
+internal sealed class CoreAudioSystemVolumeBackend : ISystemVolumeBackend
+{
+    private const uint ClsctxAll = 0x17;
+    private readonly Action<string, string> _log;
+    private readonly IMMDeviceEnumerator _deviceEnumerator;
+
+    // ADR-003: strong references to both registered callbacks. Only the CCW is
+    // handed to COM — if the GC collected these, notifications would go silent.
+    private readonly EndpointVolumeCallback _volumeCallback;
+    private readonly DefaultDeviceListener _deviceListener;
+    private IAudioEndpointVolume? _endpointVolume;
+    private bool _disposed;
+
+    internal CoreAudioSystemVolumeBackend(Action<string, string> log)
+    {
+        _log = log;
+        _volumeCallback = new EndpointVolumeCallback(this);
+        _deviceListener = new DefaultDeviceListener(this);
+        _deviceEnumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+        _deviceEnumerator.RegisterEndpointNotificationCallback(_deviceListener);
+    }
+
+    public event EventHandler<EndpointVolumeState>? VolumeChanged;
+
+    public event EventHandler? DefaultDeviceChanged;
+
+    public float GetVolumeScalar()
+    {
+        RequireEndpoint().GetMasterVolumeLevelScalar(out float scalar);
+        return scalar;
+    }
+
+    public bool GetMuted()
+    {
+        RequireEndpoint().GetMute(out bool muted);
+        return muted;
+    }
+
+    public void SetVolumeScalar(float scalar)
+    {
+        Guid eventContext = Guid.Empty;
+        RequireEndpoint().SetMasterVolumeLevelScalar(scalar, ref eventContext);
+    }
+
+    public void SetMuted(bool muted)
+    {
+        Guid eventContext = Guid.Empty;
+        RequireEndpoint().SetMute(muted, ref eventContext);
+    }
+
+    public bool Reacquire()
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        ReleaseEndpoint();
+        try
+        {
+            _deviceEnumerator.GetDefaultAudioEndpoint(EDataFlow.Render, ERole.Multimedia, out IMMDevice device);
+            try
+            {
+                Guid iid = typeof(IAudioEndpointVolume).GUID;
+                device.Activate(ref iid, ClsctxAll, 0, out object activated);
+                _endpointVolume = (IAudioEndpointVolume)activated;
+                _endpointVolume.RegisterControlChangeNotify(_volumeCallback);
+                return true;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(device);
+            }
+        }
+        catch (COMException ex)
+        {
+            // E.g. E_NOTFOUND: no render device at all. Degrade; the
+            // IMMNotificationClient will trigger a re-acquire when one appears.
+            _log("WARN", $"No default audio endpoint (0x{ex.HResult:X8}); volume actions unavailable until a device change.");
+            return _endpointVolume is not null;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            _deviceEnumerator.UnregisterEndpointNotificationCallback(_deviceListener);
+        }
+        catch (COMException ex)
+        {
+            _log("WARN", $"UnregisterEndpointNotificationCallback failed: 0x{ex.HResult:X8}");
+        }
+
+        ReleaseEndpoint();
+        Marshal.ReleaseComObject(_deviceEnumerator);
+    }
+
+    private IAudioEndpointVolume RequireEndpoint() =>
         _endpointVolume ?? throw new InvalidOperationException("No audio endpoint available.");
 
-    private void ReleaseEndpointLocked()
+    private void ReleaseEndpoint()
     {
         if (_endpointVolume is null)
         {
@@ -255,7 +361,7 @@ public sealed class SystemVolume : IDisposable
         catch (COMException ex)
         {
             // Endpoint may already be invalidated (device removed); still release the RCW.
-            Log.Warn($"UnregisterControlChangeNotify failed: 0x{ex.HResult:X8}");
+            _log("WARN", $"UnregisterControlChangeNotify failed: 0x{ex.HResult:X8}");
         }
         finally
         {
@@ -263,6 +369,11 @@ public sealed class SystemVolume : IDisposable
             _endpointVolume = null;
         }
     }
+
+    private void RaiseVolumeChanged(float scalar, bool muted) =>
+        VolumeChanged?.Invoke(this, new EndpointVolumeState(scalar, muted));
+
+    private void RaiseDefaultDeviceChanged() => DefaultDeviceChanged?.Invoke(this, EventArgs.Empty);
 
     // ---- CoreAudio COM interop -------------------------------------------------
     // Declared here and only here (ADR-003 boundary discipline). Methods must stay
@@ -405,26 +516,18 @@ public sealed class SystemVolume : IDisposable
     }
 
     /// <summary>Receives master volume/mute notifications from the audio service.</summary>
-    private sealed class EndpointVolumeCallback : IAudioEndpointVolumeCallback
+    private sealed class EndpointVolumeCallback(CoreAudioSystemVolumeBackend owner) : IAudioEndpointVolumeCallback
     {
-        private readonly SystemVolume _owner;
-
-        public EndpointVolumeCallback(SystemVolume owner) => _owner = owner;
-
         public void OnNotify(nint notificationData)
         {
             var data = Marshal.PtrToStructure<AudioVolumeNotificationData>(notificationData);
-            _owner.RaiseVolumeChanged(new VolumeState(ToPercent(data.MasterVolume), data.Muted != 0));
+            owner.RaiseVolumeChanged(data.MasterVolume, data.Muted != 0);
         }
     }
 
     /// <summary>Watches for default-render-device changes and triggers endpoint re-acquisition.</summary>
-    private sealed class DefaultDeviceListener : IMMNotificationClient
+    private sealed class DefaultDeviceListener(CoreAudioSystemVolumeBackend owner) : IMMNotificationClient
     {
-        private readonly SystemVolume _owner;
-
-        public DefaultDeviceListener(SystemVolume owner) => _owner = owner;
-
         public void OnDeviceStateChanged(string deviceId, uint newState)
         {
         }
@@ -441,7 +544,7 @@ public sealed class SystemVolume : IDisposable
         {
             if (flow == EDataFlow.Render && role == ERole.Multimedia)
             {
-                _owner.ScheduleEndpointReacquire();
+                owner.RaiseDefaultDeviceChanged();
             }
         }
 

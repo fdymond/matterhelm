@@ -51,6 +51,7 @@ public static class DiagnosticsTests
             _originalClock = Log.Clock;
             _originalFileSizeLimitBytes = Log.FileSizeLimitBytes;
             Log.LogDirectory = _dir;
+            Log.Clock = new MutableTimeProvider(new DateTimeOffset(2026, 11, 15, 12, 0, 0, TimeSpan.Zero));
         }
 
         public void Dispose()
@@ -71,7 +72,7 @@ public static class DiagnosticsTests
 
         private string ReadAll()
         {
-            string path = Path.Combine(_dir, $"app-{DateTime.Now:yyyyMMdd}.log");
+            string path = Path.Combine(_dir, $"app-{Log.Clock.GetLocalNow():yyyyMMdd}.log");
             return File.Exists(path) ? File.ReadAllText(path) : "";
         }
 
@@ -166,7 +167,7 @@ public static class DiagnosticsTests
             Log.Info("second line must use a new segment");
 
             Assert.Equal(2, Directory.EnumerateFiles(_dir, "app-*.log").Count());
-            Assert.True(File.Exists(Path.Combine(_dir, $"app-{DateTime.Now:yyyyMMdd}-001.log")));
+            Assert.True(File.Exists(Path.Combine(_dir, $"app-{Log.Clock.GetLocalNow():yyyyMMdd}-001.log")));
         }
     }
 
@@ -233,13 +234,14 @@ public static class DiagnosticsTests
         [Fact]
         public void SnapshotFilesOlderThanSevenDaysArePrunedOnConstruction()
         {
+            var clock = new MutableTimeProvider(new DateTimeOffset(2026, 11, 15, 12, 0, 0, TimeSpan.Zero));
             string stale = Path.Combine(_dir, "metrics-20200101.jsonl");
             string fresh = Path.Combine(_dir, "metrics-fresh.jsonl");
             File.WriteAllText(stale, "{}");
             File.WriteAllText(fresh, "{}");
-            File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-30));
+            File.SetLastWriteTimeUtc(stale, clock.GetUtcNow().UtcDateTime.AddDays(-30));
 
-            using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1));
+            using var listener = new MetricsFileListener(_dir, TimeSpan.FromHours(1), 1024 * 1024, clock);
 
             Assert.False(File.Exists(stale), "the 30-day-old snapshot file must be pruned");
             Assert.True(File.Exists(fresh), "recent snapshot files must survive the prune");
