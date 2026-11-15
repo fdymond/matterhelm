@@ -5,8 +5,16 @@
 - **Story**: S10-9
 
 **Status note (2026-11-15):** A reading of matter.js `main` confirms the
-upstream mismatch is still unfixed. Re-verification on matter.js 0.18 is
-pending the empirical matrix; the integrator will append those results here.
+upstream mismatch is still unfixed. Same-host empirical matrix on matter.js
+0.18 (bridge 0.18.0, matter.js 0.17.7 probe controller on the same PC):
+commissioning succeeded with the workaround on and off, inside the startup
+announcement burst and 270 s after it, including with the controller limited to
+IPv6 (`MATTER_MDNS_IPV4=false`, whose effect was not independently verified).
+This is **inconclusive** for the bug, because a same-host controller can reach
+the bridge without the remote IPv6 scope-id path the workaround fixes, and it
+conflicts with the code reading. Decision: keep the workaround (it is a no-op
+where matter.js already resolves correctly). Removal requires a remote-host IPv6
+test with Google Home as the controller (S13-8 hardware checks), recorded here.
 
 ## Context
 
