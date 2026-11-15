@@ -1,4 +1,4 @@
-; MatterHelm Windows installer (S10, Inno Setup 6).
+; MatterHelm Windows installer (S10, Inno Setup 7.1.1).
 ; Built by the release workflow after build.ps1 has produced dist\:
 ;   ISCC /DAppVersion=x.y.z installer\matterhelm.iss
 ; Design notes:
@@ -39,10 +39,13 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+SetupArchitecture=x64
 AppMutex=MatterHelm.SingleInstance
 MinVersion=10.0.17763
 CloseApplications=yes
 UninstallDisplayName=MatterHelm
+; Future SignPath integration belongs here: configure SignTool and enable
+; SignedUninstaller=yes together so both the installer and uninstaller are signed.
 
 [Tasks]
 Name: "startup"; Description: "Start MatterHelm when you sign in to Windows"
