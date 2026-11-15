@@ -33,7 +33,7 @@ internal static partial class SettingsWindowDemo
     private const int AttachParentProcess = -1;
 
     /// <summary>Runs the demo. Returns 0 iff every check passed.</summary>
-    internal static int Run(bool dark)
+    internal static int Run(bool dark, bool visible)
     {
         _ = AttachConsole(AttachParentProcess); // WinExe has no console; borrow the parent's if present.
         ApplicationConfiguration.Initialize();
@@ -62,9 +62,11 @@ internal static partial class SettingsWindowDemo
         if (dark)
         {
             // Child run: only the dark screenshot; the parent asserts it exists.
-            SaveWindowScreenshot(window, "settings-window-dark.png");
+            bool rendered = SaveWindowScreenshot(window, "settings-window-dark.png");
+            Console.WriteLine($"{(rendered ? "PASS" : "FAIL")}  settings-window-dark.png contains non-blank UI content");
+            Console.WriteLine($"OVERALL: {(rendered ? "PASS" : "FAIL")}");
             window.Close();
-            return 0;
+            return rendered ? 0 : 1;
         }
 
         Console.WriteLine($"S4-3 settings-window demo — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
@@ -103,7 +105,7 @@ internal static partial class SettingsWindowDemo
             Check(customOk, $"config.json commands.custom[0] == {{key: {SettingsDemoCustomKey}, mediaKey stop}}");
         }
 
-        SaveWindowScreenshot(window, "settings-window-light.png");
+        Check(SaveWindowScreenshot(window, "settings-window-light.png"), "settings-window-light.png contains non-blank UI content");
 
         SettingsSearchResult filtered = Ui.SettingsSearch.Filter(Ui.SettingsViewModel.Categories, "port");
         Check(
@@ -114,7 +116,7 @@ internal static partial class SettingsWindowDemo
         Check(
             window.IsSettingRowVisible("ipc-port") && !window.IsSettingRowVisible("log-level"),
             "window hides non-matching rows while searching \"port\"");
-        SaveWindowScreenshot(window, "settings-window-search.png");
+        Check(SaveWindowScreenshot(window, "settings-window-search.png"), "settings-window-search.png contains non-blank UI content");
         window.SetSearchQuery("");
         DemoSupport.Pump(100);
 
@@ -126,12 +128,14 @@ internal static partial class SettingsWindowDemo
             string categoryId = Ui.SettingsViewModel.Categories[i].Id;
             window.SelectCategory(i);
             DemoSupport.Pump(150);
-            SaveWindowScreenshot(window, $"settings-window-page-{categoryId}.png");
+            string pageScreenshot = $"settings-window-page-{categoryId}.png";
+            Check(SaveWindowScreenshot(window, pageScreenshot), $"{pageScreenshot} contains non-blank UI content");
             if (window.ScrollCurrentCategoryToEnd())
             {
                 // Long pages (Devices & Commands) hide their tail — capture it too.
                 DemoSupport.Pump(150);
-                SaveWindowScreenshot(window, $"settings-window-page-{categoryId}-bottom.png");
+                string bottomScreenshot = $"settings-window-page-{categoryId}-bottom.png";
+                Check(SaveWindowScreenshot(window, bottomScreenshot), $"{bottomScreenshot} contains non-blank UI content");
             }
         }
 
@@ -149,7 +153,7 @@ internal static partial class SettingsWindowDemo
             mediaDialog.Location = new Point(60, 60);
             mediaDialog.Show();
             DemoSupport.Pump(300);
-            SaveWindowScreenshot(mediaDialog, "custom-command-mediakey.png");
+            Check(SaveWindowScreenshot(mediaDialog, "custom-command-mediakey.png"), "custom-command-mediakey.png contains non-blank UI content");
             mediaDialog.Close();
         }
 
@@ -164,7 +168,7 @@ internal static partial class SettingsWindowDemo
             launchDialog.Location = new Point(60, 60);
             launchDialog.Show();
             DemoSupport.Pump(300);
-            SaveWindowScreenshot(launchDialog, "custom-command-launch.png");
+            Check(SaveWindowScreenshot(launchDialog, "custom-command-launch.png"), "custom-command-launch.png contains non-blank UI content");
             launchDialog.Close();
         }
 
@@ -175,9 +179,17 @@ internal static partial class SettingsWindowDemo
         bool darkOk = false;
         if (Environment.ProcessPath is { } exe)
         {
-            var startInfo = new ProcessStartInfo(exe) { UseShellExecute = false };
+            var startInfo = new ProcessStartInfo(exe)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
             startInfo.ArgumentList.Add("--demo-settings-window");
             startInfo.ArgumentList.Add("--dark");
+            if (visible)
+            {
+                startInfo.ArgumentList.Add("--visible");
+            }
             using Process? child = Process.Start(startInfo);
             darkOk = child is not null && child.WaitForExit(60_000) && child.ExitCode == 0 && File.Exists(darkPng);
         }
@@ -191,11 +203,12 @@ internal static partial class SettingsWindowDemo
     }
 
     /// <summary>Renders the full window (client + frame) to a PNG next to the exe via <see cref="Control.DrawToBitmap"/> (see <see cref="PairingWindowDemo"/> remarks for why not a screen capture).</summary>
-    private static void SaveWindowScreenshot(Form window, string fileName)
+    private static bool SaveWindowScreenshot(Form window, string fileName)
     {
         using var bitmap = new Bitmap(window.Width, window.Height);
         window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, window.Size));
         bitmap.Save(Path.Combine(AppContext.BaseDirectory, fileName), ImageFormat.Png);
+        return DemoSupport.HasRenderedContent(bitmap);
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]

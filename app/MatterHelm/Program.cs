@@ -12,6 +12,7 @@ internal static partial class Program
     private const string MutexName = "MatterHelm.SingleInstance";
 
     private const int AttachParentProcess = -1;
+    private static readonly TimeSpan DemoTimeout = TimeSpan.FromMinutes(3);
 
     /// <summary>Entry point.</summary>
     [STAThread]
@@ -41,15 +42,27 @@ internal static partial class Program
             return;
         }
 
+        // Child-only marker action for the wired demo. The executable is a
+        // WinExe, so this verifies launch wiring without spawning node.exe or
+        // any other console child on the interactive desktop.
+        if (args.Contains("--wired-demo-marker"))
+        {
+            Environment.ExitCode = Demos.WiredDemo.WriteMarkerChild(args);
+            return;
+        }
+
         // S2-3 acceptance demo: objectively prove the overlay HUD never
         // steals focus or blocks clicks. Not part of the production tray flow.
         if (args.Contains("--demo-overlay"))
         {
-            // Same DPI context as production (PerMonitorV2): without this the
-            // demo ran DPI-unaware, so the HUD's S4-5 DPI scaling (and the
-            // volume-bar pixel sampling) would silently verify at 96 dpi only.
-            ApplicationConfiguration.Initialize();
-            Environment.ExitCode = Ui.OverlayHudDemo.Run();
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(() =>
+            {
+                // Same DPI context as production (PerMonitorV2): without this
+                // the volume-bar pixel sampling would verify only at 96 dpi.
+                ApplicationConfiguration.Initialize();
+                return Ui.OverlayHudDemo.Run(headless: !visible);
+            }, visible);
             return;
         }
 
@@ -73,9 +86,13 @@ internal static partial class Program
         // PASS/FAIL output. Hidden; not part of the production tray flow.
         if (args.Contains("--probe-resources"))
         {
-            _ = AttachConsole(AttachParentProcess);
-            ApplicationConfiguration.Initialize();
-            Environment.ExitCode = Diagnostics.ResourceProbe.Run();
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(() =>
+            {
+                _ = AttachConsole(AttachParentProcess);
+                ApplicationConfiguration.Initialize();
+                return Diagnostics.ResourceProbe.Run();
+            }, visible);
             return;
         }
 
@@ -89,7 +106,8 @@ internal static partial class Program
         // wrong-token socket close, with objective PASS/FAIL output.
         if (args.Contains("--demo-sidecar-chaos"))
         {
-            Environment.ExitCode = Sidecar.SidecarChaosDemo.Run();
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(Sidecar.SidecarChaosDemo.Run, visible);
             return;
         }
 
@@ -99,7 +117,8 @@ internal static partial class Program
         // production tray flow.
         if (args.Contains("--demo-pairing-window"))
         {
-            Environment.ExitCode = Demos.PairingWindowDemo.Run();
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(Demos.PairingWindowDemo.Run, visible);
             return;
         }
 
@@ -109,7 +128,8 @@ internal static partial class Program
         // temp config/storage and an ephemeral port, never %APPDATA%.
         if (args.Contains("--demo-wired"))
         {
-            Environment.ExitCode = Demos.WiredDemo.Run();
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(Demos.WiredDemo.Run, visible);
             return;
         }
 
@@ -117,7 +137,8 @@ internal static partial class Program
         // plus objective fits-on-screen and primary-button checks.
         if (args.Contains("--demo-welcome-window"))
         {
-            Environment.ExitCode = Demos.WelcomeWindowDemo.Run();
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(Demos.WelcomeWindowDemo.Run, visible);
             return;
         }
 
@@ -127,7 +148,10 @@ internal static partial class Program
         // production tray flow.
         if (args.Contains("--demo-settings-window"))
         {
-            Environment.ExitCode = Demos.SettingsWindowDemo.Run(dark: args.Contains("--dark"));
+            bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
+            Environment.ExitCode = RunDemo(
+                () => Demos.SettingsWindowDemo.Run(dark: args.Contains("--dark"), visible: visible),
+                visible);
             return;
         }
 
@@ -292,6 +316,13 @@ internal static partial class Program
         Application.Run(trayContext);
 
         Log.Info("MatterHelm exited.");
+    }
+
+    private static int RunDemo(Func<int> demo, bool visible)
+    {
+        int exitCode = 1;
+        Ui.HeadlessDesktop.RunOnStaThread(() => exitCode = demo(), DemoTimeout, visible);
+        return exitCode;
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]

@@ -96,6 +96,11 @@ Several stories are only meaningfully verified end-to-end, so the app ships
 scripted, self-checking demo harnesses (exit 0 = pass) invoked as flags on the
 built exe, e.g.:
 
+App UI tests and acceptance demos are headless by default: each UI thread is
+bound to a process-private Win32 desktop before WinForms creates any window or
+hook. Set `MATTERHELM_VISIBLE_UI=1` for visible test debugging, or add
+`--visible` to a demo command when a human explicitly needs to see it.
+
 ```bash
 app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-wired
 app/MatterHelm/bin/Release/net10.0-windows10.0.17763.0/MatterHelm.exe --demo-overlay

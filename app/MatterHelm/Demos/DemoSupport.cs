@@ -78,4 +78,26 @@ internal static class DemoSupport
         }
         while (Environment.TickCount64 < deadline);
     }
+
+    /// <summary>Returns true when a sampled bitmap contains enough distinct colors to prove that real UI content rendered.</summary>
+    internal static bool HasRenderedContent(Bitmap bitmap, int minimumDistinctColors = 4)
+    {
+        ArgumentNullException.ThrowIfNull(bitmap);
+        var colors = new HashSet<int>();
+        int stepX = Math.Max(1, bitmap.Width / 100);
+        int stepY = Math.Max(1, bitmap.Height / 100);
+        for (int y = 0; y < bitmap.Height; y += stepY)
+        {
+            for (int x = 0; x < bitmap.Width; x += stepX)
+            {
+                colors.Add(bitmap.GetPixel(x, y).ToArgb());
+                if (colors.Count >= minimumDistinctColors)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 }

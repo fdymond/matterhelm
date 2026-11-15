@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
+using MatterHelm.Ui;
 
 namespace MatterHelm.Tests;
 
@@ -19,12 +20,11 @@ internal static class StaTest
     {
         ArgumentNullException.ThrowIfNull(body);
         ExceptionDispatchInfo? captured = null;
-        using var completed = new ManualResetEventSlim();
-        var thread = new Thread(() =>
+        TimeSpan wait = timeout ?? DefaultTimeout;
+        HeadlessDesktop.RunOnStaThread(() =>
         {
-            // Make exceptions from WinForms window-message handlers unwind to
-            // Application.Run instead of opening a crash dialog or disappearing
-            // into the framework's default ThreadException path.
+            // HeadlessDesktop bound this native thread before OleInitialize;
+            // no WinForms parking window or hook can precede that boundary.
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException, threadScope: true);
             var synchronizationContext = new WindowsFormsSynchronizationContext();
             SynchronizationContext.SetSynchronizationContext(synchronizationContext);
@@ -73,24 +73,8 @@ internal static class StaTest
                     SynchronizationContext.SetSynchronizationContext(null);
                     synchronizationContext.Dispose();
                 }
-
-                completed.Set();
             }
-        })
-        {
-            IsBackground = true,
-            Name = "MatterHelm test STA",
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        TimeSpan wait = timeout ?? DefaultTimeout;
-        if (!completed.Wait(wait))
-        {
-            // The worker is deliberately background-only and cannot be safely
-            // aborted; a timeout therefore leaves it running until process exit.
-            throw new TimeoutException($"STA test did not complete within {wait.TotalSeconds:0.###} seconds.");
-        }
+        }, wait);
 
         captured?.Throw();
     }
@@ -99,12 +83,11 @@ internal static class StaTest
     {
         ArgumentNullException.ThrowIfNull(body);
         ExceptionDispatchInfo? captured = null;
-        using var completed = new ManualResetEventSlim();
-        var thread = new Thread(() =>
+        TimeSpan wait = timeout ?? DefaultTimeout;
+        HeadlessDesktop.RunOnStaThread(() =>
         {
-            // Make exceptions from WinForms window-message handlers unwind to
-            // Application.Run instead of opening a crash dialog or disappearing
-            // into the framework's default ThreadException path.
+            // HeadlessDesktop bound this native thread before OleInitialize;
+            // no WinForms parking window or hook can precede that boundary.
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException, threadScope: true);
             var synchronizationContext = new WindowsFormsSynchronizationContext();
             SynchronizationContext.SetSynchronizationContext(synchronizationContext);
@@ -170,24 +153,8 @@ internal static class StaTest
                     SynchronizationContext.SetSynchronizationContext(null);
                     synchronizationContext.Dispose();
                 }
-
-                completed.Set();
             }
-        })
-        {
-            IsBackground = true,
-            Name = "MatterHelm async test STA",
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        TimeSpan wait = timeout ?? DefaultTimeout;
-        if (!completed.Wait(wait))
-        {
-            // The worker is deliberately background-only and cannot be safely
-            // aborted; a timeout therefore leaves it running until process exit.
-            throw new TimeoutException($"STA test did not complete within {wait.TotalSeconds:0.###} seconds.");
-        }
+        }, wait);
 
         captured?.Throw();
     }

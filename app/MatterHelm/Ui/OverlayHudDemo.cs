@@ -29,7 +29,7 @@ internal static class OverlayHudDemo
     private const string ResultsFileName = "overlay-hud-demo-results.txt";
 
     /// <summary>Runs the full demo/verification sequence. Returns 0 iff every check passed.</summary>
-    internal static int Run()
+    internal static int Run(bool headless)
     {
         var log = new List<string>();
         bool allPassed = true;
@@ -66,16 +66,27 @@ internal static class OverlayHudDemo
 
         // Baseline OS foreground window, captured once (see class doc for why
         // this — rather than "== sentinel" — is the portable gating check).
-        IntPtr baselineForeground = NativeMethods.GetForegroundWindow();
-        log.Add($"(diag) baseline foreground before any HUD Show(): 0x{baselineForeground:X}");
+        IntPtr baselineForeground = headless ? 0 : NativeMethods.GetForegroundWindow();
+        if (headless)
+        {
+            log.Add("[SKIPPED-HEADLESS] OS foreground-window checks refer to the input desktop; private-desktop activation is verified with GetActiveWindow and the focus sentinel instead.");
+        }
+        else
+        {
+            log.Add($"(diag) baseline foreground before any HUD Show(): 0x{baselineForeground:X}");
+        }
 
         void SampleForegroundAndHud(string label)
         {
-            IntPtr fg = NativeMethods.GetForegroundWindow();
             IntPtr active = NativeMethods.GetActiveWindow();
-            log.Add($"    (diag) {label}: fg=0x{fg:X} active=0x{active:X} hud=0x{hud.WindowHandle:X} sentinel=0x{sentinel.Handle:X}");
-            Check($"{label}: HUD hwnd is not the OS foreground window", fg != hud.WindowHandle);
-            Check($"{label}: OS foreground window unchanged from baseline", fg == baselineForeground);
+            log.Add($"    (diag) {label}: active=0x{active:X} hud=0x{hud.WindowHandle:X} sentinel=0x{sentinel.Handle:X}");
+            if (!headless)
+            {
+                IntPtr foreground = NativeMethods.GetForegroundWindow();
+                Check($"{label}: HUD hwnd is not the OS foreground window", foreground != hud.WindowHandle);
+                Check($"{label}: OS foreground window unchanged from baseline", foreground == baselineForeground);
+            }
+
             Check($"{label}: HUD hwnd is not this thread's active window", active != hud.WindowHandle);
             Check($"{label}: focus sentinel is still this thread's active window", active == sentinel.Handle);
         }
@@ -102,6 +113,7 @@ internal static class OverlayHudDemo
             string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-custom-command.png");
             canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
             log.Add($"(evidence) custom command identity pill canvas: {pngPath}");
+            Check("custom-command canvas contains non-blank rendered content", MatterHelm.Demos.DemoSupport.HasRenderedContent(canvas));
         }
 
         hud.Show(
@@ -117,6 +129,7 @@ internal static class OverlayHudDemo
             string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-long-command.png");
             canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
             log.Add($"(evidence) ellipsized command pill canvas: {pngPath}");
+            Check("long-command canvas contains non-blank rendered content", MatterHelm.Demos.DemoSupport.HasRenderedContent(canvas));
         }
 
         for (int i = 0; i < 10; i++)
@@ -151,6 +164,7 @@ internal static class OverlayHudDemo
             string pngPath = Path.Combine(AppContext.BaseDirectory, $"overlay-hud-volume-{percent}.png");
             canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
             log.Add($"(evidence) volume-bar canvas at {percent} %: {pngPath}");
+            Check($"volume-bar canvas at {percent} % contains non-blank rendered content", MatterHelm.Demos.DemoSupport.HasRenderedContent(canvas));
 
             int run = MeasureFillRun(canvas, track);
             int expected = track.Width * percent / 100;
@@ -180,6 +194,7 @@ internal static class OverlayHudDemo
             string pngPath = Path.Combine(AppContext.BaseDirectory, "overlay-hud-volume-muted.png");
             canvas.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
             log.Add($"(evidence) volume-bar canvas muted at 40 %: {pngPath}");
+            Check("muted volume-bar canvas contains non-blank rendered content", MatterHelm.Demos.DemoSupport.HasRenderedContent(canvas));
             Check("muted volume bar renders no accent (green) fill pixels", MeasureFillRun(canvas, track) == 0);
         }
 
@@ -194,6 +209,7 @@ internal static class OverlayHudDemo
         Check("HUD ex-style has WS_EX_NOACTIVATE", (exStyle & NativeMethods.WsExNoActivate) != 0);
         Check("HUD ex-style has WS_EX_TRANSPARENT", (exStyle & NativeMethods.WsExTransparent) != 0);
         Check("HUD ex-style has WS_EX_LAYERED", (exStyle & NativeMethods.WsExLayered) != 0);
+        Check("HUD ex-style has WS_EX_TOPMOST", (exStyle & 0x00000008) != 0);
 
         Rectangle bounds = hud.Bounds;
         var center = new NativeMethods.Point32(bounds.X + (bounds.Width / 2), bounds.Y + (bounds.Height / 2));
