@@ -37,7 +37,7 @@ executes the resulting commands itself. No dependency on any other repo or app
 flowchart LR
     GH[Google Home\napp / Nest speaker] -- Matter over LAN\nmDNS + UDP/TCP --> MB
     subgraph HTPC [Windows HTPC — this product]
-        MB[bridge/ sidecar\nNode 22 + matter.js] -- WS 127.0.0.1:39531\nJSON, token auth --> TA[app/ tray application\nC# .NET 10 WinForms]
+        MB[bridge/ sidecar\nNode 26 + matter.js] -- WS 127.0.0.1:39531\nJSON, token auth --> TA[app/ tray application\nC# .NET 10 WinForms]
         TA --> EX[ActionExecutor]
         EX --> OS[SMTC / media keys /\nCoreAudio / display power]
         TA --> HUD[Overlay HUD\nclick-through flash pop-ups]
@@ -51,7 +51,7 @@ tether so an orphaned sidecar self-terminates, kill on exit). An unhandled
 promise rejection is fatal to the sidecar: it logs once, shuts down with a
 non-zero exit, and lets the supervisor's bounded backoff restart it.
 
-### 2.1 `bridge/` — Matter sidecar (Node 22, TypeScript)
+### 2.1 `bridge/` — Matter sidecar (Node 26, TypeScript)
 
 ```
 bridge/src/
@@ -76,9 +76,10 @@ Rules: `matter/` never imports `ipc/`; they meet in `index.ts` through
 matter.js facts fixed by integrator research 2026-07-26 (repo is now
 `matter-js/matter.js` under the Open Home Foundation):
 
-- Pin `@matter/main@0.18.0` (Matter 1.6.1); engines floor is Node **≥ 22.13** (22.0–22.12
-  excluded). Never depend on `@matter/nodejs-ble` (native bindings, broken on
-  Windows, not needed — the phone/hub does BLE commissioning).
+- Pin `@matter/main@0.18.0` (Matter 1.6.1); its engines floor is Node **≥ 22.13**
+  (22.0–22.12 excluded), while MatterHelm requires Node 26. Never depend on
+  `@matter/nodejs-ble` (native bindings, broken on Windows, not needed — the
+  phone/hub does BLE commissioning).
 - Confirmed pattern: `ServerNode.create(...)` → `new Endpoint(AggregatorEndpoint)`
   → `aggregator.add(new Endpoint(SpeakerDevice.with(BridgedDeviceBasicInformationServer), {...}))`;
   imports from `@matter/main/devices/*`, `@matter/main/endpoints/aggregator`,
@@ -96,7 +97,7 @@ matter.js facts fixed by integrator research 2026-07-26 (repo is now
   BasicInformation block or matter.js warns; set
   `Environment.default.vars.set("runtime.signals", false)` so the app owns
   SIGINT; storage layout under `storage.path` is one dir per node id.
-- Node 22 undici quirk (S1-4): a `WebSocket` that fails to connect fires only
+- Undici quirk observed in S1-4: a `WebSocket` that fails to connect fires only
   `error`, never `close` — reconnect logic must treat either as terminal for
   the attempt (client.ts guards this; don't assume spec-shaped close events).
 - Windows networking: **IPv6 must be enabled** on the NIC (hard matter.js
@@ -400,12 +401,14 @@ application-identity-aware focused-first route and absolute SMTC fallback.
 
 ### 2.6 Packaging
 
-- `bridge/`: Node SEA single exe (`npm run package`) — no Node install for end
-  users. Research 2026-07-26: no native addons or worker_threads in the
-  `@matter/*` chain, and npm ships esbuild-built CJS (`dist/cjs`) — so the
-  route is esbuild-bundle (from CJS output, `--format=cjs --platform=node`)
-  → SEA blob → the exact local `postject` devDependency, on Node ≥ 22.13. This
-  route ships in tagged releases.
+- `bridge/`: Node SEA single exe — no Node install for end users. Research
+  2026-07-26 found no native addons or worker_threads in the `@matter/*` chain,
+  and npm ships esbuild-built CJS (`dist/cjs`). The release route is therefore
+  an esbuild bundle (`--format=cjs --platform=node`) followed by Node 26's
+  built-in `node --build-sea`. Its config embeds that CJS bundle, explicitly
+  selects the checksum-verified Node executable as the SEA base, disables the
+  end-user experimental warning, and leaves snapshots and code cache off. See
+  [ADR-016](adr/016-node-26-lts-and-built-in-sea-builder.md).
   The pre-approved fallback remains official `node.exe` beside the esbuild
   bundle; the tray app launches either layout.
 - `app/`: `dotnet publish` self-contained single-file win-x64 (WinForms — no

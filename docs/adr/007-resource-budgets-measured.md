@@ -53,6 +53,16 @@ state — no leaks.
 > 0.00 % for the tray and 0.10 % for the sidecar. The budgets (tray ≤ 32 MB,
 > sidecar ≤ 120 MB, idle CPU < 0.5 %) hold.
 
+> **2026-11-15 Node 26 measurement:** On the same packaged bridge bundle with
+> matter.js 0.18, sampled after 70 seconds settled, the Node 22.23.5 SEA used
+> about 101 MB private memory. Node 26.13.1 with V8 defaults used about 141 MB;
+> an earlier post-commissioning sample reached 172 MB. Capping V8 with
+> `--max-semi-space-size=8` brought Node 26 to about 110 MB, back inside the
+> 120 MB sidecar budget; a 2 MiB cap also measured about 110 MB. ADR-016
+> therefore embeds the 8 MiB cap and requires a fresh packaged measurement on
+> every Node minor update. The final release-package measurement remains an
+> integrator gate.
+
 ## Consequences
 
 - **Easier**: honest, reproducible budgets; ~100 MB private and two
@@ -62,3 +72,10 @@ state — no leaks.
 - **Watch**: live tray handle count (919 seen after long uptime vs 697
   baseline; UI churn is probe-proven bounded — observe across a long run
   with the bridge active before suspecting BridgeHost/IpcServer).
+
+**2026-11-15 packaged measurement (Node 26.13.1 SEA, matter.js 0.18, `--max-semi-space-size=8` baked into the SEA).**
+A three-minute series (18 samples, 10 s apart) settles at **106.8–108.3 MB private (median 108 MB)**,
+inside the 120 MB budget; the first ~60 s after start plateau at ~124 MB until the first major GC
+returns memory. Single snapshots taken in that window overstate steady state, so budget checks use
+the settled median of a time series. Uncapped Node 26 measured 141–172 MB; Node 22.23.5 measured
+~101 MB on the same bundle. Tray: ~18–20 MB private, unchanged.

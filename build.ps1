@@ -20,8 +20,8 @@ No Node.js or .NET is required on the target machine.
 Requires on the BUILD machine: the exact Node.js version in .node-version / npm on PATH, dotnet SDK on PATH
 (or at C:\Program Files\dotnet). PowerShell 5.1 compatible.
 
-The postject call scopes native stderr handling so PowerShell 5.1 callers that
-redirect with `2>&1` cannot silently select the fallback layout.
+Node 26's built-in SEA builder copies and injects the configured Node executable
+without a third-party resource-injection tool.
 
 .PARAMETER Configuration
 dotnet build configuration for the tray app (default Release).
@@ -63,11 +63,6 @@ $publishDir = Join-Path $repoRoot "app\MatterHelm\bin\$Configuration\publish-win
 $nodeVersionFile = Join-Path $repoRoot ".node-version"
 $minimumDotNetRuntimeVersion = [Version]"10.0.15"
 
-# The documented fuse for `node --experimental-sea-config` blobs (Node SEA
-# docs); postject needs it to locate the injection point inside node.exe.
-$seaFuse = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2"
-$postjectExe = Join-Path $bridgeDir "node_modules\.bin\postject.cmd"
-
 function Assert-LastExit {
     param([string]$What)
     if ($LASTEXITCODE -ne 0) {
@@ -87,7 +82,7 @@ function Resolve-Tool {
     throw "$Name not found on PATH; install it or add it to PATH"
 }
 
-$nodeExe = Resolve-Tool "node"
+$nodeCommand = Resolve-Tool "node"
 $dotnetExe = Resolve-Tool "dotnet" "C:\Program Files\dotnet\dotnet.exe"
 if (-not (Test-Path -LiteralPath $nodeVersionFile -PathType Leaf)) {
     throw "Node.js version pin not found at '$nodeVersionFile'."
@@ -96,12 +91,21 @@ $nodeVersionText = [IO.File]::ReadAllText($nodeVersionFile).Trim()
 if ($nodeVersionText -notmatch '^\d+\.\d+\.\d+$') {
     throw "Invalid Node.js version '$nodeVersionText' in '$nodeVersionFile'; expected an exact semantic version."
 }
-$actualNodeVersion = (& $nodeExe --version).Trim()
+$actualNodeVersion = (& $nodeCommand --version).Trim()
 $expectedNodeVersion = "v$nodeVersionText"
 if ($actualNodeVersion -cne $expectedNodeVersion) {
-    throw "Node.js $nodeVersionText is required by .node-version, but '$actualNodeVersion' was found at '$nodeExe'. Install Node.js $nodeVersionText and ensure it is first on PATH."
+    throw "Node.js $nodeVersionText is required by .node-version, but '$actualNodeVersion' was found at '$nodeCommand'. Install Node.js $nodeVersionText and ensure it is first on PATH."
+}
+$nodeExe = (& $nodeCommand -p "process.execPath").Trim()
+if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf)) {
+    throw "The Node.js command at '$nodeCommand' reported a missing executable at '$nodeExe'."
+}
+$npmCommand = Join-Path (Split-Path -Parent $nodeExe) "npm.cmd"
+if (-not (Test-Path -LiteralPath $npmCommand -PathType Leaf)) {
+    throw "npm.cmd was not found beside the pinned Node.js executable at '$npmCommand'."
 }
 Write-Host "node:   $nodeExe (v$nodeVersionText)"
+Write-Host "npm:    $npmCommand"
 Write-Host "dotnet: $dotnetExe"
 
 if ($VerifyNodeChecksum) {
@@ -135,7 +139,7 @@ if ($VerifyNodeChecksum) {
 Push-Location $bridgeDir
 try {
     Write-Host "`n=== bridge: npm ci ==="
-    npm ci
+    & $npmCommand ci
     Assert-LastExit "npm ci"
 
     if ($SkipTests) {
@@ -143,12 +147,12 @@ try {
     }
     else {
         Write-Host "`n=== bridge: npm run verify ==="
-        npm run verify
+        & $npmCommand run verify
         Assert-LastExit "npm run verify"
     }
 
     Write-Host "`n=== bridge: npm run bundle ==="
-    npm run bundle
+    & $npmCommand run bundle
     Assert-LastExit "npm run bundle"
 }
 finally {
@@ -156,66 +160,98 @@ finally {
 }
 
 # --- 2. Sidecar: Node SEA exe, with an explicit opt-in fallback ------------
-# BLUEPRINT §2.6: esbuild CJS bundle -> SEA blob -> postject into a node.exe
-# copy. With -AllowNodeLayoutFallback, a failure may use the pre-approved
-# official node.exe beside bridge.cjs (ADR-007 §2); otherwise it fails loudly.
+# BLUEPRINT §2.6: esbuild CJS bundle -> Node 26's built-in SEA builder. With
+# -AllowNodeLayoutFallback, a failure may use the pre-approved official node.exe
+# beside bridge.cjs (ADR-007 §2); otherwise it fails loudly.
 function New-SeaSidecar {
     Push-Location $bridgeDist
     try {
-        @'
-{
-  "main": "bridge.cjs",
-  "output": "sea-prep.blob",
-  "disableExperimentalSEAWarning": true
-}
-'@ | Out-File -FilePath "sea-config.json" -Encoding utf8
+        $seaConfigPath = Join-Path $bridgeDist "sea-config.json"
+        $seaOutputPath = Join-Path $bridgeDist "bridge.exe"
+        $seaConfig = [ordered]@{
+            main = Join-Path $bridgeDist "bridge.cjs"
+            mainFormat = "commonjs"
+            executable = $nodeExe
+            output = $seaOutputPath
+            disableExperimentalSEAWarning = $true
+            useSnapshot = $false
+            useCodeCache = $false
+            execArgv = @("--max-semi-space-size=8")
+            execArgvExtension = "none"
+        }
+        $utf8NoBom = New-Object Text.UTF8Encoding($false)
+        [IO.File]::WriteAllText(
+            $seaConfigPath,
+            (($seaConfig | ConvertTo-Json) + [Environment]::NewLine),
+            $utf8NoBom)
 
-        # Native stdout is piped to Out-Host throughout this function: its
-        # return value is the exe path, and PowerShell would otherwise fold
-        # every tool's output lines into it.
-        Write-Host "`n=== sidecar: generating SEA blob ==="
-        & $nodeExe --experimental-sea-config sea-config.json | Out-Host
-        Assert-LastExit "node --experimental-sea-config"
+        # Node 26 applies execArgv to every SEA launch. Disabling extension is
+        # defense in depth for direct bridge.exe launches: NODE_OPTIONS cannot
+        # replace the measured heap policy or inject --require/--inspect.
+        $writtenSeaConfig = Get-Content -LiteralPath $seaConfigPath -Raw | ConvertFrom-Json
+        $writtenExecArgv = @($writtenSeaConfig.execArgv)
+        if ($writtenExecArgv.Count -ne 1 -or
+            $writtenExecArgv[0] -cne "--max-semi-space-size=8") {
+            throw "SEA config sanity check: expected only --max-semi-space-size=8 in execArgv."
+        }
+        if ($writtenSeaConfig.execArgvExtension -cne "none") {
+            throw "SEA config sanity check: expected execArgvExtension 'none'."
+        }
+        Write-Host "=== sidecar: SEA execArgv fixed at --max-semi-space-size=8; extension disabled ==="
 
-        Copy-Item -Path $nodeExe -Destination "bridge.exe" -Force
-        Write-Host "=== sidecar: injecting blob (postject) ==="
-        # postject warns that the copied node.exe's Authenticode signature is
-        # invalidated by the injection — expected; the exe ships unsigned.
-        if (-not (Test-Path -LiteralPath $postjectExe -PathType Leaf)) {
-            throw "local postject binary not found at $postjectExe; run npm ci"
-        }
-        $savedErrorActionPreference = $ErrorActionPreference
-        try {
-            # Windows PowerShell 5.1 can promote native stderr redirected with
-            # 2>&1 into terminating ErrorRecords. postject's signature warning
-            # is expected, so judge this invocation by its process exit code.
-            $ErrorActionPreference = "Continue"
-            & $postjectExe bridge.exe NODE_SEA_BLOB sea-prep.blob --sentinel-fuse $seaFuse | Out-Host
-            $postjectExitCode = $LASTEXITCODE
-        }
-        finally {
-            $ErrorActionPreference = $savedErrorActionPreference
-        }
-        if ($postjectExitCode -ne 0) {
-            throw "local postject failed with exit code $postjectExitCode"
-        }
+        # Native builder stdout is piped to Out-Host: this function's return
+        # value is the exe path, and PowerShell would otherwise fold the
+        # builder's output lines into it.
+        Write-Host "`n=== sidecar: building Node SEA executable ==="
+        & $nodeExe --build-sea $seaConfigPath | Out-Host
+        Assert-LastExit "node --build-sea"
 
         # Boot sanity: with no session token the bridge must reach config
-        # parsing and exit 1 ("config error: HTPC_BRIDGE_IPC_TOKEN..."). That
-        # proves the embedded bundle actually executes in the SEA runtime.
+        # parsing and exit 1 ("config error: HTPC_BRIDGE_IPC_TOKEN..."). An
+        # invalid inherited --require simultaneously proves the produced SEA
+        # ignores NODE_OPTIONS; otherwise Node exits before the bundle runs.
         $savedToken = $env:HTPC_BRIDGE_IPC_TOKEN
+        $savedNodeOptions = $env:NODE_OPTIONS
         $env:HTPC_BRIDGE_IPC_TOKEN = $null
+        $env:NODE_OPTIONS = "--require=__matterhelm_sea_must_ignore_node_options__.cjs"
+        $seaProbe = $null
         try {
-            & ".\bridge.exe" | Out-Host
+            $probeStartInfo = New-Object Diagnostics.ProcessStartInfo
+            $probeStartInfo.FileName = $seaOutputPath
+            $probeStartInfo.WorkingDirectory = $bridgeDist
+            $probeStartInfo.UseShellExecute = $false
+            $probeStartInfo.CreateNoWindow = $true
+            $probeStartInfo.RedirectStandardOutput = $true
+            $probeStartInfo.RedirectStandardError = $true
+            $seaProbe = New-Object Diagnostics.Process
+            $seaProbe.StartInfo = $probeStartInfo
+            [void]$seaProbe.Start()
+            $probeStdout = $seaProbe.StandardOutput.ReadToEnd()
+            $probeStderr = $seaProbe.StandardError.ReadToEnd()
+            $seaProbe.WaitForExit()
+            $probeExitCode = $seaProbe.ExitCode
         }
         finally {
+            if ($null -ne $seaProbe) {
+                $seaProbe.Dispose()
+            }
             $env:HTPC_BRIDGE_IPC_TOKEN = $savedToken
+            $env:NODE_OPTIONS = $savedNodeOptions
         }
-        if ($LASTEXITCODE -ne 1) {
-            throw "SEA exe boot sanity check: expected exit 1 (config error), got $LASTEXITCODE"
+        if ($probeStdout.Length -gt 0) {
+            Write-Host -NoNewline $probeStdout
         }
-        Write-Host "=== sidecar: SEA exe boots (config-error sanity check passed) ==="
-        return Join-Path $bridgeDist "bridge.exe"
+        if ($probeStderr.Length -gt 0) {
+            Write-Host -NoNewline $probeStderr
+        }
+        if ($probeExitCode -ne 1) {
+            throw "SEA exe boot sanity check: expected exit 1 (config error), got $probeExitCode"
+        }
+        if ($probeStderr -notmatch 'config error: HTPC_BRIDGE_IPC_TOKEN') {
+            throw "SEA exe boot sanity check: bundle did not reach missing-token config validation; NODE_OPTIONS may not have been ignored."
+        }
+        Write-Host "=== sidecar: SEA exe boots and ignores NODE_OPTIONS (config-error sanity check passed) ==="
+        return $seaOutputPath
     }
     finally {
         Pop-Location

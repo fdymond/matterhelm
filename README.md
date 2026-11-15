@@ -21,7 +21,7 @@ companion apps.
 Google Home app / Nest speaker
         │  Matter (local network)
         ▼
-bridge/  Node 22 + matter.js sidecar      (Matter Aggregator: Speaker + switches)
+bridge/  Node 26 + matter.js sidecar      (Matter Aggregator: Speaker + switches)
         │  localhost WebSocket, token-auth
         ▼
 app/     C# .NET 10 WinForms tray app     (lifecycle + dispatch + UI)
@@ -224,10 +224,11 @@ dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release  # all disco
 .\build.ps1        # dist/: portable folder, SEA sidecar
 ```
 
-Dev requirements: use the exact Node.js version in [`.node-version`](.node-version)
-(`build.ps1` refuses any other; nvm/fnm/Volta users can read the file), the .NET
-SDK selected by [`global.json`](global.json) with its allowed patch roll-forward,
-and Windows. CI runs the same gates on every push.
+Dev requirements: Node 26 is required; use the exact patch version in
+[`.node-version`](.node-version) (`build.ps1` refuses any other; nvm/fnm/Volta
+users can read the file), the .NET SDK selected by [`global.json`](global.json)
+with its allowed patch roll-forward, and Windows. CI runs the same gates on
+every push.
 
 ## How it is built
 

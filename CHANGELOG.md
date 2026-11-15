@@ -18,6 +18,10 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Changed
 
+- Moved the bridge runtime and CI to Node 26 LTS (pinned to 26.13.1) and
+  replaced the external SEA injection path with Node's built-in
+  `node --build-sea` builder. npm install scripts for the optional-binary
+  `esbuild` and `unrs-resolver` packages are explicitly denied.
 - Updated to matter.js 0.18 (Matter 1.6.1) with conformance validation.
 - The bridge increments `ConfigurationVersion` when its published device set
   or endpoint cluster composition changes. Commissioned 0.17 upgrades without
@@ -29,9 +33,18 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ### Fixed
 
+- Restored the Node 26 SEA to the ADR-007 memory budget by embedding
+  `--max-semi-space-size=8` and disabling SEA execution-argument extension.
+  The tray also removes inherited `NODE_OPTIONS` before starting either
+  sidecar layout, preventing global `--inspect`, `--require`, or heap flags
+  from altering the sidecar.
 - Endpoint-construction audit events now use the explicit `endpointName`
   payload field, with regression coverage locking their serialized pino level
   to numeric info (`30`).
+
+### Removed
+
+- Removed `postject` from the sidecar packaging toolchain.
 
 ## [0.8.0] — 2026-11-15
 
