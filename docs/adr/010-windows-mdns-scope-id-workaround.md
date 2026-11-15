@@ -4,6 +4,10 @@
 - **Date**: 2026-08-25
 - **Story**: S10-9
 
+**Status note (2026-11-15):** A reading of matter.js `main` confirms the
+upstream mismatch is still unfixed. Re-verification on matter.js 0.18 is
+pending the empirical matrix; the integrator will append those results here.
+
 ## Context
 
 MatterHelm announces its commissionable Matter service on Windows, but Google
@@ -55,6 +59,9 @@ boundary required by `CLAUDE.md` and the blueprint.
   original implementations rather than copying upstream logic.
 - Non-Windows behavior is unchanged. Friendly interface names and unresolvable
   identifiers retain upstream behavior.
+- `HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND=1` is a diagnostic-only switch
+  that disables the patch for the matter.js 0.18 empirical matrix. It is not a
+  supported operating mode.
 - Remove the patch and this ADR after upgrading to a matter.js release whose
   Windows inbound identifier is accepted consistently by mDNS record lookup
   and response-channel creation. Versions checked: 0.17.7 through 0.17.9.

@@ -76,7 +76,7 @@ Rules: `matter/` never imports `ipc/`; they meet in `index.ts` through
 matter.js facts fixed by integrator research 2026-07-26 (repo is now
 `matter-js/matter.js` under the Open Home Foundation):
 
-- Pin `@matter/main@0.17.7` (ADR-006 patch bump); engines floor is Node **≥ 22.13** (22.0–22.12
+- Pin `@matter/main@0.18.0` (Matter 1.6.1); engines floor is Node **≥ 22.13** (22.0–22.12
   excluded). Never depend on `@matter/nodejs-ble` (native bindings, broken on
   Windows, not needed — the phone/hub does BLE commissioning).
 - Confirmed pattern: `ServerNode.create(...)` → `new Endpoint(AggregatorEndpoint)`
@@ -107,9 +107,18 @@ matter.js facts fixed by integrator research 2026-07-26 (repo is now
 
 ### 2.2 Matter device model
 
-One **Aggregator (bridge)** node exposing the configured subset below. The
-names shown are defaults; all built-ins start enabled, and each enabled custom
-command adds one more endpoint.
+On matter.js 0.18 (Matter 1.6.1), one **Aggregator (bridge)** node exposes the
+configured subset below. The names shown are defaults; all built-ins start
+enabled, and each enabled custom command adds one more endpoint.
+
+Per [ADR-015](adr/015-device-composition-single-pairing.md), every bridged
+endpoint is single-purpose: it contains Bridged Node plus exactly one of
+Speaker or On/Off Plug-in Unit. Endpoint numbers remain stable across restarts
+and when a command is removed and later re-added. The root Basic Information
+`ConfigurationVersion` increments whenever the published endpoint composition
+changes, including device-type revisions or server clusters. This is mandatory
+since BasicInformation revision 6 and may prompt a controller rescan, although
+that Google behavior is not proven.
 
 | Endpoint | Matter device type | Clusters | Executor action |
 |---|---|---|---|
@@ -210,10 +219,12 @@ implement the same names):
 | `HTPC_BRIDGE_PRODUCT_ID` | Matter product id, decimal or `0x` hex, 1–65535; invalid = fatal (ADR-009) | `0x8000` (ADR-002 test PID) |
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
 | `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed, above 8192 characters, or more than 64 facilities = fatal | unset |
+| `HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND` | diagnostic-only ADR-010 comparison toggle; `1` disables the Windows mDNS scope-id workaround, `0` enables it; other values are fatal | `0` |
+| `MATTER_ENDPOINT_VALIDATION` | inherited matter.js endpoint validation mode (`off`, `warn`, or `strict`); an invalid inherited value is warned and forced to `warn` so node creation remains available | `warn` |
 
 The supervisor inherits the parent process environment, so the two matter-log
-variables can also be set machine/user-wide for troubleshooting without any
-app changes.
+variables and `MATTER_ENDPOINT_VALIDATION` can also be set machine/user-wide
+for troubleshooting without any app changes.
 
 The tray's `config.json` is bounded to 1 MiB, 64 custom commands, 64 characters
 per endpoint/bridge name, 2048 characters of launch arguments, and 128

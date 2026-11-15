@@ -173,11 +173,11 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S13-5 📋 | Upgrade to Vitest 5 | Upgrade test tooling with all bridge verification and coverage gates green | M | S13-3 | maintainer |
 | S13-6 📋 | Add property-based tests for both protocol parsers | Exercise TypeScript with fast-check and C# with FsCheck; count the result toward OpenSSF Scorecard Fuzzing | M | S13-4..5 | maintainer |
 | S13-7 📋 | Add direct CoreAudio/SystemVolume tests and an STA UI harness | Cover the controlled CoreAudio boundary directly and provide deterministic STA execution for WinForms UI tests | L | S13-3 | maintainer |
-| S13-8 📋 | Isolate the matter.js 0.18 upgrade | Use the matterjs-upgrade skill and re-run the complete ADR-010 matrix; the upstream bug remained present on 2026-11-15 | L | S13-3 | maintainer |
+| S13-8 🔄 | Isolate the matter.js 0.18 upgrade | Implementation in review; hardware verification pending: fresh Google commissioning of the full endpoint set on current hub firmware, then add and remove a custom device after pairing; re-run the complete ADR-010 matrix | L | S13-3 | maintainer |
 | S13-9 📋 | Move the SEA to Node 26 LTS and built-in `node --build-sea` | Replace the pinned Node 22/postject path only after Node 26 is LTS and the built-in SEA builder satisfies packaging gates | L | S13-8 | maintainer |
 | S13-10 📋 | Upgrade to Inno Setup 7.1.x | Rebuild and exercise installer install, update, and uninstall flows with the release harness | M | S13-3 | maintainer |
 | S13-11 🔄 | Sign releases through SignPath Foundation; policy published (`docs/code-signing-policy.md`) | Maintainer to submit the SignPath Foundation application (needs the maintainer's GitHub/SignPath accounts with MFA); after approval: add the SignPath submit-signing-request step to `release.yml`, Authenticode verification in the in-app updater, Inno Setup SignTool for the uninstaller | L | S13-1 | maintainer |
-| S13-12 🔄 | Review device composition for single-pairing control | Complete the in-progress research and record any architecture change before implementation | M | S13-8 | maintainer |
+| S13-12 ✅ | Review device composition for single-pairing control | Decision recorded in ADR-015: keep the Aggregator bridge for one pairing; evidence links and rejected alternatives recorded | M | S13-8 | maintainer |
 
 ## Deferred work
 

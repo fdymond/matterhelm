@@ -215,6 +215,10 @@ Version 0.5.0 changes how switch state maps to actions:
    repeating unless you factory-reset (below) or remove the devices in the
    Home app.
 
+Google Home usually discovers new or removed custom devices a short time after
+you save them. If it does not, a factory reset and re-pair may be needed; this
+behavior is still pending verification on current Google Home hardware.
+
 ## What each device does
 
 | Google Home device | What it does on the PC |
@@ -666,6 +670,14 @@ office PC"* vs *"…pause the HTPC"*.
   5 GHz and band/client isolation prevents traffic between them. Put the
   phone on the same 5 GHz SSID as the PC (or disable that isolation), then
   try again.
+- **Pairing reaches the end and then fails, or the hub stops after accepting.**
+  Check the Wi-Fi band/isolation guidance above and the IPv6 guidance below
+  first. As a fallback, open **Settings → Devices**, temporarily untick the
+  custom devices so MatterHelm publishes a minimal set, and pair again. After
+  pairing succeeds, re-enable the custom devices. Google Home usually discovers
+  them after a short delay, and you may need to rename them there. If they do
+  not appear, a factory reset and re-pair may be needed; hardware verification
+  of dynamic discovery is still pending.
 - **The Home app says only "Can't connect" or times out before connecting.**
   The modern Home app can show this generic failure when the active VID/PID
   has no exact Matter integration in the Google Home Developer Console; it

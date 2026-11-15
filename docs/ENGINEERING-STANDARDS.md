@@ -39,8 +39,8 @@ serves one of those four words; anything that doesn't is ceremony and gets cut.
   (`{evt: "action", name, ok}`), silent when idle. Log level via config.
 - Dependencies: production deps require justification in the PR/story report;
   pin exact versions; `npm audit` clean at release. The current bridge uses
-  `@matter/main` 0.17.7; every upgrade must re-verify the ADR-010 Windows mDNS
-  workaround before merge.
+  `@matter/main` 0.18.0 (Matter 1.6.1); every upgrade must re-verify the ADR-010
+  Windows mDNS workaround before merge.
 - Errors: never swallow; `catch` blocks either handle meaningfully or add
   context and rethrow. No empty catches.
 
