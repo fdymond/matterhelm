@@ -83,9 +83,9 @@ verification steps.
 
 Every tagged release publishes `SHA256SUMS.txt` beside the installer and
 portable zip. Compare a downloaded artifact with that manifest before running
-it. From the next release onward, GitHub build-provenance attestations will
-also cover both packages and the checksum manifest; verify them with
-`gh attestation verify` against `fdymond/matterhelm`.
+it. Since v0.8.0, GitHub build-provenance attestations also cover both
+packages and the checksum manifest; verify them with
+`gh attestation verify <file> --repo fdymond/matterhelm`.
 
 Release packaging fails if strict SEA construction or required notice
 generation fails. `THIRD-PARTY-NOTICES.txt` covers bundled npm packages,
