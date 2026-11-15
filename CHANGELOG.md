@@ -10,6 +10,8 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-15
+
 ### Added
 
 - Added CodeQL scanning for JavaScript/TypeScript and C#, dependency review,
@@ -39,6 +41,15 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   fails on injection errors unless `-AllowNodeLayoutFallback` is explicit.
 - Third-party notices now cover the bundled .NET runtime, WindowsDesktop
   runtime, and Windows SDK projection in addition to npm, Node.js, and QRCoder.
+- Builds pin the .NET SDK through `global.json` and the exact Node runtime
+  through `.node-version`, and verify `node.exe` against nodejs.org's published
+  SHA-256 before embedding it.
+- Releases are published only after all three assets are uploaded to a draft,
+  preparing for immutable releases.
+- CodeQL token permissions are narrowed to the analyze job.
+- Updated pino to 10.4.0, ws to 8.22.0, and QRCoder to 1.8.1.
+- Agent tooling was reorganised around the shared `AGENTS.md` playbook,
+  path-scoped Claude rules, and skills.
 
 ### Removed
 
@@ -74,6 +85,12 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 - Update downloads remain handle-protected through verification/application,
   and `MATTERHELM_UPDATE_TOKEN` is scrubbed from sidecar/helper environments.
 - Updated Vitest to 4.1.11 to resolve GHSA-82fw-gwwq-j7x9.
+- Updated zod from 4.4.3 to 4.6.7 to resolve GHSA-mrhx-c7xc-m3w5, a memory-
+  exhaustion vulnerability triggered by oversized collections.
+- The self-contained .NET runtime is 10.0.15 and the embedded Node runtime is
+  22.23.5, both November 2026 security releases.
+- The sidecar rejects `HTPC_BRIDGE_MATTER_LOG_FACILITIES` values longer than
+  8192 characters or containing more than 64 facilities before parsing.
 
 ## [0.7.1] — 2026-09-01
 
@@ -696,7 +713,8 @@ for the authoritative, up-to-date version):
   (the full scripted checklist has not yet been executed against the
   packaged dist — needs the human, a Nest hub, and a phone).
 
-[Unreleased]: https://github.com/fdymond/matterhelm/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/fdymond/matterhelm/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/fdymond/matterhelm/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/fdymond/matterhelm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/fdymond/matterhelm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/fdymond/matterhelm/compare/v0.5.1...v0.6.0
