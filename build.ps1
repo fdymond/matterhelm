@@ -17,7 +17,7 @@ and assembles everything into dist\:
 
 No Node.js or .NET is required on the target machine.
 
-Requires on the BUILD machine: Node.js 22.13+ / npm on PATH, dotnet SDK on PATH
+Requires on the BUILD machine: the exact Node.js version in .node-version / npm on PATH, dotnet SDK on PATH
 (or at C:\Program Files\dotnet). PowerShell 5.1 compatible.
 
 The postject call scopes native stderr handling so PowerShell 5.1 callers that
@@ -35,6 +35,10 @@ app test suite as explicit gate steps immediately before calling this script.
 Allows packaging node.exe + bridge.cjs if SEA construction fails. Without this
 explicit opt-in, an SEA failure terminates the build.
 
+.PARAMETER VerifyNodeChecksum
+Downloads the official Node.js SHASUMS256.txt for the pinned version and
+verifies the exact node.exe used to build the SEA (or fallback layout).
+
 .EXAMPLE
 ./build.ps1
 .EXAMPLE
@@ -44,7 +48,8 @@ explicit opt-in, an SEA failure terminates the build.
 param(
     [string]$Configuration = "Release",
     [switch]$SkipTests,
-    [switch]$AllowNodeLayoutFallback
+    [switch]$AllowNodeLayoutFallback,
+    [switch]$VerifyNodeChecksum
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +60,8 @@ $bridgeDir = Join-Path $repoRoot "bridge"
 $bridgeDist = Join-Path $bridgeDir "dist"
 $distDir = Join-Path $repoRoot "dist"
 $publishDir = Join-Path $repoRoot "app\MatterHelm\bin\$Configuration\publish-win-x64"
+$nodeVersionFile = Join-Path $repoRoot ".node-version"
+$minimumDotNetRuntimeVersion = [Version]"10.0.15"
 
 # The documented fuse for `node --experimental-sea-config` blobs (Node SEA
 # docs); postject needs it to locate the injection point inside node.exe.
@@ -82,13 +89,47 @@ function Resolve-Tool {
 
 $nodeExe = Resolve-Tool "node"
 $dotnetExe = Resolve-Tool "dotnet" "C:\Program Files\dotnet\dotnet.exe"
-$nodeVersionText = (& $nodeExe --version).TrimStart("v")
-$nodeVersion = [Version]$nodeVersionText
-if ($nodeVersion -lt [Version]"22.13.0") {
-    throw "Node.js 22.13+ is required by matter.js; found $nodeVersionText at $nodeExe"
+if (-not (Test-Path -LiteralPath $nodeVersionFile -PathType Leaf)) {
+    throw "Node.js version pin not found at '$nodeVersionFile'."
+}
+$nodeVersionText = [IO.File]::ReadAllText($nodeVersionFile).Trim()
+if ($nodeVersionText -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Invalid Node.js version '$nodeVersionText' in '$nodeVersionFile'; expected an exact semantic version."
+}
+$actualNodeVersion = (& $nodeExe --version).Trim()
+$expectedNodeVersion = "v$nodeVersionText"
+if ($actualNodeVersion -cne $expectedNodeVersion) {
+    throw "Node.js $nodeVersionText is required by .node-version, but '$actualNodeVersion' was found at '$nodeExe'. Install Node.js $nodeVersionText and ensure it is first on PATH."
 }
 Write-Host "node:   $nodeExe (v$nodeVersionText)"
 Write-Host "dotnet: $dotnetExe"
+
+if ($VerifyNodeChecksum) {
+    $checksumUri = "https://nodejs.org/dist/v$nodeVersionText/SHASUMS256.txt"
+    $checksumFile = Join-Path ([IO.Path]::GetTempPath()) ("matterhelm-node-shasums-{0}.txt" -f [Guid]::NewGuid().ToString("N"))
+    try {
+        Write-Host "Verifying node.exe against $checksumUri"
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $checksumUri -OutFile $checksumFile -UseBasicParsing
+        $checksumLine = Get-Content -LiteralPath $checksumFile |
+            Where-Object { $_ -match '^[0-9a-fA-F]{64}\s+\*?win-x64/node\.exe$' } |
+            Select-Object -First 1
+        if ($null -eq $checksumLine) {
+            throw "Official checksum manifest '$checksumUri' has no win-x64/node.exe entry."
+        }
+        $expectedNodeHash = ($checksumLine -split '\s+')[0].ToLowerInvariant()
+        $actualNodeHash = (Get-FileHash -LiteralPath $nodeExe -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualNodeHash -cne $expectedNodeHash) {
+            throw "node.exe SHA-256 mismatch for '$nodeExe': expected $expectedNodeHash, got $actualNodeHash."
+        }
+        Write-Host "node.exe SHA-256 verified: $actualNodeHash"
+    }
+    finally {
+        if (Test-Path -LiteralPath $checksumFile) {
+            Remove-Item -LiteralPath $checksumFile -Force
+        }
+    }
+}
 
 # --- 1. Bridge: deps, verify, bundle -------------------------------------
 Push-Location $bridgeDir
@@ -365,6 +406,7 @@ function Get-DotNetRuntimePacks {
                 $resolved += [PSCustomObject]@{
                     PackageId = $required.PackageId
                     Version = [string]$runtime.Value
+                    DepsFile = $depsFile
                 }
             }
             if ($resolved.Count -eq $requiredPacks.Count) {
@@ -373,6 +415,16 @@ function Get-DotNetRuntimePacks {
         }
     }
     throw "published app dependency metadata does not identify all required .NET runtime packs: $($requiredPacks.PackageId -join ', ')"
+}
+
+$publishedRuntimePacks = @(Get-DotNetRuntimePacks)
+$publishedCoreRuntime = $publishedRuntimePacks |
+    Where-Object { $_.PackageId -eq "Microsoft.NETCore.App.Runtime.win-x64" } |
+    Select-Object -First 1
+$resolvedDotNetRuntimeVersion = [Version]$publishedCoreRuntime.Version
+Write-Host "Microsoft.NETCore.App runtime: $resolvedDotNetRuntimeVersion (from $($publishedCoreRuntime.DepsFile))"
+if ($resolvedDotNetRuntimeVersion -lt $minimumDotNetRuntimeVersion) {
+    throw "Published Microsoft.NETCore.App runtime $resolvedDotNetRuntimeVersion is older than required minimum $minimumDotNetRuntimeVersion."
 }
 
 function Resolve-DotNetRuntimePackDirectory {

@@ -16,6 +16,15 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
+    ignore:
+      # typescript-eslint's peer range is < 6.1.0; revisit when it supports TS 7.
+      - dependency-name: typescript
+        versions:
+          - ">= 7"
+      # Keep Node typings aligned with the Node major pinned in .node-version.
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
     groups:
       dev-tooling:
         patterns:
@@ -52,6 +61,17 @@ updates:
           - "xunit*"
           - "Microsoft.NET.Test.*"
           - "coverlet.*"
+
+  # Root SDK pin (global.json), kept separate from application NuGet updates.
+  - package-ecosystem: dotnet-sdk
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
 
   # CI/release workflow actions (the Node-20 deprecation that forced the
   # v4→v7 bumps would have surfaced here automatically).

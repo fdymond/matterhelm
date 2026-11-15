@@ -2,7 +2,7 @@ name: release
 
 # Tag-triggered release. Push a `v*` tag (e.g. `v0.7.1`) to run the full
 # verify/build/test gate and publish a GitHub Release with auto-generated
-# notes. Mirrors ci.yml's setup steps (node 22, dotnet 10.0.x) so this job
+# notes. Mirrors ci.yml's pinned Node and .NET setup so this job
 # exercises exactly what CI already proved green on main.
 on:
   push:
@@ -29,8 +29,10 @@ jobs:
 
       - name: Assert release tag matches package versions
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          $tagVersion = $env:TAG -replace '^v', ''
           [xml]$project = Get-Content app/MatterHelm/MatterHelm.csproj -Raw
           $appVersion = $project.SelectSingleNode('//Version').InnerText
           $bridgeVersion = (Get-Content bridge/package.json -Raw | ConvertFrom-Json).version
@@ -44,13 +46,13 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: bridge/package-lock.json
 
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
 
       - name: Bridge dependencies
         working-directory: bridge
@@ -71,17 +73,22 @@ jobs:
       # SEA sidecar exe + dotnet-publish single-file tray exe; no dev tools
       # required on the target machine).
       - name: Build dist
-        run: ./build.ps1 -SkipTests
+        run: ./build.ps1 -SkipTests -VerifyNodeChecksum
 
       - name: Zip dist (portable)
-        run: Compress-Archive -Path dist/* -DestinationPath matterhelm-${{ github.ref_name }}-win-x64.zip
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: Compress-Archive -Path dist/* -DestinationPath "matterhelm-$($env:TAG)-win-x64.zip"
 
       # S10: Windows installer (Inno Setup 6 is preinstalled on
       # windows-latest runners). Version = the tag without its leading "v".
       - name: Build installer
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
+          $version = $env:TAG.TrimStart("v")
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DAppVersion=$version installer\matterhelm.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
           Get-ChildItem dist-installer
@@ -90,9 +97,11 @@ jobs:
       # (README documents `certutil -hashfile <file> SHA256`).
       - name: Generate SHA256SUMS
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           $lines = foreach ($f in @(
-              "matterhelm-${{ github.ref_name }}-win-x64.zip",
+              "matterhelm-$($env:TAG)-win-x64.zip",
               (Get-ChildItem dist-installer/MatterHelm-Setup-*.exe).FullName)) {
             $h = Get-FileHash $f -Algorithm SHA256
             "{0}  {1}" -f $h.Hash.ToLowerInvariant(), (Split-Path $f -Leaf)
@@ -111,6 +120,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
+          draft: true
           generate_release_notes: true
           files: |
             matterhelm-${{ github.ref_name }}-win-x64.zip
@@ -118,3 +128,45 @@ jobs:
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify draft release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.TrimStart("v")
+          $expected = @(
+            "MatterHelm-Setup-$version.exe",
+            "matterhelm-$($env:TAG)-win-x64.zip",
+            "SHA256SUMS.txt"
+          )
+          $release = gh release view $env:TAG --json isDraft,assets | ConvertFrom-Json
+          if (-not $release.isDraft) {
+            throw "Release $env:TAG must remain a draft until all assets are verified."
+          }
+          $actual = @($release.assets | ForEach-Object { $_.name })
+          $missing = @($expected | Where-Object { $_ -notin $actual })
+          $unexpected = @($actual | Where-Object { $_ -notin $expected })
+          if ($missing.Count -ne 0) {
+            throw "Draft release is missing required assets: $($missing -join ', ')"
+          }
+          if ($unexpected.Count -ne 0) {
+            throw "Draft release has unexpected assets: $($unexpected -join ', ')"
+          }
+          $empty = @($release.assets | Where-Object { $_.size -le 0 } | ForEach-Object { $_.name })
+          if ($empty.Count -ne 0) {
+            throw "Draft release has empty assets: $($empty -join ', ')"
+          }
+          $notUploaded = @($release.assets | Where-Object { $_.state -ne 'uploaded' } | ForEach-Object { $_.name })
+          if ($notUploaded.Count -ne 0) {
+            throw "Draft release has assets not in the uploaded state: $($notUploaded -join ', ')"
+          }
+          Write-Host "Draft release assets verified: $($expected -join ', ')"
+
+      - name: Publish verified GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit $env:TAG --draft=false
