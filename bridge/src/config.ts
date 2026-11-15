@@ -36,6 +36,8 @@ const DEFAULT_LOG_LEVEL = "info";
 const MAX_CUSTOM_COMMANDS = 64;
 const MAX_ENDPOINT_NAME_LENGTH = 64;
 const MAX_IDENTITY_SEED_LENGTH = 128;
+const MAX_MATTER_LOG_FACILITIES_LENGTH = 8192;
+const MAX_MATTER_LOG_FACILITIES = 64;
 
 /**
  * `HTPC_BRIDGE_MOMENTARY_RESET_MS` bounds and default (S7-1, maintainer request).
@@ -295,6 +297,13 @@ function parseMatterLogFacilities(
   if (raw === undefined || raw === "") {
     return undefined;
   }
+  // Bound the raw input before JSON parsing so oversized environment data cannot consume unbounded work.
+  if (raw.length > MAX_MATTER_LOG_FACILITIES_LENGTH) {
+    throw new Error(
+      "HTPC_BRIDGE_MATTER_LOG_FACILITIES must be at most " +
+        `${String(MAX_MATTER_LOG_FACILITIES_LENGTH)} characters`,
+    );
+  }
   let json: unknown;
   try {
     json = JSON.parse(raw);
@@ -305,6 +314,14 @@ function parseMatterLogFacilities(
     throw new Error(
       "HTPC_BRIDGE_MATTER_LOG_FACILITIES must be a JSON object mapping facility names " +
         `to one of ${MATTER_LOG_LEVELS.join(", ")}`,
+    );
+  }
+  const facilityCount = Object.keys(json).length;
+  // Count keys before element validation so invalid values cannot create unbounded issue collections.
+  if (facilityCount > MAX_MATTER_LOG_FACILITIES) {
+    throw new Error(
+      "HTPC_BRIDGE_MATTER_LOG_FACILITIES must contain at most " +
+        `${String(MAX_MATTER_LOG_FACILITIES)} facilities`,
     );
   }
   const result = MatterLogFacilitiesSchema.safeParse(json);

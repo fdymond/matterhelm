@@ -227,6 +227,42 @@ describe("parseConfig", () => {
       ).toEqual({ Commissioning: "warn" });
     });
 
+    it("accepts the 8192-character raw input boundary", () => {
+      const facilityName = "f".repeat(8180);
+      const raw = JSON.stringify({ [facilityName]: "debug" });
+      expect(raw).toHaveLength(8192);
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: raw })).matterLogFacilities,
+      ).toMatchObject({ [facilityName]: "debug" });
+    });
+
+    it("rejects raw input over 8192 characters before JSON parsing", () => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "{".repeat(8193) }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES must be at most 8192 characters/);
+    });
+
+    it("accepts at most 64 facility overrides", () => {
+      const facilities = Object.fromEntries(
+        Array.from({ length: 64 }, (_, index) => [`Facility${String(index)}`, "debug"]),
+      );
+      expect(
+        Object.keys(
+          parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: JSON.stringify(facilities) }))
+            .matterLogFacilities,
+        ),
+      ).toHaveLength(65);
+    });
+
+    it("rejects the 65th facility before validating element values", () => {
+      const facilities = Object.fromEntries(
+        Array.from({ length: 65 }, (_, index) => [`Facility${String(index)}`, "invalid"]),
+      );
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: JSON.stringify(facilities) }));
+      }).toThrow(/HTPC_BRIDGE_MATTER_LOG_FACILITIES must contain at most 64 facilities/);
+    });
+
     it("is fatal (not silent) on malformed JSON", () => {
       expect(() => {
         parseConfig(baseEnv({ HTPC_BRIDGE_MATTER_LOG_FACILITIES: "{not json" }));
