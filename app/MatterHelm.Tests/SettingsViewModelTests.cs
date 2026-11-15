@@ -61,12 +61,12 @@ public sealed class SettingsViewModelTests : IDisposable
         string key,
         string? name = null,
         bool resetAfterActivation = false) => new()
-    {
-        Key = key,
-        Name = name ?? key,
-        ResetAfterActivation = resetAfterActivation,
-        Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
-    };
+        {
+            Key = key,
+            Name = name ?? key,
+            ResetAfterActivation = resetAfterActivation,
+            Action = new MediaKeyActionConfig { KeyName = MediaKeyName.Stop },
+        };
 
     // ---- external live-config changes (S4-R RISK-1) ------------------------
 
@@ -744,22 +744,25 @@ public sealed class SettingsViewModelTests : IDisposable
     [Fact]
     public void SaveFailureStaysDirtyLeavesLiveConfigUntouchedAndSurfacesAnError()
     {
-        var config = new Config(_dir, _log.Sink);
-        SettingsViewModel vm = NewViewModel(config);
-        vm.Working.IpcPort = 40123;
-        var errors = new List<(string Title, string Message)>();
-        using var window = new SettingsWindow(
-            vm,
-            showError: (title, message) => errors.Add((title, message)));
+        StaTest.Run(() =>
+        {
+            var config = new Config(_dir, _log.Sink);
+            SettingsViewModel vm = NewViewModel(config);
+            vm.Working.IpcPort = 40123;
+            var errors = new List<(string Title, string Message)>();
+            using var window = new SettingsWindow(
+                vm,
+                showError: (title, message) => errors.Add((title, message)));
 
-        bool saved = window.SaveNow();
+            bool saved = window.SaveNow();
 
-        Assert.False(saved);
-        Assert.True(vm.IsDirty);
-        Assert.Equal(39531, config.Current.IpcPort);
-        (string title, string message) = Assert.Single(errors);
-        Assert.Equal("Settings could not be saved", title);
-        Assert.Contains("Your edits are still here", message, StringComparison.Ordinal);
+            Assert.False(saved);
+            Assert.True(vm.IsDirty);
+            Assert.Equal(39531, config.Current.IpcPort);
+            (string title, string message) = Assert.Single(errors);
+            Assert.Equal("Settings could not be saved", title);
+            Assert.Contains("Your edits are still here", message, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -977,23 +980,26 @@ public sealed class SettingsViewModelTests : IDisposable
     [Fact]
     public void ShowAllCheckboxIsUncheckedUiOnlyAndRefreshesTheDropdown()
     {
-        SettingsViewModel vm = NewViewModel(
-            networkAdapters: new StubNetworkAdapterProvider(
-            [
-                new NetworkAdapterInfo("Ethernet", "192.0.2.20", "Realtek PCIe GbE"),
+        StaTest.Run(() =>
+        {
+            SettingsViewModel vm = NewViewModel(
+                networkAdapters: new StubNetworkAdapterProvider(
+                [
+                    new NetworkAdapterInfo("Ethernet", "192.0.2.20", "Realtek PCIe GbE"),
                 new NetworkAdapterInfo("Work VPN", "203.0.113.2", "TAP-Windows Adapter V9"),
-            ]));
-        using var window = new SettingsWindow(vm);
-        var combo = Assert.IsType<ComboBox>(Assert.Single(window.Controls.Find("mdns-interface-choice", searchAllChildren: true)));
-        var showAll = Assert.IsType<CheckBox>(Assert.Single(window.Controls.Find("mdns-show-all-adapters", searchAllChildren: true)));
+                ]));
+            using var window = new SettingsWindow(vm);
+            var combo = Assert.IsType<ComboBox>(Assert.Single(window.Controls.Find("mdns-interface-choice", searchAllChildren: true)));
+            var showAll = Assert.IsType<CheckBox>(Assert.Single(window.Controls.Find("mdns-show-all-adapters", searchAllChildren: true)));
 
-        Assert.False(showAll.Checked);
-        Assert.DoesNotContain("Work VPN — 203.0.113.2", combo.Items.Cast<string>());
+            Assert.False(showAll.Checked);
+            Assert.DoesNotContain("Work VPN — 203.0.113.2", combo.Items.Cast<string>());
 
-        showAll.Checked = true;
+            showAll.Checked = true;
 
-        Assert.Contains("Work VPN — 203.0.113.2", combo.Items.Cast<string>());
-        Assert.False(vm.IsDirty);
+            Assert.Contains("Work VPN — 203.0.113.2", combo.Items.Cast<string>());
+            Assert.False(vm.IsDirty);
+        });
     }
 
     [Fact]

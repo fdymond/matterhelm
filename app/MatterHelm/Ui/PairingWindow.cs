@@ -73,6 +73,10 @@ public sealed class PairingWindow : Form
     private bool _stageInitialized;
     private bool _autoCloseScheduled;
     private bool _requirementsExpanded;
+    private bool _keepCentered;
+    private bool _userPositioned;
+    private bool _inMoveSizeLoop;
+    private Rectangle _moveSizeStartBounds;
     private PairingStage _currentStage;
 
     /// <summary>Builds the (initially empty) window chrome; call <see cref="SetPairingInfo"/> to populate it.</summary>
@@ -322,6 +326,16 @@ public sealed class PairingWindow : Form
     /// <summary>Whether the Matter identity helper area applies to the current stage.</summary>
     public bool IdentityHelpVisible => _currentStage == PairingStage.ReadyToScan;
 
+    internal void SetStatusTextForTest(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        _status.Text = text;
+    }
+
+    internal void SimulateResizeBeginForTest() => OnResizeBegin(EventArgs.Empty);
+
+    internal void SimulateResizeEndForTest() => OnResizeEnd(EventArgs.Empty);
+
     /// <summary>
     /// Renders <paramref name="qrPayload"/> (the Matter <c>MT:…</c> onboarding
     /// payload) as a QR image and shows <paramref name="manualCode"/> as
@@ -421,10 +435,7 @@ public sealed class PairingWindow : Form
         Size preferredSize = GetPreferredSize(Size.Empty);
         if (currentScreen is not null)
         {
-            Rectangle workingArea = currentScreen.WorkingArea;
-            int left = workingArea.Left + ((workingArea.Width - preferredSize.Width) / 2);
-            int top = workingArea.Top + ((workingArea.Height - preferredSize.Height) / 2);
-            SetBounds(left, top, preferredSize.Width, preferredSize.Height, BoundsSpecified.All);
+            SetContentBounds(currentScreen, preferredSize);
         }
 
         ResumeLayout(true);
@@ -446,11 +457,43 @@ public sealed class PairingWindow : Form
         Size preferredSize = GetPreferredSize(Size.Empty);
         if (currentScreen is not null)
         {
-            Rectangle workingArea = currentScreen.WorkingArea;
-            int left = workingArea.Left + ((workingArea.Width - preferredSize.Width) / 2);
-            int top = workingArea.Top + ((workingArea.Height - preferredSize.Height) / 2);
-            SetBounds(left, top, preferredSize.Width, preferredSize.Height, BoundsSpecified.All);
+            SetContentBounds(currentScreen, preferredSize);
         }
+    }
+
+    private void SetContentBounds(Screen screen, Size size)
+    {
+        if (_inMoveSizeLoop)
+        {
+            SetBounds(Left, Top, size.Width, size.Height, BoundsSpecified.Size);
+        }
+        else if (!_userPositioned)
+        {
+            SetCenteredBounds(screen, size);
+        }
+        else
+        {
+            SetClampedBounds(screen, size);
+        }
+    }
+
+    private void SetCenteredBounds(Screen screen, Size size)
+    {
+        Rectangle workingArea = screen.WorkingArea;
+        SetBounds(
+            workingArea.Left + ((workingArea.Width - size.Width) / 2),
+            workingArea.Top + ((workingArea.Height - size.Height) / 2),
+            size.Width,
+            size.Height,
+            BoundsSpecified.All);
+    }
+
+    private void SetClampedBounds(Screen screen, Size size)
+    {
+        Rectangle workingArea = screen.WorkingArea;
+        int x = Math.Clamp(Left, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - size.Width));
+        int y = Math.Clamp(Top, workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - size.Height));
+        SetBounds(x, y, size.Width, size.Height, BoundsSpecified.All);
     }
 
     private void ScheduleAutoClose()
@@ -552,6 +595,8 @@ public sealed class PairingWindow : Form
     {
         base.OnLoad(e);
 
+        _keepCentered = StartPosition == FormStartPosition.CenterScreen;
+
         // The handle now has its final DPI/fonts, but the form is not visible
         // yet. Settle and center here so remote/slow sessions never paint the
         // stale CenterScreen bounds for one frame.
@@ -559,13 +604,7 @@ public sealed class PairingWindow : Form
         {
             PerformLayout();
             Size preferredSize = GetPreferredSize(Size.Empty);
-            Rectangle workingArea = Screen.FromRectangle(Bounds).WorkingArea;
-            SetBounds(
-                workingArea.Left + ((workingArea.Width - preferredSize.Width) / 2),
-                workingArea.Top + ((workingArea.Height - preferredSize.Height) / 2),
-                preferredSize.Width,
-                preferredSize.Height,
-                BoundsSpecified.All);
+            SetCenteredBounds(Screen.FromRectangle(Bounds), preferredSize);
         }
     }
 
@@ -577,13 +616,59 @@ public sealed class PairingWindow : Form
         // Defensive fallback for a host that changes Size from its Shown event.
         // The production path is already settled and centered in OnLoad before
         // visibility, so this normally leaves Location unchanged.
-        if (StartPosition == FormStartPosition.CenterScreen)
+        if (_keepCentered && !_userPositioned)
+        {
+            SetCenteredBounds(Screen.FromRectangle(Bounds), Size);
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+    {
+        // AutoSize can settle after Shown. Rewrite size and location in the
+        // same native bounds update so no off-centre frame is painted.
+        if (_keepCentered && !_userPositioned && !_inMoveSizeLoop && (width != Width || height != Height))
         {
             Rectangle workingArea = Screen.FromRectangle(Bounds).WorkingArea;
-            Location = new Point(
-                workingArea.Left + ((workingArea.Width - Width) / 2),
-                workingArea.Top + ((workingArea.Height - Height) / 2));
+            x = workingArea.Left + ((workingArea.Width - width) / 2);
+            y = workingArea.Top + ((workingArea.Height - height) / 2);
+            specified |= BoundsSpecified.Location;
         }
+        else if (_userPositioned && !_inMoveSizeLoop)
+        {
+            Rectangle workingArea = Screen.FromRectangle(Bounds).WorkingArea;
+            x = Math.Clamp(x, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - width));
+            y = Math.Clamp(y, workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - height));
+            specified |= BoundsSpecified.Location;
+        }
+
+        base.SetBoundsCore(x, y, width, height, specified);
+    }
+
+    /// <inheritdoc />
+    protected override void OnResizeBegin(EventArgs e)
+    {
+        base.OnResizeBegin(e);
+        _moveSizeStartBounds = Bounds;
+        _inMoveSizeLoop = true;
+    }
+
+    /// <inheritdoc />
+    protected override void OnResizeEnd(EventArgs e)
+    {
+        bool locationChanged = _inMoveSizeLoop && Location != _moveSizeStartBounds.Location;
+        bool sizeChanged = _inMoveSizeLoop && Size != _moveSizeStartBounds.Size;
+        _inMoveSizeLoop = false;
+        if (locationChanged)
+        {
+            _userPositioned = true;
+        }
+        else if (sizeChanged && _keepCentered && !_userPositioned)
+        {
+            SetCenteredBounds(Screen.FromRectangle(_moveSizeStartBounds), Size);
+        }
+
+        base.OnResizeEnd(e);
     }
 
     /// <inheritdoc />
