@@ -9,6 +9,7 @@ namespace MatterHelm;
 internal static class SidecarLaunchSpec
 {
     private const string LayoutManifestName = "sidecar-layout.json";
+    private const string NodeMemoryLimitArgument = "--max-semi-space-size=8";
 
     /// <summary>
     /// The packaged spec under <paramref name="baseDirectory"/>, or null when
@@ -118,7 +119,7 @@ internal static class SidecarLaunchSpec
                 "sea" => new SidecarSpec(Path.Combine(packagedDir, "bridge.exe"), [], packagedDir),
                 "node" => new SidecarSpec(
                     Path.Combine(packagedDir, "node.exe"),
-                    [Path.Combine(packagedDir, "bridge.cjs")],
+                    [NodeMemoryLimitArgument, Path.Combine(packagedDir, "bridge.cjs")],
                     packagedDir),
                 _ => null,
             };
@@ -136,7 +137,7 @@ internal static class SidecarLaunchSpec
         string executable = Path.Combine(packagedDir, "node.exe");
         string entry = Path.Combine(packagedDir, "bridge.cjs");
         return File.Exists(executable) && File.Exists(entry)
-            ? new SidecarSpec(executable, [entry], packagedDir)
+            ? new SidecarSpec(executable, [NodeMemoryLimitArgument, entry], packagedDir)
             : null;
     }
 }
