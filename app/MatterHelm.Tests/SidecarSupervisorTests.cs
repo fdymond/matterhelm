@@ -152,6 +152,38 @@ public static class SidecarSupervisorTests
         }
 
         [Fact]
+        public async Task SpawnScrubsNodeOptionsFromTheChildEnvironment()
+        {
+            string node = TestSupport.RequireNodeExe();
+            var capture = new TestSupport.LogCapture();
+            const string script =
+                "console.log('NODE_OPTIONS_PRESENT=' + Object.hasOwn(process.env, 'NODE_OPTIONS'));" +
+                "setInterval(() => {}, 1000);";
+            using (var supervisor = new SidecarSupervisor(
+                new SidecarSpec(node, ["-e", script], Path.GetTempPath()),
+                ipcPort: 41234,
+                storageDir: "x",
+                options: new SupervisorOptions { StopGraceMs = 250 },
+                log: capture.Sink,
+                extraEnv: new Dictionary<string, string>
+                {
+                    ["NODE_OPTIONS"] = "--no-warnings",
+                }))
+            {
+                supervisor.Start();
+                await TestSupport.WaitUntilAsync(
+                    () => capture.ContainsMessage("NODE_OPTIONS_PRESENT="),
+                    ChildWaitTimeout,
+                    "child to report whether NODE_OPTIONS was inherited");
+
+                Assert.True(
+                    capture.Contains("INFO", "NODE_OPTIONS_PRESENT=false"),
+                    "NODE_OPTIONS must not reach the sidecar process");
+                supervisor.Stop();
+            }
+        }
+
+        [Fact]
         public async Task ImmediateCrashRestartsWithGrowingJitteredDelays()
         {
             string node = TestSupport.RequireNodeExe();
