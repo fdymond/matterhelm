@@ -10,6 +10,8 @@ const seam = vi.hoisted(() => {
     plugCallbacks: new Map<string, (on: boolean) => void>(),
     setOnOff,
     setOnOffCalls: new Array<{ id: string; on: boolean }>(),
+    synchronizeCalls: 0,
+    synchronizeError: undefined as Error | undefined,
   };
 });
 
@@ -49,6 +51,12 @@ vi.mock("./adapter.js", () => ({
         onCommissionedChange: () => undefined,
         pairingCodes: null,
         start: () => Promise.resolve(),
+        synchronizeEndpointConfiguration: () => {
+          seam.synchronizeCalls += 1;
+          return seam.synchronizeError === undefined
+            ? Promise.resolve({ changed: false, configurationVersion: 1 })
+            : Promise.reject(seam.synchronizeError);
+        },
       });
     },
   },
@@ -74,6 +82,8 @@ describe("createBridge construction cleanup", () => {
     seam.plugCallbacks.clear();
     seam.setOnOff = () => Promise.resolve();
     seam.setOnOffCalls.length = 0;
+    seam.synchronizeCalls = 0;
+    seam.synchronizeError = undefined;
   });
 
   afterEach(() => {
@@ -89,9 +99,68 @@ describe("createBridge construction cleanup", () => {
 
     const retry = await createBridge(options);
     expect(seam.createCalls).toBe(2);
+    expect(seam.synchronizeCalls).toBe(1);
     expect(retry.endpoints).toEqual([{ id: "playpause", name: "Play Pause", kind: "onOffPlug" }]);
     await retry.close();
     expect(seam.closeCalls).toBe(2);
+  });
+
+  it("continues construction when ConfigurationVersion synchronization rejects", async () => {
+    seam.failNextAdd = false;
+    seam.synchronizeError = new Error("injected configuration storage failure");
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    };
+
+    const handle = await createBridge({
+      storageDir: "test-storage",
+      endpoints,
+      logger,
+      onClusterWrite: () => undefined,
+    });
+
+    expect(handle.endpoints).toEqual([{ id: "playpause", name: "Play Pause", kind: "onOffPlug" }]);
+    expect(seam.closeCalls).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        evt: "matter.configuration-version.error",
+        err: "Error: injected configuration storage failure",
+      },
+      "failed to synchronize Matter endpoint configuration",
+    );
+    await handle.close();
+  });
+
+  it("logs the synchronized ConfigurationVersion result at info", async () => {
+    seam.failNextAdd = false;
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    };
+
+    const handle = await createBridge({
+      storageDir: "test-storage",
+      endpoints,
+      logger,
+      onClusterWrite: () => undefined,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        evt: "matter.configuration-version",
+        changed: false,
+        configurationVersion: 1,
+      },
+      "synchronized Matter endpoint configuration",
+    );
+    await handle.close();
   });
 
   it("retains every built-in and default custom state while resetting only an opted-in custom", async () => {

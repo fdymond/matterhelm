@@ -139,7 +139,7 @@ export function sessionLogFields(session: MatterSessionInfo): Record<string, unk
  * `server.events.sessions` observables through {@link MatterSessionEvents};
  * tests supply a double — the mapping itself is identical either way.
  *
- * Event vocabulary (what matter.js 0.17.7 exposes at node level):
+ * Event vocabulary (what matter.js 0.18.0 exposes at node level):
  * - `opened`/`closed` (CASE sessions only; PASE is filtered upstream) ->
  *   `{evt:"matter.session", action:"established"|"closed", ...identity}`.
  * - `subscriptionAdded(subscription)` -> `{evt:"matter.subscription",

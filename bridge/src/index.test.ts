@@ -18,6 +18,7 @@ let handleUnhandledRejection: typeof HandleUnhandledRejection;
 vi.mock("./config.js", () => ({
   loadConfig: () => ({
     bridgeName: "Test Bridge",
+    disableMdnsScopeIdWorkaround: false,
     endpoints: { speaker: { enabled: true } },
     ipcPort: 39531,
     ipcToken: "test-token",

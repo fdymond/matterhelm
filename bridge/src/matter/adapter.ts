@@ -31,9 +31,11 @@ import {
   Logger,
   MaybePromise,
   ServerNode,
+  StorageManager,
   VendorId,
 } from "@matter/main";
 import type { NetworkInterfaceDetails } from "@matter/main";
+import { BasicInformationServer } from "@matter/main/behaviors/basic-information";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import {
   OnOffPlugInUnitDevice,
@@ -82,13 +84,44 @@ interface PatchableNodeJsNetworkClass {
 interface WindowsMdnsPatchOptions {
   platform?: NodeJS.Platform;
   getNetworkInterfaces?: () => NetworkInterfaceTable;
-  networkClass?: PatchableNodeJsNetworkClass;
+  networkClass?: unknown;
 }
 
 const patchedWindowsMdnsNetworkClasses = new WeakSet<PatchableNodeJsNetworkClass>();
 
 function captureMethod<T extends object, K extends keyof T>(target: T, key: K): T[K] {
   return target[key];
+}
+
+function isPropertyRecord(value: unknown): value is Record<PropertyKey, unknown> {
+  return (typeof value === "function" || typeof value === "object") && value !== null;
+}
+
+/**
+ * Fails loudly if an upstream NodeJsNetwork refactor invalidates ADR-010's
+ * three wrapped symbols. Exported so tests can pin the real runtime shape
+ * without mutating the process-global class.
+ */
+export function assertWindowsMdnsScopeIdWorkaroundCompatibility(
+  networkClass: unknown = NodeJsNetwork,
+): asserts networkClass is PatchableNodeJsNetworkClass {
+  if (!isPropertyRecord(networkClass)) {
+    throw new Error("ADR-010 workaround incompatible: NodeJsNetwork is not a class");
+  }
+  const prototype = networkClass.prototype;
+  const prototypeRecord = isPropertyRecord(prototype) ? prototype : {};
+  const missing = [
+    ["prototype.getIpMac", prototypeRecord.getIpMac],
+    ["getNetInterfaceZoneIpv6", networkClass.getNetInterfaceZoneIpv6],
+    ["getMulticastInterfaceIpv4", networkClass.getMulticastInterfaceIpv4],
+  ]
+    .filter(([, value]) => typeof value !== "function")
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(
+      `ADR-010 workaround incompatible: NodeJsNetwork no longer exposes ${missing.join(", ")}`,
+    );
+  }
 }
 
 /**
@@ -99,6 +132,7 @@ export function installWindowsMdnsScopeIdWorkaround(options: WindowsMdnsPatchOpt
   const platform = options.platform ?? process.platform;
   const getInterfaces = options.getNetworkInterfaces ?? networkInterfaces;
   const networkClass = options.networkClass ?? NodeJsNetwork;
+  assertWindowsMdnsScopeIdWorkaroundCompatibility(networkClass);
   if (platform !== "win32" || patchedWindowsMdnsNetworkClasses.has(networkClass)) {
     return;
   }
@@ -113,11 +147,11 @@ export function installWindowsMdnsScopeIdWorkaround(options: WindowsMdnsPatchOpt
   );
 
   /*
-   * matter.js 0.17.7 labels inbound Windows mDNS packets with a numeric IPv6
+   * matter.js 0.18.0 labels inbound Windows mDNS packets with a numeric IPv6
    * scope id, but its record and response lookups expect os.networkInterfaces()
    * friendly-name keys. This drops every query before a response is sent.
    * Keep the compatibility shim at the adapter boundary; see ADR-010.
-   * Upstream: https://github.com/matter-js/matter.js (unfixed through 0.17.9).
+   * Upstream: https://github.com/matter-js/matter.js (unfixed as of 2026-11-15).
    */
   networkClass.prototype.getIpMac = function (identifier) {
     return originalGetIpMac.call(this, friendlyName(identifier));
@@ -186,6 +220,8 @@ export interface MatterNodeOptions {
   matterLogLevel?: MatterLogLevel;
   /** Per-facility level overrides (`Logger.facilityLevels`); unset = none. */
   matterLogFacilities?: Readonly<Record<string, MatterLogLevel>>;
+  /** Diagnostic-only escape hatch for the ADR-010 comparison matrix. */
+  disableMdnsScopeIdWorkaround?: boolean;
 }
 
 /**
@@ -263,6 +299,9 @@ let environmentClaimed = false;
  * structured instead — and writes one pino event per line.
  */
 function configureMatterLogging(options: MatterNodeOptions): void {
+  // 0.18 selects a console format from terminal detection. Force plain here
+  // before replacing the console destination so stdout remains pino NDJSON.
+  Logger.format = LogFormat.PLAIN;
   if (options.matterLogLevel !== undefined) {
     Logger.level = options.matterLogLevel;
   }
@@ -300,6 +339,56 @@ function bridgedBasicInformation(info: BridgedDeviceInfo): {
   };
 }
 
+function deviceTypeIds(endpoint: Endpoint): readonly number[] {
+  return endpoint.state.descriptor.deviceTypeList
+    .map(({ deviceType }) => Number(deviceType))
+    .sort((left, right) => left - right);
+}
+
+function serverClusterIds(endpoint: Endpoint): readonly number[] {
+  return endpoint.state.descriptor.serverList.map(Number).sort((left, right) => left - right);
+}
+
+interface DeviceTypeFingerprint {
+  id: number;
+  revision: number;
+}
+
+function deviceTypeFingerprint(endpoint: Endpoint): readonly DeviceTypeFingerprint[] {
+  return endpoint.state.descriptor.deviceTypeList
+    .map(({ deviceType, revision }) => ({ id: Number(deviceType), revision }))
+    .sort((left, right) => left.id - right.id || left.revision - right.revision);
+}
+
+type EndpointValidationMode = "off" | "warn" | "strict";
+
+function isEndpointValidationMode(value: string): value is EndpointValidationMode {
+  return value === "off" || value === "warn" || value === "strict";
+}
+
+function configureEndpointValidation(
+  logger: DiagnosticsLogger | undefined,
+): EndpointValidationMode {
+  const configured = process.env.MATTER_ENDPOINT_VALIDATION;
+  if (configured === undefined) {
+    return "warn";
+  }
+  if (isEndpointValidationMode(configured)) {
+    return configured;
+  }
+
+  logger?.warn(
+    {
+      evt: "matter.endpoint-validation.invalid",
+      value: configured,
+      fallback: "warn",
+    },
+    "invalid MATTER_ENDPOINT_VALIDATION; forcing warn mode",
+  );
+  process.env.MATTER_ENDPOINT_VALIDATION = "warn";
+  return "warn";
+}
+
 /**
  * Opaque handle for the Speaker endpoint (OnOff = mute, LevelControl =
  * volume — BLUEPRINT §2.2). Constructed only by {@link MatterNode.addSpeaker}.
@@ -318,6 +407,30 @@ export class SpeakerHandle {
 
   getLevel(): number | null {
     return this.#endpoint.state.levelControl.currentLevel;
+  }
+
+  /** Matter endpoint number, exposed as plain data for persistence tests. */
+  get endpointNumber(): number {
+    return Number(this.#endpoint.number);
+  }
+
+  /** Descriptor device types as plain numeric ids. */
+  get deviceTypes(): readonly number[] {
+    return deviceTypeIds(this.#endpoint);
+  }
+
+  /** Descriptor server clusters as plain numeric ids. */
+  get serverClusters(): readonly number[] {
+    return serverClusterIds(this.#endpoint);
+  }
+
+  /** Speaker LevelControl limits advertised to controllers. */
+  get levelLimits(): Readonly<{ min: number; max: number }> {
+    const { minLevel, maxLevel } = this.#endpoint.state.levelControl;
+    if (minLevel === undefined || maxLevel === undefined) {
+      throw new Error("Speaker LevelControl limits are unexpectedly absent");
+    }
+    return { min: minLevel, max: maxLevel };
   }
 
   /**
@@ -380,6 +493,21 @@ export class PlugHandle {
     return this.#endpoint.state.onOff.onOff;
   }
 
+  /** Matter endpoint number, exposed as plain data for persistence tests. */
+  get endpointNumber(): number {
+    return Number(this.#endpoint.number);
+  }
+
+  /** Descriptor device types as plain numeric ids. */
+  get deviceTypes(): readonly number[] {
+    return deviceTypeIds(this.#endpoint);
+  }
+
+  /** Descriptor server clusters as plain numeric ids. */
+  get serverClusters(): readonly number[] {
+    return serverClusterIds(this.#endpoint);
+  }
+
   /**
    * Writes the attribute directly (used by opt-in custom auto-reset). Writing the
    * current value is a no-op, and this path invokes no cluster command, so it
@@ -412,12 +540,19 @@ export class PlugHandle {
 export class MatterNode {
   readonly #server: ServerNode;
   readonly #aggregator: Endpoint<typeof AggregatorEndpoint>;
+  readonly #publishedEndpoints = new Map<string, Endpoint>();
+  readonly #endpointValidationMode: EndpointValidationMode;
   #started = false;
   #closed = false;
 
-  private constructor(server: ServerNode, aggregator: Endpoint<typeof AggregatorEndpoint>) {
+  private constructor(
+    server: ServerNode,
+    aggregator: Endpoint<typeof AggregatorEndpoint>,
+    endpointValidationMode: EndpointValidationMode,
+  ) {
     this.#server = server;
     this.#aggregator = aggregator;
+    this.#endpointValidationMode = endpointValidationMode;
   }
 
   /**
@@ -438,7 +573,15 @@ export class MatterNode {
     // Before ServerNode.create so storage/network boot logs already flow
     // through the pino destination (ADR-006 §1).
     configureMatterLogging(options);
-    installWindowsMdnsScopeIdWorkaround();
+    const endpointValidationMode = configureEndpointValidation(options.logger);
+    if (options.disableMdnsScopeIdWorkaround === true) {
+      options.logger?.warn(
+        { evt: "matter.mdns-scopeid-workaround.disabled" },
+        "ADR-010 mDNS scope-id workaround disabled for diagnostics only",
+      );
+    } else {
+      installWindowsMdnsScopeIdWorkaround();
+    }
     Environment.default.vars.set("storage.path", options.storageDir);
     Environment.default.vars.set("runtime.signals", false);
     if (options.mdnsInterface !== undefined) {
@@ -464,7 +607,7 @@ export class MatterNode {
     });
     try {
       if (options.logger !== undefined) {
-        // Session observability (ADR-006 §1): matter.js 0.17.7's node-level
+        // Session observability (ADR-006 §1): matter.js 0.18.0's node-level
         // `SessionsBehavior` events, adapted to the plain-data seam.
         const sessions = server.events.sessions;
         wireSessionObservability(
@@ -488,7 +631,7 @@ export class MatterNode {
       const aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator" });
       await server.add(aggregator);
       environmentClaimed = true;
-      return new MatterNode(server, aggregator);
+      return new MatterNode(server, aggregator, endpointValidationMode);
     } catch (error) {
       await server.close();
       throw error;
@@ -500,8 +643,12 @@ export class MatterNode {
     const endpoint = new Endpoint(SpeakerEndpointType, {
       id: info.id,
       bridgedDeviceBasicInformation: bridgedBasicInformation(info),
+      // The non-lighting Speaker permits 0-254. State the fixed limits
+      // explicitly so future matter.js defaults cannot alter its contract.
+      levelControl: { minLevel: 0, maxLevel: 254 },
     });
     await this.#aggregator.add(endpoint);
+    this.#publishedEndpoints.set(info.id, endpoint);
     return new SpeakerHandle(endpoint);
   }
 
@@ -520,10 +667,84 @@ export class MatterNode {
       bridgedDeviceBasicInformation: bridgedBasicInformation(info),
     });
     await this.#aggregator.add(endpoint);
+    this.#publishedEndpoints.set(info.id, endpoint);
     if (onCommand !== undefined) {
       plugCommandObservers.set(info.id, onCommand);
     }
     return new PlugHandle(endpoint);
+  }
+
+  /**
+   * Persists the actual endpoint/device-type/cluster composition and increments
+   * BasicInformation.ConfigurationVersion once when it changed since the prior
+   * run. An uncommissioned first run establishes a baseline; a commissioned
+   * node without our fingerprint is an upgrade and increments once.
+   */
+  async synchronizeEndpointConfiguration(): Promise<{
+    changed: boolean;
+    configurationVersion: number;
+  }> {
+    const endpoints = [
+      { id: "$root", endpoint: this.#server },
+      { id: "$aggregator", endpoint: this.#aggregator },
+      ...[...this.#publishedEndpoints.entries()].map(([id, endpoint]) => ({ id, endpoint })),
+    ]
+      .map(({ id, endpoint }) => ({
+        id,
+        deviceTypes: deviceTypeFingerprint(endpoint),
+        serverClusters: serverClusterIds(endpoint),
+      }))
+      .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+    const fingerprint = JSON.stringify({ version: 2, endpoints });
+    const storage = this.#server.env.get(StorageManager).createContext("matterhelm");
+    const previous = (await storage.has("endpoint-composition"))
+      ? await storage.get<string>("endpoint-composition")
+      : undefined;
+    if (previous === undefined) {
+      if (this.isCommissioned) {
+        await this.#server.act(async (agent) => {
+          await agent.get(BasicInformationServer).increaseConfigurationVersion();
+        });
+        await storage.set("endpoint-composition", fingerprint);
+        return { changed: true, configurationVersion: this.configurationVersion };
+      }
+      await storage.set("endpoint-composition", fingerprint);
+      return { changed: false, configurationVersion: this.configurationVersion };
+    }
+    if (previous === fingerprint) {
+      return { changed: false, configurationVersion: this.configurationVersion };
+    }
+
+    await this.#server.act(async (agent) => {
+      await agent.get(BasicInformationServer).increaseConfigurationVersion();
+    });
+    await storage.set("endpoint-composition", fingerprint);
+    return { changed: true, configurationVersion: this.configurationVersion };
+  }
+
+  /** Root BasicInformation.ConfigurationVersion as plain data. */
+  get configurationVersion(): number {
+    return this.#server.state.basicInformation.configurationVersion;
+  }
+
+  /** Effective matter.js endpoint-validation mode selected before node creation. */
+  get endpointValidationMode(): EndpointValidationMode {
+    return this.#endpointValidationMode;
+  }
+
+  /** Aggregator Descriptor server clusters as plain numeric ids. */
+  get aggregatorServerClusters(): readonly number[] {
+    return serverClusterIds(this.#aggregator);
+  }
+
+  /** Root-only clusters added by the 0.18 ServerNode composition, as plain ids. */
+  get rootServerClusters(): readonly number[] {
+    return serverClusterIds(this.#server);
+  }
+
+  /** Whether the 0.18 root AccessControl composition exposes AuxiliaryAcl. */
+  get hasRootAuxiliaryAcl(): boolean {
+    return this.#server.state.accessControl.auxiliaryAcl !== undefined;
   }
 
   /** Brings the node online (network + mDNS announcement). Call once. */

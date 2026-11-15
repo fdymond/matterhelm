@@ -3,6 +3,7 @@ import type { NetworkInterfaceInfo } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertWindowsMdnsScopeIdWorkaroundCompatibility,
   installWindowsMdnsScopeIdWorkaround,
   resolveFriendlyNetworkInterfaceName,
   type NetworkInterfaceTable,
@@ -77,6 +78,21 @@ describe("installWindowsMdnsScopeIdWorkaround", () => {
       }
     };
   }
+
+  it("pins every wrapped symbol to the real matter.js 0.18 NodeJsNetwork shape", () => {
+    expect(() => {
+      assertWindowsMdnsScopeIdWorkaroundCompatibility();
+    }).not.toThrow();
+  });
+
+  it("fails loudly when any wrapped NodeJsNetwork symbol disappears", () => {
+    expect(() => {
+      assertWindowsMdnsScopeIdWorkaroundCompatibility({ prototype: {} });
+    }).toThrow(
+      "ADR-010 workaround incompatible: NodeJsNetwork no longer exposes " +
+        "prototype.getIpMac, getNetInterfaceZoneIpv6, getMulticastInterfaceIpv4",
+    );
+  });
 
   it("resolves numeric identifiers before delegating instance and static lookups", () => {
     const FakeNetwork = makeNetworkClass();
