@@ -157,13 +157,37 @@ public sealed class LogResourceTests : IDisposable
         Assert.Contains("suppressed 5 repeats of: shutdown repeat", content, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void UnknownInjectedLogLevelDefaultsToWarn()
+    [Theory]
+    [InlineData("DEBUG", "DEBUG")]
+    [InlineData("INFO", "INFO")]
+    [InlineData("WARN", "WARN")]
+    [InlineData("ERROR", "ERROR")]
+    [InlineData("unexpected", "WARN")]
+    public void InjectedLogLevelMapsToExpectedFileLevel(string level, string expectedLabel)
     {
-        Log.Write("unexpected", "unknown level marker");
+        Log.Write(level, $"{level} level marker");
 
         string content = string.Join('\n', Directory.EnumerateFiles(_directory, "app-*.log").SelectMany(File.ReadAllLines));
-        Assert.Contains("[WARN] unknown level marker", content, StringComparison.Ordinal);
+        Assert.Contains($"[{expectedLabel}] {level} level marker", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RepeatedInjectedInfoLinesAreNotSuppressed()
+    {
+        for (int i = 0; i < 25; i++)
+        {
+            Log.Write("INFO", "repeated info marker");
+        }
+
+        Log.Flush();
+
+        string[] lines =
+        [
+            .. Directory.EnumerateFiles(_directory, "app-*.log")
+                .SelectMany(File.ReadAllLines),
+        ];
+        Assert.Equal(25, lines.Count(line => line.EndsWith("[INFO] repeated info marker", StringComparison.Ordinal)));
+        Assert.DoesNotContain(lines, line => line.Contains("suppressed", StringComparison.Ordinal));
     }
 
     [Fact]
