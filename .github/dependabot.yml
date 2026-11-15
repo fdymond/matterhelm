@@ -21,7 +21,7 @@ updates:
       - dependency-name: typescript
         versions:
           - ">= 7"
-      # Keep Node typings aligned with the Node major pinned in .node-version.
+      # Keep Node typings on Node 26, aligned with the runtime pinned in .node-version.
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
@@ -37,7 +37,6 @@ updates:
           - "prettier"
           - "esbuild"
           - "tsx"
-          - "postject"
       runtime:
         update-types: ["minor", "patch"]
         patterns:

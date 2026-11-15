@@ -1,7 +1,7 @@
 /**
  * WebSocket client to the tray application (docs/BLUEPRINT.md §2.3).
  *
- * Uses `ws` because Node 22's built-in Undici WebSocket forbids callers from
+ * Uses `ws` because Node's built-in Undici WebSocket forbids callers from
  * sending RFC policy close code 1008. Boundary behaviour per
  * docs/ENGINEERING-STANDARDS.md: the tray app being down is a boundary failure,
  * so outbound frames are dropped with

@@ -48,7 +48,7 @@ belongs in the release notes and [`e2e-log.md`](e2e-log.md).
 
 ## Ongoing maintenance
 
-- [ ] Before each release, check the official Node 22 and .NET 10 feeds for
+- [ ] Before each release, check the official Node 26 and .NET 10 feeds for
   security releases and bump `.node-version` / `global.json` as needed.
   Dependabot covers `global.json` but cannot update `.node-version`.
 - [ ] Review dependency, code-scanning, secret-scanning, and Scorecard alerts

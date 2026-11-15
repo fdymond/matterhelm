@@ -8,8 +8,9 @@ every contribution.
 
 ## Prerequisites
 
-- The exact Node.js version in [`.node-version`](.node-version) — `build.ps1`
-  refuses any other; nvm/fnm/Volta users can read the file.
+- Node.js 26 is required. Use the exact patch version in
+  [`.node-version`](.node-version) — `build.ps1` refuses any other;
+  nvm/fnm/Volta users can read the file.
 - The .NET SDK selected by [`global.json`](global.json), including its allowed
   patch roll-forward.
 - Inno Setup 7.1.1, only when building the installer locally.
@@ -70,13 +71,17 @@ dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
 Both builds are **warnings-as-errors** / **zero-warnings**. A warning is a
 decision postponed, and postponed decisions don't merge.
 
-Packaging requires the exact Node.js version from `.node-version` on `PATH`.
+Packaging requires Node 26 and the exact patch version from `.node-version` on
+`PATH`. `build.ps1` treats a built-in `node --build-sea` failure as a build
+failure unless `-AllowNodeLayoutFallback` is supplied.
 
-`build.ps1` treats a `postject` failure as a build failure unless
-`-AllowNodeLayoutFallback` is supplied. On Windows PowerShell 5.1, do not wrap
-the script or its `postject` invocation in `2>&1`: native stderr can become a
-terminating `ErrorRecord`; the script scopes this hazard internally and judges
-`postject` by its process exit code.
+npm 11's install-script policy explicitly denies the `esbuild` and
+`unrs-resolver` install scripts in `bridge/package.json`. Both packages deliver
+their platform binaries as lockfile-pinned optional dependencies, so their
+postinstall checks are unnecessary here; `npm run bundle` and `npm run verify`
+fail loudly if the required binary is absent. This avoids dependency code
+execution during install while retaining npm's normal optional-dependency
+selection for Windows and Linux.
 
 ### What CI runs
 

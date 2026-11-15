@@ -24,7 +24,7 @@ This repo ships a complete, self-sufficient product with two processes:
    (`%APPDATA%\HtpcMatterBridge\config.json`, now `%APPDATA%\MatterHelm`
    since the S7-2 rename), the pairing-QR UX, and a click-through **overlay
    HUD** that flashes each incoming Google Home command and the action taken.
-2. **`bridge/` — Node 22 + matter.js sidecar** (unchanged role): the Matter
+2. **`bridge/` — Node 26 + matter.js sidecar** (unchanged role): the Matter
    Aggregator with Speaker + retained/resettable switch endpoints, talking to the tray
    app over the localhost WS protocol (protocol unchanged — the supervisor is
    now this repo's own app).

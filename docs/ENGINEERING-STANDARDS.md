@@ -23,7 +23,7 @@ serves one of those four words; anything that doesn't is ceremony and gets cut.
 
 ## TypeScript (sidecar)
 
-- Node 22 LTS, ES modules, `tsconfig` strict family all on
+- Node 26 LTS, ES modules, `tsconfig` strict family all on
   (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
   `noFallthroughCasesInSwitch`). **`any` is banned** (`unknown` + narrowing);
   `as` casts need a comment justifying them.

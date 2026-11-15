@@ -7,7 +7,7 @@
 // deliberate v1 frame to prove the version bump closes the socket. Logs
 // pino-shaped JSON lines to stdout (the supervisor maps them into the app
 // log) and exits cleanly on stdin EOF — the supervisor's shutdown tether.
-// Node 22: global WebSocket + crypto.randomUUID.
+// The pinned Node runtime provides global WebSocket + crypto.randomUUID.
 'use strict';
 
 const port = process.env.HTPC_BRIDGE_IPC_PORT;
