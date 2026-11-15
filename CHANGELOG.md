@@ -31,8 +31,9 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   a stored fingerprint increment once, while uncommissioned first runs retain
   the version-1 baseline; synchronization failures warn without blocking
   startup.
-- Invalid inherited `MATTER_ENDPOINT_VALIDATION` values now warn and fall back
-  to `warn` instead of preventing sidecar startup.
+- Invalid inherited `MATTER_ENDPOINT_VALIDATION` values now warn and replace
+  matter.js's import-time environment snapshot with `warn`, instead of
+  preventing sidecar startup; supported values remain exact lowercase.
 - The installer is compiled with Inno Setup 7.1.1 (checksum-pinned in CI and
   release) and is now a 64-bit installer.
 - Updated the test toolchain to Vitest 5.1 and the lint toolchain within the

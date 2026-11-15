@@ -9,11 +9,11 @@
  * matter.js API churn stays contained in this file. The wrapper classes are
  * matter/-internal: nothing outside `src/matter/` may import this module.
  *
- * Process-global caveat: matter.js reads `storage.path` and `runtime.signals`
- * from `Environment.default`, which is shared by the whole process. This
- * adapter therefore supports ONE active {@link MatterNode} per process —
- * {@link MatterNode.create} throws if a previously created node has not been
- * closed. That matches the product shape (one sidecar = one bridge node) and
+ * Process-global caveat: matter.js reads `storage.path`, `runtime.signals`,
+ * and `endpoint.validation` from `Environment.default`, which is shared by
+ * the whole process. This adapter therefore supports ONE active
+ * {@link MatterNode} per process — {@link MatterNode.create} throws if a
+ * previously created node has not been closed. That matches the product shape (one sidecar = one bridge node) and
  * keeps the global mutation in a single, documented place. The matter.js
  * `Logger` statics mutated by {@link MatterNode.create} (ADR-006 §1:
  * destination replacement + levels) are process-global in the same way and,
@@ -385,7 +385,6 @@ function configureEndpointValidation(
     },
     "invalid MATTER_ENDPOINT_VALIDATION; forcing warn mode",
   );
-  process.env.MATTER_ENDPOINT_VALIDATION = "warn";
   return "warn";
 }
 
@@ -557,16 +556,18 @@ export class MatterNode {
 
   /**
    * Creates the ServerNode and its Aggregator endpoint. Sets the
-   * process-global `storage.path` / `runtime.signals` environment variables
-   * BEFORE `ServerNode.create` (spike-confirmed requirement, BLUEPRINT §2.1):
-   * storage keeps fabric credentials in `options.storageDir`, and disabling
-   * runtime signals leaves SIGINT ownership with the composition root.
+   * process-global `storage.path`, `runtime.signals`, and
+   * `endpoint.validation` environment variables BEFORE `ServerNode.create`
+   * (spike-confirmed requirement, BLUEPRINT §2.1): storage keeps fabric
+   * credentials in `options.storageDir`, disabling runtime signals leaves
+   * SIGINT ownership with the composition root, and the validation write
+   * overrides matter.js's import-time process-environment snapshot.
    */
   static async create(options: MatterNodeOptions): Promise<MatterNode> {
     if (environmentClaimed) {
       throw new Error(
         "MatterNode.create: a MatterNode is already active in this process — " +
-          "Environment.default (storage.path, runtime.signals) is process-global, " +
+          "Environment.default (storage.path, runtime.signals, endpoint.validation) is process-global, " +
           "so only one node per process is supported; close() the existing node first",
       );
     }
@@ -584,6 +585,7 @@ export class MatterNode {
     }
     Environment.default.vars.set("storage.path", options.storageDir);
     Environment.default.vars.set("runtime.signals", false);
+    Environment.default.vars.set("endpoint.validation", endpointValidationMode);
     if (options.mdnsInterface !== undefined) {
       Environment.default.vars.set("mdns.networkInterface", options.mdnsInterface);
     }

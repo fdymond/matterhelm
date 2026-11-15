@@ -221,11 +221,14 @@ implement the same names):
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
 | `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed, above 8192 characters, or more than 64 facilities = fatal | unset |
 | `HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND` | diagnostic-only ADR-010 comparison toggle; `1` disables the Windows mDNS scope-id workaround, `0` enables it; other values are fatal | `0` |
-| `MATTER_ENDPOINT_VALIDATION` | inherited matter.js endpoint validation mode (`off`, `warn`, or `strict`); an invalid inherited value is warned and forced to `warn` so node creation remains available | `warn` |
+| `MATTER_ENDPOINT_VALIDATION` | inherited matter.js endpoint validation mode (exact lowercase `off`, `warn`, or `strict`); an empty or other invalid inherited value is warned and the effective matter.js mode is forced to `warn` so node creation remains available | `warn` |
 
 The supervisor inherits the parent process environment, so the two matter-log
 variables and `MATTER_ENDPOINT_VALIDATION` can also be set machine/user-wide
-for troubleshooting without any app changes.
+for troubleshooting without any app changes. The sidecar writes the validated
+endpoint mode into matter.js's process-global variable snapshot before node
+creation; invalid values cannot survive the library's import-time environment
+capture and crash-loop the sidecar.
 
 The tray's `config.json` is bounded to 1 MiB, 64 custom commands, 64 characters
 per endpoint/bridge name, 2048 characters of launch arguments, and 128

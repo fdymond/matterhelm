@@ -14,6 +14,7 @@ const seam = vi.hoisted(
         serverList: number[];
       };
     }[];
+    environmentVariables: Map<string, unknown>;
     increaseConfigurationVersionCalls: number;
     invokePlugOn: () => Promise<void>;
     logDestination: unknown;
@@ -28,6 +29,7 @@ const seam = vi.hoisted(
     commissioned: false,
     configurationVersion: 1,
     endpointStates: [],
+    environmentVariables: new Map<string, unknown>(),
     increaseConfigurationVersionCalls: 0,
     invokePlugOn: (): Promise<void> => Promise.resolve(),
     logDestination: undefined,
@@ -71,7 +73,13 @@ vi.mock("@matter/main", () => {
   }
   return {
     Endpoint: FakeEndpoint,
-    Environment: { default: { vars: { set: () => undefined } } },
+    Environment: {
+      default: {
+        vars: {
+          set: (key: string, value: unknown) => seam.environmentVariables.set(key, value),
+        },
+      },
+    },
     LogDestination: (value: unknown) => {
       seam.logDestination = value;
       return value;
@@ -232,6 +240,7 @@ describe("MatterNode construction cleanup", () => {
     seam.commissioned = false;
     seam.configurationVersion = 1;
     seam.endpointStates.length = 0;
+    seam.environmentVariables.clear();
     seam.increaseConfigurationVersionCalls = 0;
     seam.logDestination = undefined;
     delete seam.loggerDestinations.pino;
@@ -317,7 +326,8 @@ describe("MatterNode construction cleanup", () => {
       const node = await MatterNode.create({ ...options, logger });
 
       expect(node.endpointValidationMode).toBe("warn");
-      expect(process.env.MATTER_ENDPOINT_VALIDATION).toBe("warn");
+      expect(process.env.MATTER_ENDPOINT_VALIDATION).toBe(inheritedValue);
+      expect(seam.environmentVariables.get("endpoint.validation")).toBe("warn");
       expect(logger.warn).toHaveBeenCalledWith(
         {
           evt: "matter.endpoint-validation.invalid",
