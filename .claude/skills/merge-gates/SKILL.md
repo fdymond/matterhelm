@@ -6,6 +6,10 @@ when_to_use: Use after a code, configuration, packaging, or protocol change and 
 
 # Run MatterHelm merge gates
 
+Everything here runs headless: no window, tray icon, console window, browser, or Explorer may
+appear on the maintainer's desktop. Never pass `--visible` or set `MATTERHELM_VISIBLE_UI=1`
+unless a human asks to watch.
+
 Run from the repository root. Stop on a failing check, preserve its verbatim output, fix the
 cause if it is in scope, and restart the affected sequence.
 
@@ -35,7 +39,8 @@ repo files or reports as a requirement.
 
 ## 3. Acceptance demos
 
-Run the Release executable with every flag relevant to the change:
+Run the Release executable with every flag relevant to the change (headless by default; a
+check reported as `SKIPPED-HEADLESS` needs a human-observed `--visible` run before release):
 
 - UI/HUD: `--demo-overlay`
 - sidecar lifecycle or authentication: `--demo-sidecar-chaos`

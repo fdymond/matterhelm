@@ -39,6 +39,26 @@ internal static partial class WiredDemo
     private const string WiredDemoResultsFileName = "wired-demo-results.txt";
     private const int AttachParentProcess = -1;
 
+    /// <summary>Writes the wired-demo marker from the no-window child process.</summary>
+    internal static int WriteMarkerChild(string[] args)
+    {
+        int markerIndex = Array.IndexOf(args, "--wired-demo-marker");
+        if (markerIndex < 0 || markerIndex + 1 >= args.Length)
+        {
+            return 1;
+        }
+
+        try
+        {
+            File.WriteAllText(args[markerIndex + 1], WiredDemoMarkerContent);
+            return 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return 1;
+        }
+    }
+
     /// <summary>Runs the full demo. Returns 0 iff every check passed.</summary>
     internal static int Run()
     {
@@ -87,12 +107,15 @@ internal static partial class WiredDemo
         Emit($"S2-5/S4-2 wired demo (protocol v5) — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 
         string? node = DemoSupport.ResolveNodeExe();
+        string? demoExe = Environment.ProcessPath;
         string stubPath = Path.Combine(AppContext.BaseDirectory, "DemoAssets", "StubSidecar.js");
-        if (node is null || !File.Exists(stubPath))
+        if (node is null || demoExe is null || !File.Exists(stubPath))
         {
             Emit(node is null
                 ? "FAIL  node.exe not found (set HTPC_DEMO_NODE or add node to PATH)"
-                : $"FAIL  stub sidecar missing at {stubPath}");
+                : demoExe is null
+                    ? "FAIL  current MatterHelm executable path is unavailable"
+                    : $"FAIL  stub sidecar missing at {stubPath}");
             WriteWiredResults(lines, allPassed: false);
             return 1;
         }
@@ -129,14 +152,14 @@ internal static partial class WiredDemo
                 Name = WiredDemoCustomName,
                 Action = new LaunchActionConfig
                 {
-                    Path = node,
-                    Args = $"-e \"require('fs').writeFileSync(process.argv[1], '{WiredDemoMarkerContent}')\" \"{markerPath}\"",
+                    Path = demoExe,
+                    Args = $"--wired-demo-marker \"{markerPath}\"",
                 },
             },
         ];
         Emit($"ipc port: {config.Current.IpcPort} (ephemeral); temp root: {tempRoot}");
 
-        using var executor = new ActionExecutorAdapter();
+        using var executor = new WiredDemoExecutor();
         VolumeState original;
         try
         {
@@ -404,6 +427,39 @@ internal static partial class WiredDemo
 
         WriteWiredResults(lines, allPassed);
         return allPassed ? 0 : 1;
+    }
+
+    private sealed class WiredDemoExecutor : IActionExecutor
+    {
+        private readonly ActionExecutorAdapter _inner = new();
+
+        public event EventHandler<VolumeState>? VolumeChanged
+        {
+            add => _inner.VolumeChanged += value;
+            remove => _inner.VolumeChanged -= value;
+        }
+
+        public bool Execute(string name, object? value = null) =>
+            name == "playPause" ? false : _inner.Execute(name, value);
+
+        public ActionExecutionResult ExecuteDetailed(string name, object? value = null) =>
+            name == "playPause"
+                ? ActionExecutionResult.Failure(
+                    "headless wired demo intentionally does not target the input desktop's media app")
+                : _inner.ExecuteDetailed(name, value);
+
+        public DisplayPowerOffResult ExecuteDisplaysOff() => _inner.ExecuteDisplaysOff();
+
+        public bool ReleaseDisplayKeepAwake() => _inner.ReleaseDisplayKeepAwake();
+
+        public void ReconcileMouseMoves(IReadOnlySet<string> activeCommandKeys) =>
+            _inner.ReconcileMouseMoves(activeCommandKeys);
+
+        public void ClearScreensaverFocusCapture() => _inner.ClearScreensaverFocusCapture();
+
+        public VolumeState GetVolumeState() => _inner.GetVolumeState();
+
+        public void Dispose() => _inner.Dispose();
     }
 
     /// <summary>Pumps the STA message loop (the overlay HUD lives on this thread) until <paramref name="condition"/> or timeout; true iff the condition was met.</summary>

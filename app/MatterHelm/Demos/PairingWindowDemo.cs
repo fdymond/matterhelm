@@ -51,7 +51,7 @@ internal static class PairingWindowDemo
         // code panel — that empty-QR state was the original complaint.
         DemoSupport.Pump(StagePumpMilliseconds);
         bool startsOnStarting = window.StatusText.Contains("Advertisement starting", StringComparison.Ordinal);
-        Capture(window, "pairing-window-demo-starting.png");
+        bool startingScreenshotRendered = Capture(window, "pairing-window-demo-starting.png");
 
         // Delivering a code must move the window to "ready to scan" by itself.
         Screen startingScreen = Screen.FromRectangle(window.Bounds);
@@ -87,7 +87,8 @@ internal static class PairingWindowDemo
         Rectangle qrBounds = window.QrImageBounds;
         qrBounds.Offset(clientOrigin.X - window.Left, clientOrigin.Y - window.Top);
         using Bitmap qrBitmap = windowBitmap.Clone(qrBounds, windowBitmap.PixelFormat);
-        bool hasVariance = HasPixelVariance(qrBitmap, MinDistinctSampledColors);
+        bool hasVariance = DemoSupport.HasRenderedContent(qrBitmap, MinDistinctSampledColors);
+        bool readyScreenshotRendered = DemoSupport.HasRenderedContent(windowBitmap);
 
         window.SetRequirementsExpanded(true);
         DemoSupport.Pump(StagePumpMilliseconds);
@@ -95,7 +96,7 @@ internal static class PairingWindowDemo
             && window.DeveloperConsoleHintText.Contains("Reboot the Nest hub", StringComparison.Ordinal)
             && window.InstallIdentityHintText.Contains("cloned machine", StringComparison.Ordinal)
             && window.Ipv6RequirementText == "IPv6 must be enabled on any network interface used by MatterHelm.";
-        Capture(window, "pairing-window-demo-requirements.png");
+        bool requirementsScreenshotRendered = Capture(window, "pairing-window-demo-requirements.png");
         window.SetRequirementsExpanded(false);
 
         // Already-commissioned: matter.js cannot mint a second code, so the
@@ -104,13 +105,18 @@ internal static class PairingWindowDemo
         DemoSupport.Pump(StagePumpMilliseconds);
         bool pairedHidesCode = !window.QrVisible
             && window.StatusText.Contains("Paired", StringComparison.Ordinal);
-        Capture(window, "pairing-window-demo-paired.png");
+        bool pairedScreenshotRendered = Capture(window, "pairing-window-demo-paired.png");
 
         window.SetStage(Ui.PairingStage.DiscoveryError);
         DemoSupport.Pump(StagePumpMilliseconds);
         bool errorHidesCode = !window.QrVisible
             && window.StatusText.Contains("Advertisement unavailable", StringComparison.Ordinal);
-        Capture(window, "pairing-window-demo-discovery-error.png");
+        bool errorScreenshotRendered = Capture(window, "pairing-window-demo-discovery-error.png");
+        bool allScreenshotsRendered = startingScreenshotRendered
+            && readyScreenshotRendered
+            && requirementsScreenshotRendered
+            && pairedScreenshotRendered
+            && errorScreenshotRendered;
 
         Console.WriteLine($"[{Verdict(startsOnStarting)}] Opens on the \"starting\" stage, no blank QR.");
         Console.WriteLine($"[{Verdict(codeShowsWaiting)}] A delivered code moves the window to \"ready to scan\".");
@@ -121,6 +127,7 @@ internal static class PairingWindowDemo
         Console.WriteLine($"[{Verdict(hasVariance)}] QR image rendered with non-trivial pixel variance.");
         Console.WriteLine($"[{Verdict(pairedHidesCode)}] The \"paired\" stage hides the code and explains why.");
         Console.WriteLine($"[{Verdict(errorHidesCode)}] Advertisement failure hides the code and reports the error.");
+        Console.WriteLine($"[{Verdict(allScreenshotsRendered)}] All five DrawToBitmap screenshots contain non-blank UI content.");
         Console.WriteLine($"(screenshot: {outputPath})");
 
         bool overall = startsOnStarting
@@ -131,7 +138,8 @@ internal static class PairingWindowDemo
             && stageChangeCentered
             && hasVariance
             && pairedHidesCode
-            && errorHidesCode;
+            && errorHidesCode
+            && allScreenshotsRendered;
         Console.WriteLine($"OVERALL: {Verdict(overall)}");
         window.Close();
         return overall ? 0 : 1;
@@ -140,27 +148,11 @@ internal static class PairingWindowDemo
     private static string Verdict(bool pass) => pass ? "PASS" : "FAIL";
 
     /// <summary>Screenshots the whole window (frame included) beside the exe; see the class remarks on why this is <c>DrawToBitmap</c>.</summary>
-    private static void Capture(Form window, string fileName)
+    private static bool Capture(Form window, string fileName)
     {
         using var bitmap = new Bitmap(window.Width, window.Height);
         window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, window.Size));
         bitmap.Save(Path.Combine(AppContext.BaseDirectory, fileName), ImageFormat.Png);
-    }
-
-    /// <summary>True iff a sampled grid of pixels contains at least <paramref name="minDistinctColors"/> distinct ARGB values — evidence of an actually-rendered QR rather than a blank/uniform box.</summary>
-    private static bool HasPixelVariance(Bitmap bitmap, int minDistinctColors)
-    {
-        HashSet<int> distinctColors = [];
-        int stepX = Math.Max(1, bitmap.Width / 100);
-        int stepY = Math.Max(1, bitmap.Height / 100);
-        for (int y = 0; y < bitmap.Height; y += stepY)
-        {
-            for (int x = 0; x < bitmap.Width; x += stepX)
-            {
-                distinctColors.Add(bitmap.GetPixel(x, y).ToArgb());
-            }
-        }
-
-        return distinctColors.Count >= minDistinctColors;
+        return DemoSupport.HasRenderedContent(bitmap);
     }
 }

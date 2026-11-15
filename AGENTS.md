@@ -25,6 +25,11 @@ HTPC to Google Home and execute commands locally, without another product or ser
 - Record a blueprint deviation in an ADR rather than silently changing the architecture.
 - Produce zero warnings, follow the surrounding style, and delete obsolete code rather
   than commenting it out so the maintained path stays unambiguous.
+- Run all testing and development headless: nothing may appear on the maintainer's
+  interactive desktop (no window, tray icon, console window, browser, or Explorer). WinForms
+  tests run only through the `StaTest` harness and demos run headless by default; do not
+  launch the interactive tray app or pass the visible-UI opt-ins (`--visible`,
+  `MATTERHELM_VISIBLE_UI=1`) unless a human asks to watch.
 - Hardware-in-the-loop work requires a human for phone, Google Home, and physical-device
   steps; report it as unverified until performed and never invent evidence.
 

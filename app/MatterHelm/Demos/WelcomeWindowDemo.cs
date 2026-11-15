@@ -38,10 +38,12 @@ internal static class WelcomeWindowDemo
         DemoSupport.Pump(DemoDisplayMilliseconds);
 
         string outputPath = Path.Combine(AppContext.BaseDirectory, "welcome-window-demo.png");
+        bool screenshotRendered;
         using (var bitmap = new Bitmap(window.Width, window.Height))
         {
             window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, window.Size));
             bitmap.Save(outputPath, ImageFormat.Png);
+            screenshotRendered = DemoSupport.HasRenderedContent(bitmap);
         }
 
         int heightBudget = window.LogicalToDeviceUnits(MinSupportedWorkingHeightLogical);
@@ -52,8 +54,9 @@ internal static class WelcomeWindowDemo
 
         Console.WriteLine($"[{(fits ? "PASS" : "FAIL")}] Fits a 768-px screen ({window.Height} px tall at this DPI, budget {heightBudget}).");
         Console.WriteLine($"[{(startRequested ? "PASS" : "FAIL")}] The primary button raises StartPairingRequested.");
+        Console.WriteLine($"[{(screenshotRendered ? "PASS" : "FAIL")}] DrawToBitmap captured non-blank welcome content.");
         Console.WriteLine($"(screenshot: {outputPath})");
 
-        return fits && startRequested ? 0 : 1;
+        return fits && startRequested && screenshotRendered ? 0 : 1;
     }
 }
