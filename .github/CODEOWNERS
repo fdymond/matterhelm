@@ -5,3 +5,11 @@
 # is a review blocker; ownership kept explicit so the pairing is visible.
 /bridge/src/ipc/protocol.ts @fdymond
 /app/MatterHelm/Sidecar/Protocol.cs @fdymond
+
+# Agent configuration executes instructions and hooks, so changes require review.
+/AGENTS.md @fdymond
+/CLAUDE.md @fdymond
+/.claude/ @fdymond
+/.mcp.json @fdymond
+/.gitignore @fdymond
+/docs/BLUEPRINT.md @fdymond

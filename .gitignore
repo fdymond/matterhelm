@@ -1,7 +1,14 @@
 node_modules/
 dist/
-# Claude Code session state / agent worktrees — local only
-.claude/
+# Claude Code project configuration is reviewed; session state stays local.
+.claude/*
+!.claude/settings.json
+!.claude/rules/
+!.claude/skills/
+!.claude/agents/
+!.claude/hooks/
+CLAUDE.local.md
+.claude/settings.local.json
 coverage/
 *.log
 # Matter fabric credentials / commissioning state — NEVER commit
