@@ -106,7 +106,11 @@ jobs:
             $h = Get-FileHash $f -Algorithm SHA256
             "{0}  {1}" -f $h.Hash.ToLowerInvariant(), (Split-Path $f -Leaf)
           }
-          Set-Content SHA256SUMS.txt $lines -Encoding ascii
+          $manifest = ($lines -join "`n") + "`n"
+          [IO.File]::WriteAllText(
+            (Join-Path $PWD "SHA256SUMS.txt"),
+            $manifest,
+            [Text.Encoding]::ASCII)
           Get-Content SHA256SUMS.txt
 
       - name: Attest release build provenance

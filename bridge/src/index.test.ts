@@ -208,9 +208,7 @@ describe("composition-root commissioning transitions", () => {
 
   it("observes a shared coalesced speaker-state promise only once", async () => {
     seam.loggerErrors.length = 0;
-    let rejectShared = (reason: unknown): void => {
-      void reason;
-    };
+    let rejectShared: (reason: unknown) => void = () => undefined;
     seam.sharedSpeakerStatePromises.push(
       new Promise<void>((_resolve, reject) => {
         rejectShared = reject;
