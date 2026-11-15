@@ -98,8 +98,8 @@ Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
   commissioned and exercised on real Google Nest hardware.
 - The app is C#/.NET 10 WinForms targeting
   `net10.0-windows10.0.17763.0` (Windows 10 version 1809+ x64). The bridge
-  requires Node 22.13+ and pins `@matter/main` 0.17.7; ADR-010's Windows mDNS
-  workaround must be re-verified on every matter.js upgrade.
+  requires Node 22.13+ and pins `@matter/main` 0.18.0 (Matter 1.6.1); ADR-010's
+  Windows mDNS workaround must be re-verified on every matter.js upgrade.
 - IPC message revision 5 is mirrored between the bridge and app. Current test
   results and coverage are published by CI; CI enforces a 45 % app
   line-coverage floor, while bridge pure-logic files retain 90 % per-file

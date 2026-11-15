@@ -10,6 +10,29 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 ## [Unreleased]
 
+### Added
+
+- Added the diagnostic-only
+  `HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND=1` toggle for the Windows mDNS
+  scope-id empirical matrix.
+
+### Changed
+
+- Updated to matter.js 0.18 (Matter 1.6.1) with conformance validation.
+- The bridge increments `ConfigurationVersion` when its published device set
+  or endpoint cluster composition changes. Commissioned 0.17 upgrades without
+  a stored fingerprint increment once, while uncommissioned first runs retain
+  the version-1 baseline; synchronization failures warn without blocking
+  startup.
+- Invalid inherited `MATTER_ENDPOINT_VALIDATION` values now warn and fall back
+  to `warn` instead of preventing sidecar startup.
+
+### Fixed
+
+- Endpoint-construction audit events now use the explicit `endpointName`
+  payload field, with regression coverage locking their serialized pino level
+  to numeric info (`30`).
+
 ## [0.8.0] — 2026-11-15
 
 ### Added
