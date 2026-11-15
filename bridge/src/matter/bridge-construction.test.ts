@@ -1,18 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const seam = vi.hoisted(() => ({
-  active: false,
-  closeCalls: 0,
-  createCalls: 0,
-  failNextAdd: true,
-  plugCallbacks: new Map<string, (on: boolean) => void>(),
-  setOnOff: (id: string, on: boolean): Promise<void> => {
-    void id;
-    void on;
-    return Promise.resolve();
-  },
-  setOnOffCalls: new Array<{ id: string; on: boolean }>(),
-}));
+const seam = vi.hoisted(() => {
+  const setOnOff: (id: string, on: boolean) => Promise<void> = () => Promise.resolve();
+  return {
+    active: false,
+    closeCalls: 0,
+    createCalls: 0,
+    failNextAdd: true,
+    plugCallbacks: new Map<string, (on: boolean) => void>(),
+    setOnOff,
+    setOnOffCalls: new Array<{ id: string; on: boolean }>(),
+  };
+});
 
 vi.mock("./adapter.js", () => ({
   MatterNode: {

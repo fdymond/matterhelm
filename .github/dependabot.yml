@@ -27,6 +27,7 @@ updates:
           - "version-update:semver-major"
     groups:
       dev-tooling:
+        update-types: ["minor", "patch"]
         patterns:
           - "@types/*"
           - "eslint*"
@@ -38,6 +39,7 @@ updates:
           - "tsx"
           - "postject"
       runtime:
+        update-types: ["minor", "patch"]
         patterns:
           - "zod"
           - "pino*"
@@ -57,6 +59,7 @@ updates:
       prefix: "chore(deps)"
     groups:
       test-tooling:
+        update-types: ["minor", "patch"]
         patterns:
           - "xunit*"
           - "Microsoft.NET.Test.*"
@@ -72,6 +75,10 @@ updates:
       - dependencies
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      - dependency-name: dotnet-sdk
+        update-types:
+          - "version-update:semver-major"
 
   # CI/release workflow actions (the Node-20 deprecation that forced the
   # v4→v7 bumps would have surfaced here automatically).
@@ -85,5 +92,6 @@ updates:
       prefix: "chore(deps)"
     groups:
       actions:
+        update-types: ["minor", "patch"]
         patterns:
           - "*"
