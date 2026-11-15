@@ -2,7 +2,15 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+const inheritedEndpointValidation = vi.hoisted(() => {
+  const original = process.env.MATTER_ENDPOINT_VALIDATION;
+  // Runs before the real @matter/main import below, matching an inherited
+  // machine/user variable at sidecar startup and matter.js's one-time snapshot.
+  process.env.MATTER_ENDPOINT_VALIDATION = "WARN";
+  return { original };
+});
 
 import { MatterNode } from "./adapter.js";
 import type { BridgedDeviceInfo, MatterNodeOptions } from "./adapter.js";
@@ -23,6 +31,14 @@ const logger = {
 
 const activeNodes = new Set<MatterNode>();
 const temporaryDirectories: string[] = [];
+
+function restoreEndpointValidationEnvironment(): void {
+  if (inheritedEndpointValidation.original === undefined) {
+    delete process.env.MATTER_ENDPOINT_VALIDATION;
+  } else {
+    process.env.MATTER_ENDPOINT_VALIDATION = inheritedEndpointValidation.original;
+  }
+}
 
 async function temporaryStorage(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "matterhelm-018-"));
@@ -72,7 +88,50 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+afterAll(() => {
+  restoreEndpointValidationEnvironment();
+});
+
 describe("matter.js 0.18 adapter integration", { concurrent: false }, () => {
+  it("replaces an invalid import-time endpoint-validation snapshot before node creation", async () => {
+    expect(process.env.MATTER_ENDPOINT_VALIDATION).toBe("WARN");
+    try {
+      const node = await createNode(await temporaryStorage());
+      expect(node.endpointValidationMode).toBe("warn");
+      expect(logger.warn).toHaveBeenCalledWith(
+        {
+          evt: "matter.endpoint-validation.invalid",
+          value: "WARN",
+          fallback: "warn",
+        },
+        "invalid MATTER_ENDPOINT_VALIDATION; forcing warn mode",
+      );
+      await closeNode(node);
+    } finally {
+      restoreEndpointValidationEnvironment();
+    }
+  });
+
+  it("treats an inherited empty endpoint-validation value as invalid and uses warn", async () => {
+    process.env.MATTER_ENDPOINT_VALIDATION = "";
+    try {
+      const node = await createNode(await temporaryStorage());
+      expect(node.endpointValidationMode).toBe("warn");
+      expect(process.env.MATTER_ENDPOINT_VALIDATION).toBe("");
+      expect(logger.warn).toHaveBeenCalledWith(
+        {
+          evt: "matter.endpoint-validation.invalid",
+          value: "",
+          fallback: "warn",
+        },
+        "invalid MATTER_ENDPOINT_VALIDATION; forcing warn mode",
+      );
+      await closeNode(node);
+    } finally {
+      restoreEndpointValidationEnvironment();
+    }
+  });
+
   it("constructs every endpoint under strict validation with exact Speaker limits", async () => {
     expect(process.env.MATTER_ENDPOINT_VALIDATION).toBe("strict");
     const node = await createNode(await temporaryStorage());
