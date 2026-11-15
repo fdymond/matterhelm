@@ -206,6 +206,7 @@ beside it, then start it — a fresh identity is minted.
 | Doc | What's in it |
 |---|---|
 | [User guide](docs/user-guide.md) | The setup above in more depth, plus the full settings tour, custom commands and macros, troubleshooting, and privacy |
+| [Code signing policy](docs/code-signing-policy.md) | Signing scope, release controls, privacy, and verification instructions |
 | [Natural voice phrases](docs/routines.md) | Routine starters and retained/resettable switch guidance |
 | [Architecture blueprint](docs/BLUEPRINT.md) | Binding design & IPC protocol spec |
 | [ADRs](docs/adr/) | Every architectural decision, with context and consequences |
@@ -261,6 +262,8 @@ protocol-parity and ADR rules that govern changes. Questions →
 
 Report suspected vulnerabilities privately per [`SECURITY.md`](SECURITY.md)
 (GitHub Security Advisories), not in a public issue.
+Release integrity, the current unsigned status, and the planned SignPath
+process are documented in the [code signing policy](docs/code-signing-policy.md).
 
 ## License & trademarks
 

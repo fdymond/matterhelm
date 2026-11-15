@@ -77,6 +77,10 @@ MatterHelm's threat model is deliberately narrow (see
 
 ## Release integrity
 
+The [code signing policy](docs/code-signing-policy.md) documents the current
+unsigned status, planned SignPath signing scope, release controls, and user
+verification steps.
+
 Every tagged release publishes `SHA256SUMS.txt` beside the installer and
 portable zip. Compare a downloaded artifact with that manifest before running
 it. From the next release onward, GitHub build-provenance attestations will
