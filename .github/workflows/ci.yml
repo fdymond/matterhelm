@@ -120,13 +120,46 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
+      - name: Install Inno Setup 7.1.1
+        shell: pwsh
+        env:
+          INNO_SETUP_DIR: ${{ runner.temp }}\inno-setup-7.1.1
+        run: |
+          $installerPath = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
+          $expectedHash = '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0'
+          if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Replace the Inno Setup 7.1.1 SHA-256 placeholder with the official 64-hex digest.'
+          }
+          Invoke-WebRequest `
+            -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' `
+            -OutFile $installerPath
+          $actualHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) {
+            throw "Inno Setup 7.1.1 SHA-256 mismatch: expected $expectedHash, got $actualHash."
+          }
+          $install = Start-Process -FilePath $installerPath -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            "/DIR=$env:INNO_SETUP_DIR"
+          ) -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "Inno Setup 7.1.1 installation failed with exit code $($install.ExitCode)."
+          }
+          $compilerPath = Join-Path $env:INNO_SETUP_DIR 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compilerPath -PathType Leaf)) {
+            throw "Inno Setup compiler not found at '$compilerPath'."
+          }
       - name: Build distribution
         # Accepted trade-off: depends on nodejs.org availability and trusts SHASUMS256.txt over HTTPS; the .asc signature is not checked.
         run: ./build.ps1 -SkipTests -VerifyNodeChecksum
       - name: Compile installer and assert package metadata
         shell: pwsh
+        env:
+          INNO_SETUP_DIR: ${{ runner.temp }}\inno-setup-7.1.1
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.0.0 /Q installer\matterhelm.iss
+          & (Join-Path $env:INNO_SETUP_DIR 'ISCC.exe') /DAppVersion=0.0.0 /Q installer\matterhelm.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
           foreach ($path in @('dist/THIRD-PARTY-NOTICES.txt', 'dist/sidecar-layout.json')) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

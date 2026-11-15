@@ -12,6 +12,7 @@ every contribution.
   refuses any other; nvm/fnm/Volta users can read the file.
 - The .NET SDK selected by [`global.json`](global.json), including its allowed
   patch roll-forward.
+- Inno Setup 7.1.1, only when building the installer locally.
 - Windows for `app/` work (WinForms + Win32 P/Invoke); `bridge/` is
   OS-neutral and CI runs it on both `ubuntu-latest` and `windows-latest`.
 

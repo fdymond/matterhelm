@@ -81,15 +81,41 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: Compress-Archive -Path dist/* -DestinationPath "matterhelm-$($env:TAG)-win-x64.zip"
 
-      # S10: Windows installer (Inno Setup 6 is preinstalled on
-      # windows-latest runners). Version = the tag without its leading "v".
+      # S10: Windows installer. Version = the tag without its leading "v".
       - name: Build installer
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}
+          INNO_SETUP_DIR: ${{ runner.temp }}\inno-setup-7.1.1
         run: |
+          $installerPath = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
+          $expectedHash = '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0'
+          if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Replace the Inno Setup 7.1.1 SHA-256 placeholder with the official 64-hex digest.'
+          }
+          Invoke-WebRequest `
+            -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' `
+            -OutFile $installerPath
+          $actualHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) {
+            throw "Inno Setup 7.1.1 SHA-256 mismatch: expected $expectedHash, got $actualHash."
+          }
+          $install = Start-Process -FilePath $installerPath -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            "/DIR=$env:INNO_SETUP_DIR"
+          ) -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "Inno Setup 7.1.1 installation failed with exit code $($install.ExitCode)."
+          }
+          $compilerPath = Join-Path $env:INNO_SETUP_DIR 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compilerPath -PathType Leaf)) {
+            throw "Inno Setup compiler not found at '$compilerPath'."
+          }
           $version = $env:TAG.TrimStart("v")
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DAppVersion=$version installer\matterhelm.iss
+          & $compilerPath /Q /DAppVersion=$version installer\matterhelm.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
           Get-ChildItem dist-installer
 
