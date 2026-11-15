@@ -59,6 +59,9 @@ If the wire contract or BLUEPRINT section 2.3 changed, verify all of these toget
 
 ## 5. Packaging smoke
 
+Packaging requires the exact Node.js version from `.node-version` on `PATH`. It accepts
+`-VerifyNodeChecksum`, which is mandatory in CI.
+
 After the gates pass, run:
 
 ```powershell

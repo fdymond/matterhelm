@@ -45,10 +45,9 @@ here exists to raise code quality, not to perform ceremony.
 
 ## Quality gates (enforced in CI)
 
-v0.7.1 tag: 393 bridge / 826 app; current counts are published by CI. Both C#
-projects target
-`net10.0-windows10.0.17763.0`; app line coverage is about 58 %, with a 45 % CI
-threshold.
+Current test results and coverage are published by CI; CI enforces a 45 % app
+line-coverage floor. Both C# projects target
+`net10.0-windows10.0.17763.0`.
 
 | Gate | Tool | Bar |
 |---|---|---|

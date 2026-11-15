@@ -209,7 +209,7 @@ implement the same names):
 | `HTPC_BRIDGE_VENDOR_ID` | Matter vendor id, decimal or `0x` hex, 1–65535; invalid = fatal (ADR-009) | `0xFFF1` (ADR-002 test VID) |
 | `HTPC_BRIDGE_PRODUCT_ID` | Matter product id, decimal or `0x` hex, 1–65535; invalid = fatal (ADR-009) | `0x8000` (ADR-002 test PID) |
 | `HTPC_BRIDGE_MATTER_LOG_LEVEL` | matter.js global log level (`debug/info/notice/warn/error/fatal`; ADR-006) | derived from log level (info→`notice`) |
-| `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed = fatal | unset |
+| `HTPC_BRIDGE_MATTER_LOG_FACILITIES` | JSON map matter.js facility→level for targeted debug (e.g. `{"MdnsServer":"debug"}`); malformed, above 8192 characters, or more than 64 facilities = fatal | unset |
 
 The supervisor inherits the parent process environment, so the two matter-log
 variables can also be set machine/user-wide for troubleshooting without any

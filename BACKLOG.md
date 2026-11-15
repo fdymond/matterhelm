@@ -151,7 +151,7 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S11-7 ✅ shipped in 0.7.1 | Sequence-editor UI consolidation (maintainer request): mouse move is a choice in the single Add… step-type flow; all step types add/edit through SequenceStepDialog and share the standalone target picker | Dropdown indices and every step-type round-trip pinned; sequence limits and one-shot mouse semantics unchanged; clean gates: app 826/826, bridge 393/393; demos overlay/pairing-window/wired PASS | S | S11-5 | integrator |
 | S11-8 ✅ shipped in 0.7.1 | Field remediation: screensaver dismissal succeeds independently of best-effort focus restore; restore retries across the transient no-foreground gap; targeted media fallback is same-app only; timed-out appcommands retry once; macro failures use diagnostic reasons | 45 focused tests plus clean gates: app 826/826, bridge 393/393; demos overlay/pairing-window/wired PASS | M | S11-6 | integrator |
 | S11-9 ✅ shipped in 0.7.1 | Pairing-window first-show centring follows the final DPI/font-driven preferred size instead of stale pre-layout bounds | First-visible-frame, first-show, late-Shown fallback, and current-screen stage-transition coverage; clean gates: app 826/826, bridge 393/393; demos overlay/pairing-window/wired PASS | S | S11-8 | integrator |
-| S11-10 ✅ shipped in 0.7.1 | Pre-release remediation: bridge-disable macro/focus lifecycle, `MouseTargetPicker.cs` rename, test-honesty coverage, and documentation correction so Win32 error 5 is only a likely UIPI signal | Clean gates: app 826/826, bridge 393/393; app line coverage about 58% (45% threshold); demos overlay/pairing-window/wired PASS | S | S11-7..9 | integrator |
+| S11-10 ✅ shipped in 0.7.1 | Pre-release remediation: bridge-disable macro/focus lifecycle, `MouseTargetPicker.cs` rename, test-honesty coverage, and documentation correction so Win32 error 5 is only a likely UIPI signal | Clean gates: app 826/826, bridge 393/393; app coverage met the 45% CI floor; demos overlay/pairing-window/wired PASS | S | S11-7..9 | integrator |
 
 ## Sprint 12 — public launch
 
@@ -161,6 +161,23 @@ executor profile (see CLAUDE.md for orchestration mechanics).
 | S12-2 ✅ | Documentation truth pass for the public switch | v0.7.1 remains current; protocol v5, private-repository preparation, release evidence, public docs, and local links reconciled | M | S11-10 | integrator |
 | S12-3 ✅ | Read-only whole-repository code-review pass; confirmed fixes follow separately | Review findings were evidence-backed and triaged into RB-1..RB-6, SF-2..SF-10, M-1..M-7, and P-10..P-12 before remediation | M | S12-1..2 | integrator |
 | S12-4 ✅ | Public-switch code review remediation and BridgeHost/MediaKeys decomposition | RB-1..RB-6, SF-2..SF-10, M-1..M-7, and P-10..P-12 remediated; ADR-014 records trust-boundary, bounded-pipeline, reset, packaging, updater, and structure decisions | L | S12-3 | integrator |
+
+## Sprint 13 — modernization
+
+| ID | Story | Acceptance criteria | Size | Deps | Agent |
+|---|---|---|---|---|---|
+| S13-1 ✅ | Apply public-repository governance settings | Dependency graph, Dependabot alerts/security updates, secret scanning/push protection, private vulnerability reporting, Discussions, merge cleanup/policy, auto-merge, strict `main-protection` checks, and PR dependency review verified 2026-11-15 | S | S12-4 | maintainer |
+| S13-2 ✅ | Bring agent tooling in line with current Claude Code guidance | Commit `7ae5888`: canonical `AGENTS.md`; `CLAUDE.md` import; path-scoped rules; merge-gates, release, and matterjs-upgrade skills; reviewer agent; settings and format hook | S | S12-4 | maintainer |
+| S13-3 🔄 | 0.8.0 security & hardening release | zod 4.6.7 (GHSA-mrhx-c7xc-m3w5), pino 10.4.0, ws 8.22.0, Vitest 4.1.12 plus in-range dev audit fixes; log-facility input caps; .NET 10.0.15 runtime via SDK 10.0.404 pin; Node 22.23.5 pin with checksum verification; CodeQL least privilege; draft-first release publishing; QRCoder 1.8.1. Workflow action bumps landed separately via Dependabot #15; release routine owns the changelog entry | M | S13-1 | maintainer |
+| S13-4 📋 | Modernize development tooling within TypeScript 6 | Upgrade within the TypeScript 6 line; TypeScript 7 remains blocked while typescript-eslint's peer range is `< 6.1.0` | M | S13-3 | maintainer |
+| S13-5 📋 | Upgrade to Vitest 5 | Upgrade test tooling with all bridge verification and coverage gates green | M | S13-3 | maintainer |
+| S13-6 📋 | Add property-based tests for both protocol parsers | Exercise TypeScript with fast-check and C# with FsCheck; count the result toward OpenSSF Scorecard Fuzzing | M | S13-4..5 | maintainer |
+| S13-7 📋 | Add direct CoreAudio/SystemVolume tests and an STA UI harness | Cover the controlled CoreAudio boundary directly and provide deterministic STA execution for WinForms UI tests | L | S13-3 | maintainer |
+| S13-8 📋 | Isolate the matter.js 0.18 upgrade | Use the matterjs-upgrade skill and re-run the complete ADR-010 matrix; the upstream bug remained present on 2026-11-15 | L | S13-3 | maintainer |
+| S13-9 📋 | Move the SEA to Node 26 LTS and built-in `node --build-sea` | Replace the pinned Node 22/postject path only after Node 26 is LTS and the built-in SEA builder satisfies packaging gates | L | S13-8 | maintainer |
+| S13-10 📋 | Upgrade to Inno Setup 7.1.x | Rebuild and exercise installer install, update, and uninstall flows with the release harness | M | S13-3 | maintainer |
+| S13-11 📋 | Sign releases through SignPath Foundation | Maintainer completes the application; if accepted, integrate and verify Authenticode signing in the release workflow | L | S13-1 | maintainer |
+| S13-12 🔄 | Review device composition for single-pairing control | Complete the in-progress research and record any architecture change before implementation | M | S13-8 | maintainer |
 
 ## Deferred work
 

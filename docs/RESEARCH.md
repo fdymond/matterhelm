@@ -100,9 +100,10 @@ Deep-dive research (see ADR-002 for sources) corrected two claims in this doc:
   `net10.0-windows10.0.17763.0` (Windows 10 version 1809+ x64). The bridge
   requires Node 22.13+ and pins `@matter/main` 0.17.7; ADR-010's Windows mDNS
   workaround must be re-verified on every matter.js upgrade.
-- IPC message revision 5 is mirrored between the bridge and app. v0.7.1 tag:
-  393 bridge / 826 app; current counts are published by CI. App line coverage
-  is about 58 % against a 45 % CI threshold.
+- IPC message revision 5 is mirrored between the bridge and app. Current test
+  results and coverage are published by CI; CI enforces a 45 % app
+  line-coverage floor, while bridge pure-logic files retain 90 % per-file
+  thresholds.
 - The honest public limits remain the one-time Google test-VID registration,
   unsigned binaries that can trigger SmartScreen, and unverifiable delivery
   to sessionless players such as Kodi.

@@ -33,6 +33,12 @@ HTPC to Google Home and execute commands locally, without another product or ser
 Run the full merge gates and relevant demos through the `merge-gates` skill; see that skill
 and `CONTRIBUTING.md` for the demo harnesses and commands.
 
+## Commands
+
+Use the exact Node.js version in `.node-version` (`build.ps1` refuses any other; nvm/fnm/Volta
+users can read the file) and the .NET SDK selected by `global.json`, including its allowed
+patch roll-forward.
+
 ## Architecture invariants
 
 - Keep `matter/` and `ipc/` independent and compose them through `mapping/` in `index.ts` so transport and Matter behavior remain separable.

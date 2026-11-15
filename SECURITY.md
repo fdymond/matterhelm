@@ -7,13 +7,14 @@ older releases do not receive separate fixes.
 
 | Version | Supported |
 |---|---|
-| v0.7.1 (latest as of 2026-09-10) | Yes |
+| Latest tagged release | Yes |
 | `main` | Yes |
-| v0.7.0 and older | No |
+| All older releases | No |
 
 ## Reporting a vulnerability
 
-Please report suspected security issues **privately** via
+Private vulnerability reporting is enabled. Please report suspected security
+issues via
 [GitHub Security Advisories](https://github.com/fdymond/matterhelm/security/advisories/new)
 for this repository ("Report a vulnerability" under the Security tab) rather
 than opening a public issue. Private advisories keep the report and any fix

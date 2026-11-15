@@ -223,9 +223,10 @@ dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release  # all disco
 .\build.ps1        # dist/: portable folder, SEA sidecar
 ```
 
-Dev requirements: Node 22.13+ LTS, .NET 10 SDK, Windows. CI runs the same gates
-on every push (bridge verify on Ubuntu and Windows, bridge coverage on Ubuntu,
-and app build + tests + coverage on Windows).
+Dev requirements: use the exact Node.js version in [`.node-version`](.node-version)
+(`build.ps1` refuses any other; nvm/fnm/Volta users can read the file), the .NET
+SDK selected by [`global.json`](global.json) with its allowed patch roll-forward,
+and Windows. CI runs the same gates on every push.
 
 ## How it is built
 
@@ -236,9 +237,8 @@ wrote it.
 
 ## Status
 
-The current release is **v0.7.1** (2026-09-01). MatterHelm has been commissioned
-and exercised on real Google Nest hardware; known limits are unsigned binaries
-that may trigger SmartScreen, the one-time Google test-VID registration, and
+The current release is **v0.7.1**. Known limits are unsigned binaries that may
+trigger SmartScreen, the one-time Google test-VID registration, and
 unverifiable delivery to sessionless players such as Kodi.
 
 Current automated gates and coverage are published by

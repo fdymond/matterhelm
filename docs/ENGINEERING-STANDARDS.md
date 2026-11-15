@@ -69,8 +69,9 @@ target `net10.0-windows10.0.17763.0` (Windows 10 version 1809+ x64).
 - Tests are specification: name them for behavior
   (`"volume write of 254 maps to setVolume 100"`), not for methods.
 - Fake timers for all time-dependent logic; no sleeps in tests; suite < 30 s.
-- v0.7.1 tag: 393 bridge / 826 app; current counts are published by CI. App
-  line coverage is about 58 %; CI enforces a 45 % floor.
+- Current test results and coverage are published by CI. CI enforces a 45 %
+  app line-coverage floor; the bridge pure-logic thresholds above remain at
+  90 % per file.
 
 ## Git & releases
 

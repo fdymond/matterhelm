@@ -8,8 +8,10 @@ every contribution.
 
 ## Prerequisites
 
-- **Node.js 22.13+** (LTS) — for `bridge/`.
-- **.NET 10 SDK** — for `app/` (WinForms tray app, Windows-only).
+- The exact Node.js version in [`.node-version`](.node-version) — `build.ps1`
+  refuses any other; nvm/fnm/Volta users can read the file.
+- The .NET SDK selected by [`global.json`](global.json), including its allowed
+  patch roll-forward.
 - Windows for `app/` work (WinForms + Win32 P/Invoke); `bridge/` is
   OS-neutral and CI runs it on both `ubuntu-latest` and `windows-latest`.
 
@@ -66,6 +68,8 @@ dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
 
 Both builds are **warnings-as-errors** / **zero-warnings**. A warning is a
 decision postponed, and postponed decisions don't merge.
+
+Packaging requires the exact Node.js version from `.node-version` on `PATH`.
 
 `build.ps1` treats a `postject` failure as a build failure unless
 `-AllowNodeLayoutFallback` is supplied. On Windows PowerShell 5.1, do not wrap
@@ -158,6 +162,9 @@ Decision, Consequences). Don't silently improvise architecture — write it
 down so the next agent or reviewer has the "why."
 
 ## Releases
+
+A release uses the Node.js and .NET SDK pins described under Prerequisites;
+update those pins when the release checklist identifies newer security patches.
 
 A pushed `v*` tag is accepted only when the tag without its leading `v` exactly
 matches both `<Version>` in `app/MatterHelm/MatterHelm.csproj` and `version` in
