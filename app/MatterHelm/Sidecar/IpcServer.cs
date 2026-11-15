@@ -58,6 +58,10 @@ public sealed class IpcServer : IDisposable
 
     internal void SetAuthenticatedClientForTest(WebSocket socket) => Volatile.Write(ref _authedClient, socket);
 
+    internal static Task<string?> ReceiveTextFrameAsyncForTest(
+        WebSocket socket,
+        CancellationToken cancellationToken = default) => ReceiveTextFrameAsync(socket, cancellationToken);
+
     /// <summary>Creates the server (call <see cref="Start"/> to listen).</summary>
     /// <param name="port">Loopback port (BLUEPRINT default 39531).</param>
     /// <param name="token">Expected session token for the hello handshake.</param>
