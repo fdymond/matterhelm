@@ -3,6 +3,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
+    // matter.js 0.18 endpoint validation must fail construction tests rather
+    // than merely log its production-default warnings.
+    env: { MATTER_ENDPOINT_VALIDATION: "strict" },
     include: ["src/**/*.test.ts"],
     coverage: {
       provider: "v8",

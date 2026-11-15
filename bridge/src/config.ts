@@ -176,6 +176,8 @@ export interface Config {
   bridgeName?: string;
   /** `HTPC_BRIDGE_MDNS_INTERFACE`; unset = matter.js auto-detects. */
   mdnsInterface?: string;
+  /** Diagnostic-only ADR-010 matrix toggle; default false. */
+  disableMdnsScopeIdWorkaround: boolean;
   /**
    * `HTPC_BRIDGE_MATTER_PORT` — dev-only escape hatch for running the real
    * bridge beside the S0-3 spike (which holds UDP 5540); unset lets matter.js
@@ -492,6 +494,21 @@ function parseMdnsInterface(raw: string | undefined): string | undefined {
   return raw === undefined || raw === "" ? undefined : raw;
 }
 
+/** Strict 0/1 toggle; `1` is deliberately awkward because this is diagnostic-only. */
+function parseDisableMdnsScopeIdWorkaround(raw: string | undefined): boolean {
+  if (raw === undefined || raw === "") {
+    return false;
+  }
+  const result = z.enum(["0", "1"]).safeParse(raw);
+  if (!result.success) {
+    throw new Error(
+      "HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND must be 0 or 1 " +
+        `(1 is diagnostic-only), got ${JSON.stringify(raw)}`,
+    );
+  }
+  return result.data === "1";
+}
+
 /**
  * Parses a plain env record (never the live process — see {@link loadConfig})
  * into a validated {@link Config}, or throws a plain `Error` describing
@@ -524,6 +541,9 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     endpoints: parseEndpoints(env.HTPC_BRIDGE_ENDPOINTS),
     momentaryResetMs: parseMomentaryResetMs(env.HTPC_BRIDGE_MOMENTARY_RESET_MS),
     matterLogFacilities: { ...DEFAULT_MATTER_LOG_FACILITIES, ...matterLogFacilities },
+    disableMdnsScopeIdWorkaround: parseDisableMdnsScopeIdWorkaround(
+      env.HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND,
+    ),
     ...(mdnsInterface === undefined ? {} : { mdnsInterface }),
     ...(matterPort === undefined ? {} : { matterPort }),
     ...(uniqueIdSeed === undefined ? {} : { uniqueIdSeed }),

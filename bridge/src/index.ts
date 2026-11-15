@@ -108,6 +108,7 @@ async function main(): Promise<void> {
     logger,
     matterLogLevel: config.matterLogLevel,
     matterLogFacilities: config.matterLogFacilities,
+    disableMdnsScopeIdWorkaround: config.disableMdnsScopeIdWorkaround,
     ...(config.matterPort === undefined ? {} : { port: config.matterPort }),
     ...(config.mdnsInterface === undefined ? {} : { mdnsInterface: config.mdnsInterface }),
     // S10-4: identity + vendor/product, each defaulting inside bridge.ts when
@@ -129,7 +130,12 @@ async function main(): Promise<void> {
   // never appear here — they were never constructed).
   for (const endpoint of bridgeHandle.endpoints) {
     logger.info(
-      { evt: "matter.endpoint", id: endpoint.id, kind: endpoint.kind, name: endpoint.name },
+      {
+        evt: "matter.endpoint",
+        id: endpoint.id,
+        kind: endpoint.kind,
+        endpointName: endpoint.name,
+      },
       "endpoint constructed",
     );
   }

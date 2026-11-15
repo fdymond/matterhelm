@@ -4,7 +4,7 @@
  * module receives a logger instance rather than constructing its own.
  */
 import pino from "pino";
-import type { Logger } from "pino";
+import type { DestinationStream, Logger } from "pino";
 
 import type { PinoLevel } from "./config.js";
 
@@ -14,6 +14,7 @@ import type { PinoLevel } from "./config.js";
  * calls for minimal base fields, and neither is useful on a single-purpose
  * loopback sidecar with one process per session.
  */
-export function makeLogger(level: PinoLevel): Logger {
-  return pino({ level, base: null });
+export function makeLogger(level: PinoLevel, destination?: DestinationStream): Logger {
+  const options = { level, base: null };
+  return destination === undefined ? pino(options) : pino(options, destination);
 }

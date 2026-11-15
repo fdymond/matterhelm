@@ -129,6 +129,8 @@ export interface BridgeOptions {
   momentaryResetMs?: number;
   /** Pins the mDNS interface for multi-NIC hosts; see `./adapter.js`. */
   mdnsInterface?: string;
+  /** Diagnostic-only switch that skips the ADR-010 compatibility shim. */
+  disableMdnsScopeIdWorkaround?: boolean;
   /**
    * Diagnostics seam (ADR-006 §1; see `MatterNodeOptions.logger`): matter.js
    * logs become `{evt:"matter.log"}` pino events and session lifecycle is
@@ -583,6 +585,9 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
     storageDir: options.storageDir,
     ...(options.port === undefined ? {} : { port: options.port }),
     ...(options.mdnsInterface === undefined ? {} : { mdnsInterface: options.mdnsInterface }),
+    ...(options.disableMdnsScopeIdWorkaround === undefined
+      ? {}
+      : { disableMdnsScopeIdWorkaround: options.disableMdnsScopeIdWorkaround }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.matterLogLevel === undefined ? {} : { matterLogLevel: options.matterLogLevel }),
     ...(options.matterLogFacilities === undefined
@@ -775,6 +780,20 @@ export async function createBridge(options: BridgeOptions): Promise<BridgeHandle
         }
       }
       constructed.push({ id: spec.info.id, name: spec.info.name, kind: spec.kind });
+    }
+    try {
+      const result = await node.synchronizeEndpointConfiguration();
+      options.logger?.info(
+        { evt: "matter.configuration-version", ...result },
+        "synchronized Matter endpoint configuration",
+      );
+    } catch (error) {
+      // ConfigurationVersion is advisory controller-cache metadata. Endpoint
+      // construction remains usable when its storage or increment path fails.
+      options.logger?.warn(
+        { evt: "matter.configuration-version.error", err: String(error) },
+        "failed to synchronize Matter endpoint configuration",
+      );
     }
   } catch (error) {
     scheduler.clear();

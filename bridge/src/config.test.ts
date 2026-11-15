@@ -27,6 +27,7 @@ describe("parseConfig", () => {
       logLevel: "info",
       matterLogLevel: "notice",
       matterLogFacilities: { Commissioning: "warn" },
+      disableMdnsScopeIdWorkaround: false,
       endpoints: {
         speaker: { name: "HTPC Speaker", enabled: true },
         playPause: { name: "HTPC Play Pause", enabled: true },
@@ -650,6 +651,33 @@ describe("parseConfig", () => {
       expect(
         parseConfig(baseEnv({ HTPC_BRIDGE_MDNS_INTERFACE: "" })).mdnsInterface,
       ).toBeUndefined();
+    });
+  });
+
+  describe("HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND", () => {
+    it("keeps the ADR-010 workaround enabled by default", () => {
+      expect(parseConfig(baseEnv()).disableMdnsScopeIdWorkaround).toBe(false);
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND: "" }))
+          .disableMdnsScopeIdWorkaround,
+      ).toBe(false);
+    });
+
+    it("accepts only the explicit diagnostic value 1 and explicit enabled value 0", () => {
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND: "1" }))
+          .disableMdnsScopeIdWorkaround,
+      ).toBe(true);
+      expect(
+        parseConfig(baseEnv({ HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND: "0" }))
+          .disableMdnsScopeIdWorkaround,
+      ).toBe(false);
+    });
+
+    it.each(["true", "yes", "2", " 1 "])("rejects invalid toggle %s", (raw) => {
+      expect(() => {
+        parseConfig(baseEnv({ HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND: raw }));
+      }).toThrow(/HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND/);
     });
   });
 });
