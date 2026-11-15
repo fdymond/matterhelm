@@ -161,6 +161,9 @@ public static class Log
             case "DEBUG":
                 Debug(message);
                 break;
+            case "INFO":
+                Info(message);
+                break;
             case "WARN":
                 Warn(message);
                 break;
