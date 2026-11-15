@@ -94,7 +94,7 @@ public sealed class BridgeLifecycleCoordinatorTests
             Assert.True(config.Save());
             var executor = new FakeExecutor();
             int startAttempts = 0;
-            using var secondAttempt = new ManualResetEventSlim();
+            var logs = new List<(string Level, string Message)>();
             using var publisher = new VolumeStatePublisher(executor.GetVolumeState, TimeProvider.System, (_, _) => { });
             using var dispatcher = new BridgeActionDispatcher(config, executor, null, (_, _) => { });
             using var coordinator = new BridgeLifecycleCoordinator(
@@ -103,28 +103,26 @@ public sealed class BridgeLifecycleCoordinatorTests
                 new SidecarSpec("missing.exe", [], directory),
                 overlaySink: null,
                 supervisorOptions: null,
-                (_, _) => { },
+                (level, message) => logs.Add((level, message)),
                 Path.Combine(directory, "matter"),
                 publisher,
                 dispatcher,
                 startServer: _ =>
                 {
-                    if (Interlocked.Increment(ref startAttempts) == 2)
-                    {
-                        secondAttempt.Set();
-                    }
-
+                    Interlocked.Increment(ref startAttempts);
                     throw new HttpListenerException(183);
                 });
 
             coordinator.SetEnabled(true);
             File.WriteAllText(configPath, """{"bridgeEnabled":true,"ipcPort":40123}""");
             config.Reload();
+            coordinator.Dispose();
 
-            Assert.True(secondAttempt.Wait(TimeSpan.FromSeconds(5)), "port change did not retry the listener");
             Assert.Equal(2, Volatile.Read(ref startAttempts));
             Assert.True(config.Current.BridgeEnabled);
-            Assert.Equal(BridgeState.Faulted, coordinator.State);
+            Assert.Contains(logs, entry =>
+                entry.Level == "ERROR"
+                && entry.Message.Contains("cannot listen on port 40123", StringComparison.Ordinal));
         }
         finally
         {

@@ -539,8 +539,8 @@ public static class BridgeHostTests
     /// The S3-1 packaged-layout selection
     /// (<see cref="SidecarLaunchSpec.TryPackaged"/>): the Node SEA exe
     /// (<c>sidecar\bridge.exe</c>, no args) wins whenever present; the
-    /// ADR-007 §2 fallback layout (<c>sidecar\node.exe</c> +
-    /// <c>sidecar\bridge.cjs</c>) is honored otherwise; no packaged layout
+    /// ADR-007/ADR-016 fallback layout (<c>sidecar\node.exe</c> + the memory-limit
+    /// argument + <c>sidecar\bridge.cjs</c>) is honored otherwise; no packaged layout
     /// means null (Default() then walks the dev fallback chain).
     /// </summary>
     public sealed class PackagedLayout : IDisposable
@@ -613,7 +613,9 @@ public static class BridgeHostTests
 
             Assert.NotNull(spec);
             Assert.Equal(Path.Combine(_sidecarDir, "node.exe"), spec.ExePath);
-            Assert.Equal([Path.Combine(_sidecarDir, "bridge.cjs")], spec.Args);
+            Assert.Equal(
+                ["--max-semi-space-size=8", Path.Combine(_sidecarDir, "bridge.cjs")],
+                spec.Args);
         }
 
         [Fact]
@@ -643,7 +645,9 @@ public static class BridgeHostTests
 
             Assert.NotNull(spec);
             Assert.Equal(Path.Combine(_sidecarDir, "node.exe"), spec.ExePath);
-            Assert.Equal([Path.Combine(_sidecarDir, "bridge.cjs")], spec.Args);
+            Assert.Equal(
+                ["--max-semi-space-size=8", Path.Combine(_sidecarDir, "bridge.cjs")],
+                spec.Args);
             Assert.Equal(_sidecarDir, spec.WorkingDirectory);
         }
 

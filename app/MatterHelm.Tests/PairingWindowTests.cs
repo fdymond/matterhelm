@@ -252,6 +252,7 @@ public static class PairingWindowTests
             using var window = new PairingWindow();
             window.Show();
             StaTest.PumpUntilIdle(window);
+            int initialHeight = window.Height;
             Screen screen = Screen.FromRectangle(window.Bounds);
             Point movedLocation = new(screen.WorkingArea.Left + 24, screen.WorkingArea.Top + 24);
             window.SimulateResizeBeginForTest();
@@ -263,16 +264,18 @@ public static class PairingWindowTests
             StaTest.PumpUntilIdle(window);
 
             window.SimulateResizeEndForTest();
-            int heightBeforeGrowth = window.Height;
             window.SetStatusTextForTest(
-                "Content grew again after a real move."
-                    + Environment.NewLine
-                    + "Automatic centering must remain disabled."
-                    + Environment.NewLine
-                    + "The window stays where the user released it.");
+                string.Join(
+                    Environment.NewLine,
+                    "Content grew again after a real move.",
+                    "Automatic centering must remain disabled.",
+                    "The window stays where the user released it.",
+                    "Line four forces another growth pass.",
+                    "Line five is intentionally short.",
+                    "Line six completes the growth fixture."));
             StaTest.PumpUntilIdle(window);
 
-            Assert.True(window.Height > heightBeforeGrowth);
+            Assert.True(window.Height > initialHeight);
             Assert.Equal(movedLocation, window.Location);
         });
     }

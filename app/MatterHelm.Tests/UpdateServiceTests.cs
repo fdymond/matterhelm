@@ -631,6 +631,7 @@ public sealed class UpdateServiceTests
                 CreateNoWindow = true,
             };
             start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-NonInteractive");
             start.ArgumentList.Add("-ExecutionPolicy");
             start.ArgumentList.Add("Bypass");
             start.ArgumentList.Add("-File");
@@ -640,7 +641,7 @@ public sealed class UpdateServiceTests
             start.ArgumentList.Add("-PackagePath");
             start.ArgumentList.Add(packagePath);
             start.ArgumentList.Add("-ExecutablePath");
-            start.ArgumentList.Add(Path.Combine(install, "MatterHelm.exe"));
+            start.ArgumentList.Add(Path.Combine(Environment.SystemDirectory, "where.exe"));
             start.ArgumentList.Add("-InstallDirectory");
             start.ArgumentList.Add(install);
             start.ArgumentList.Add("-LogPath");
