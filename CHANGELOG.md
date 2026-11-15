@@ -16,6 +16,9 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   `HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND=1` toggle for the Windows mDNS
   scope-id empirical matrix.
 
+- Property-based tests for the C# protocol parser (FsCheck), an STA harness
+  for WinForms tests, and direct tests of the CoreAudio volume boundary.
+
 ### Changed
 
 - Moved the bridge runtime and CI to Node 26 LTS (pinned to 26.13.1) and
@@ -30,6 +33,14 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   startup.
 - Invalid inherited `MATTER_ENDPOINT_VALIDATION` values now warn and fall back
   to `warn` instead of preventing sidecar startup.
+- The installer is compiled with Inno Setup 7.1.1 (checksum-pinned in CI and
+  release) and is now a 64-bit installer.
+- Updated the test toolchain to Vitest 5.1 and the lint toolchain within the
+  TypeScript 6 line.
+- The pairing window stays centred through its post-show resizing, keeps
+  auto-centring after a title-bar click that does not move it, never jumps
+  during a drag (including cross-monitor DPI changes), and keeps a window the
+  user placed inside the screen's work area when it grows.
 
 ### Fixed
 
@@ -38,6 +49,9 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   The tray also removes inherited `NODE_OPTIONS` before starting either
   sidecar layout, preventing global `--inspect`, `--require`, or heap flags
   from altering the sidecar.
+- The tray log records info-level lines as `INFO` instead of `WARN`, so
+  they are no longer counted by warning repeat-suppression (regression in
+  0.8.0).
 - Endpoint-construction audit events now use the explicit `endpointName`
   payload field, with regression coverage locking their serialized pino level
   to numeric info (`30`).
