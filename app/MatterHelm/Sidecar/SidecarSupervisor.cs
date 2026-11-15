@@ -317,6 +317,9 @@ public sealed class SidecarSupervisor : IDisposable
         startInfo.Environment["HTPC_BRIDGE_STORAGE_DIR"] = _storageDir;
         startInfo.Environment["HTPC_BRIDGE_LOG_LEVEL"] = _logLevel;
         startInfo.Environment.Remove("MATTERHELM_UPDATE_TOKEN");
+        // The sidecar owns its Node/V8 policy. Inherited NODE_OPTIONS could
+        // inject code, enable an inspector, or override measured heap limits.
+        startInfo.Environment.Remove("NODE_OPTIONS");
 
         var child = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         child.Exited += (_, _) => OnChildExited(child);
