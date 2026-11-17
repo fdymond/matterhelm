@@ -641,7 +641,7 @@ public sealed class UpdateServiceTests
             start.ArgumentList.Add("-PackagePath");
             start.ArgumentList.Add(packagePath);
             start.ArgumentList.Add("-ExecutablePath");
-            start.ArgumentList.Add(Path.Combine(Environment.SystemDirectory, "where.exe"));
+            start.ArgumentList.Add(HeadlessRelaunchExecutable());
             start.ArgumentList.Add("-InstallDirectory");
             start.ArgumentList.Add(install);
             start.ArgumentList.Add("-LogPath");
@@ -728,7 +728,7 @@ public sealed class UpdateServiceTests
             start.ArgumentList.Add("-PackagePath");
             start.ArgumentList.Add(packagePath);
             start.ArgumentList.Add("-ExecutablePath");
-            start.ArgumentList.Add(Path.Combine(Environment.SystemDirectory, "where.exe"));
+            start.ArgumentList.Add(HeadlessRelaunchExecutable());
             start.ArgumentList.Add("-InstallDirectory");
             start.ArgumentList.Add(install);
             start.ArgumentList.Add("-LogPath");
@@ -777,6 +777,14 @@ public sealed class UpdateServiceTests
         ZipArchiveEntry entry = archive.CreateEntry(path);
         using StreamWriter writer = new(entry.Open());
         writer.Write(content);
+    }
+
+    private static string HeadlessRelaunchExecutable()
+    {
+        // A test-only WinExe exits without UI, a console host, or production entry-point hooks.
+        string path = Path.Combine(AppContext.BaseDirectory, "MatterHelm.TestNoOp.exe");
+        Assert.True(File.Exists(path), $"Test no-op WinExe relaunch target missing: {path}");
+        return path;
     }
 
     private static UpdateAsset Asset(string name) => new(name, new Uri($"https://api.github.com/assets/{name}"));

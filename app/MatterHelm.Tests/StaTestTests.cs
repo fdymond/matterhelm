@@ -47,9 +47,15 @@ public static class StaTestTests
 
             var proof = HeadlessDesktop.CaptureIsolationForTest(window.Handle);
 
-            Assert.NotEqual(proof.InputDesktopName, proof.ThreadDesktopName);
+            Assert.Equal("Default", proof.DefaultDesktopName);
+            Assert.NotEqual(proof.DefaultDesktopName, proof.ThreadDesktopName);
             Assert.True(proof.WindowOnThreadDesktop);
-            Assert.False(proof.WindowOnInputDesktop);
+            Assert.False(proof.WindowOnDefaultDesktop);
+            if (proof.WindowOnInputDesktop is { } windowOnInputDesktop)
+            {
+                Assert.NotEqual(proof.InputDesktopName, proof.ThreadDesktopName);
+                Assert.False(windowOnInputDesktop);
+            }
         });
     }
 

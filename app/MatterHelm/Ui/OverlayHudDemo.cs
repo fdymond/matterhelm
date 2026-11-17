@@ -226,10 +226,16 @@ internal static class OverlayHudDemo
         log.AddRange(sentinel.ActivationEvents);
 
         string resultsPath = Path.Combine(AppContext.BaseDirectory, ResultsFileName);
+        string overall = !allPassed
+            ? "OVERALL: FAIL"
+            : headless
+                ? "OVERALL: PASS (foreground checks SKIPPED-HEADLESS — needs a human --visible run before release)"
+                : "OVERALL: PASS";
         string report = string.Join(Environment.NewLine, log) + Environment.NewLine +
-            $"OVERALL: {(allPassed ? "PASS" : "FAIL")}" + Environment.NewLine;
+            overall + Environment.NewLine;
         File.WriteAllText(resultsPath, report);
 
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.WriteLine(report);
         Console.WriteLine($"(results file: {resultsPath})");
 

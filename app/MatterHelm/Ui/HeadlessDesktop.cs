@@ -11,11 +11,15 @@ internal static partial class HeadlessDesktop
     private const uint DesktopReadObjects = 0x0001;
     private const uint DesktopCreateWindow = 0x0002;
     private const uint DesktopCreateMenu = 0x0004;
+    private const uint DesktopHookControl = 0x0008;
     private const uint DesktopEnumerate = 0x0040;
     private const uint DesktopWriteObjects = 0x0080;
     private const uint RequiredAccess = DesktopReadObjects
         | DesktopCreateWindow
         | DesktopCreateMenu
+        // Match the interactive desktop closely enough that WinForms/OLE
+        // hook-based behavior is exercised instead of failing for access.
+        | DesktopHookControl
         | DesktopEnumerate
         | DesktopWriteObjects;
     private const int UoiName = 2;
@@ -50,6 +54,12 @@ internal static partial class HeadlessDesktop
             return false;
         }
 
+        AttachPrivateDesktop();
+        return true;
+    }
+
+    private static void AttachPrivateDesktop()
+    {
         SafeDesktopHandle desktop = Desktop.Value;
         if (!SetThreadDesktop(desktop.DangerousGetHandle()))
         {
@@ -60,7 +70,6 @@ internal static partial class HeadlessDesktop
         }
 
         GC.KeepAlive(desktop);
-        return true;
     }
 
     /// <summary>Runs one UI entry point on an STA thread, privately desktop-bound unless visibility was explicitly requested.</summary>
@@ -96,9 +105,11 @@ internal static partial class HeadlessDesktop
     /// <summary>Captures objective desktop/window membership evidence for the STA harness tests.</summary>
     internal static (
         string ThreadDesktopName,
-        string InputDesktopName,
+        string DefaultDesktopName,
+        string? InputDesktopName,
         bool WindowOnThreadDesktop,
-        bool WindowOnInputDesktop) CaptureIsolationForTest(nint window)
+        bool WindowOnDefaultDesktop,
+        bool? WindowOnInputDesktop) CaptureIsolationForTest(nint window)
     {
         nint threadDesktop = GetThreadDesktop(GetCurrentThreadId());
         if (threadDesktop == 0)
@@ -107,24 +118,43 @@ internal static partial class HeadlessDesktop
             throw new Win32Exception(error, $"GetThreadDesktop failed (Win32 error {error}).");
         }
 
+        nint defaultDesktopHandle = OpenDesktopW(
+            "Default",
+            flags: 0,
+            inherit: false,
+            desiredAccess: DesktopReadObjects | DesktopEnumerate);
+        if (defaultDesktopHandle == 0)
+        {
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, $"OpenDesktopW('Default') failed (Win32 error {error}).");
+        }
+
+        using var defaultDesktop = new SafeDesktopHandle(defaultDesktopHandle);
+        HashSet<nint> threadWindows = EnumerateDesktopWindows(threadDesktop, "headless");
+        HashSet<nint> defaultWindows = EnumerateDesktopWindows(defaultDesktop.DangerousGetHandle(), "default");
+
+        string? inputDesktopName = null;
+        bool? windowOnInputDesktop = null;
         nint inputDesktopHandle = OpenInputDesktop(
             dwFlags: 0,
             inherit: false,
             desiredAccess: DesktopReadObjects | DesktopEnumerate);
-        if (inputDesktopHandle == 0)
+        if (inputDesktopHandle != 0)
         {
-            int error = Marshal.GetLastWin32Error();
-            throw new Win32Exception(error, $"OpenInputDesktop failed (Win32 error {error}).");
+            using var inputDesktop = new SafeDesktopHandle(inputDesktopHandle);
+            inputDesktopName = GetDesktopName(inputDesktop.DangerousGetHandle());
+            windowOnInputDesktop = EnumerateDesktopWindows(
+                inputDesktop.DangerousGetHandle(),
+                "input").Contains(window);
         }
 
-        using var inputDesktop = new SafeDesktopHandle(inputDesktopHandle);
-        HashSet<nint> threadWindows = EnumerateDesktopWindows(threadDesktop, "headless");
-        HashSet<nint> inputWindows = EnumerateDesktopWindows(inputDesktop.DangerousGetHandle(), "input");
         return (
             GetDesktopName(threadDesktop),
-            GetDesktopName(inputDesktop.DangerousGetHandle()),
+            GetDesktopName(defaultDesktop.DangerousGetHandle()),
+            inputDesktopName,
             threadWindows.Contains(window),
-            inputWindows.Contains(window));
+            defaultWindows.Contains(window),
+            windowOnInputDesktop);
     }
 
     private static SafeDesktopHandle CreateDesktop()
@@ -191,7 +221,7 @@ internal static partial class HeadlessDesktop
             // This must stay the first operation on the native UI thread:
             // even managed STA bootstrapping can install OLE hooks before the
             // test/demo body gets control.
-            AttachCurrentThread();
+            AttachPrivateDesktop();
         }
         catch (Exception ex)
         {
@@ -375,6 +405,13 @@ internal static partial class HeadlessDesktop
     [LibraryImport("user32.dll", SetLastError = true)]
     private static partial nint OpenInputDesktop(
         uint dwFlags,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit,
+        uint desiredAccess);
+
+    [LibraryImport("user32.dll", EntryPoint = "OpenDesktopW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint OpenDesktopW(
+        string desktop,
+        uint flags,
         [MarshalAs(UnmanagedType.Bool)] bool inherit,
         uint desiredAccess);
 
