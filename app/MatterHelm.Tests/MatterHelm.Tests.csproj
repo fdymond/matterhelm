@@ -32,6 +32,19 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MatterHelm\MatterHelm.csproj" />
+    <ProjectReference
+      Include="..\MatterHelm.TestNoOp\MatterHelm.TestNoOp.csproj"
+      ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <Target Name="CopyTestNoOpOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.exe" />
+      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.dll" />
+      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.deps.json" />
+      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.runtimeconfig.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_TestNoOpOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

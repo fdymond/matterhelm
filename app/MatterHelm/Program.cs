@@ -55,6 +55,7 @@ internal static partial class Program
         // steals focus or blocks clicks. Not part of the production tray flow.
         if (args.Contains("--demo-overlay"))
         {
+            PrepareIsolatedDemoState("--demo-overlay");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(() =>
             {
@@ -86,6 +87,7 @@ internal static partial class Program
         // PASS/FAIL output. Hidden; not part of the production tray flow.
         if (args.Contains("--probe-resources"))
         {
+            PrepareIsolatedDemoState("--probe-resources");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(() =>
             {
@@ -106,6 +108,7 @@ internal static partial class Program
         // wrong-token socket close, with objective PASS/FAIL output.
         if (args.Contains("--demo-sidecar-chaos"))
         {
+            PrepareIsolatedDemoState("--demo-sidecar-chaos");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(Sidecar.SidecarChaosDemo.Run, visible);
             return;
@@ -117,6 +120,7 @@ internal static partial class Program
         // production tray flow.
         if (args.Contains("--demo-pairing-window"))
         {
+            PrepareIsolatedDemoState("--demo-pairing-window");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(Demos.PairingWindowDemo.Run, visible);
             return;
@@ -128,6 +132,7 @@ internal static partial class Program
         // temp config/storage and an ephemeral port, never %APPDATA%.
         if (args.Contains("--demo-wired"))
         {
+            PrepareIsolatedDemoState("--demo-wired");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(Demos.WiredDemo.Run, visible);
             return;
@@ -137,6 +142,7 @@ internal static partial class Program
         // plus objective fits-on-screen and primary-button checks.
         if (args.Contains("--demo-welcome-window"))
         {
+            PrepareIsolatedDemoState("--demo-welcome-window");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(Demos.WelcomeWindowDemo.Run, visible);
             return;
@@ -148,6 +154,7 @@ internal static partial class Program
         // production tray flow.
         if (args.Contains("--demo-settings-window"))
         {
+            PrepareIsolatedDemoState("--demo-settings-window");
             bool visible = Ui.HeadlessDesktop.IsVisibleUiRequested(args.Contains("--visible"));
             Environment.ExitCode = RunDemo(
                 () => Demos.SettingsWindowDemo.Run(dark: args.Contains("--dark"), visible: visible),
@@ -321,8 +328,27 @@ internal static partial class Program
     private static int RunDemo(Func<int> demo, bool visible)
     {
         int exitCode = 1;
-        Ui.HeadlessDesktop.RunOnStaThread(() => exitCode = demo(), DemoTimeout, visible);
+        try
+        {
+            Ui.HeadlessDesktop.RunOnStaThread(() =>
+            {
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException, threadScope: true);
+                exitCode = demo();
+            }, DemoTimeout, visible);
+        }
+        catch (TimeoutException)
+        {
+            Console.WriteLine("OVERALL: FAIL (demo timed out)");
+            return 1;
+        }
+
         return exitCode;
+    }
+
+    private static void PrepareIsolatedDemoState(string mode)
+    {
+        _ = AttachConsole(AttachParentProcess);
+        Demos.DemoSupport.InitializeIsolatedState(mode);
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]

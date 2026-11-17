@@ -95,6 +95,8 @@ public sealed class BridgeLifecycleCoordinatorTests
             var executor = new FakeExecutor();
             int startAttempts = 0;
             var logs = new List<(string Level, string Message)>();
+            BridgeState? lastObservedState = null;
+            BridgeState? stateBeforeDisposeDisabled = null;
             using var publisher = new VolumeStatePublisher(executor.GetVolumeState, TimeProvider.System, (_, _) => { });
             using var dispatcher = new BridgeActionDispatcher(config, executor, null, (_, _) => { });
             using var coordinator = new BridgeLifecycleCoordinator(
@@ -112,6 +114,15 @@ public sealed class BridgeLifecycleCoordinatorTests
                     Interlocked.Increment(ref startAttempts);
                     throw new HttpListenerException(183);
                 });
+            coordinator.StateChanged += (_, state) =>
+            {
+                if (state == BridgeState.Disabled)
+                {
+                    stateBeforeDisposeDisabled = lastObservedState;
+                }
+
+                lastObservedState = state;
+            };
 
             coordinator.SetEnabled(true);
             File.WriteAllText(configPath, """{"bridgeEnabled":true,"ipcPort":40123}""");
@@ -119,6 +130,7 @@ public sealed class BridgeLifecycleCoordinatorTests
             coordinator.Dispose();
 
             Assert.Equal(2, Volatile.Read(ref startAttempts));
+            Assert.Equal(BridgeState.Faulted, stateBeforeDisposeDisabled);
             Assert.True(config.Current.BridgeEnabled);
             Assert.Contains(logs, entry =>
                 entry.Level == "ERROR"

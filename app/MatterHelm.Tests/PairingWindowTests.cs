@@ -264,6 +264,7 @@ public static class PairingWindowTests
             StaTest.PumpUntilIdle(window);
 
             window.SimulateResizeEndForTest();
+            int heightAfterMove = window.Height;
             window.SetStatusTextForTest(
                 string.Join(
                     Environment.NewLine,
@@ -275,7 +276,8 @@ public static class PairingWindowTests
                     "Line six completes the growth fixture."));
             StaTest.PumpUntilIdle(window);
 
-            Assert.True(window.Height > initialHeight);
+            Assert.True(heightAfterMove > initialHeight);
+            Assert.True(window.Height > heightAfterMove);
             Assert.Equal(movedLocation, window.Location);
         });
     }

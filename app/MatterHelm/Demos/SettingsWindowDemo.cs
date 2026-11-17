@@ -191,7 +191,19 @@ internal static partial class SettingsWindowDemo
                 startInfo.ArgumentList.Add("--visible");
             }
             using Process? child = Process.Start(startInfo);
-            darkOk = child is not null && child.WaitForExit(60_000) && child.ExitCode == 0 && File.Exists(darkPng);
+            if (child is not null)
+            {
+                if (!child.WaitForExit(60_000))
+                {
+                    child.Kill(entireProcessTree: true);
+                    child.WaitForExit();
+                    Console.WriteLine("[FAIL] second process (--dark) timed out and was terminated");
+                }
+                else
+                {
+                    darkOk = child.ExitCode == 0 && File.Exists(darkPng);
+                }
+            }
         }
 
         Check(darkOk, "second process (--dark) wrote settings-window-dark.png and exited 0");

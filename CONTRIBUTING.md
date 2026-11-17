@@ -115,6 +115,8 @@ config/protocol plumbing, re-run the relevant demo(s) and paste the exit
 code / output in your PR — this is required acceptance evidence alongside
 `npm run verify` / `dotnet test`, not optional polish.
 
+Run UI-sensitive test and demo commands through `tools/assert-headless.ps1` to fail if they create a visible desktop, console-host, browser, or Explorer window.
+
 ## The engineering bar
 
 Read `docs/ENGINEERING-STANDARDS.md` before writing code — it is the quality

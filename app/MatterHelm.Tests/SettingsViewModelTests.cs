@@ -1128,13 +1128,10 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void StorageDirDisplayIsTheUserProfileMatterDir()
+    public void StorageDirDisplayUsesTheEffectiveAppRoot()
     {
         Assert.Equal(
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "MatterHelm",
-                "matter"),
+            Path.Combine(AppPaths.Root, "matter"),
             SettingsViewModel.StorageDirDisplay);
         Assert.Equal(SettingsViewModel.StorageDirDisplay, SettingsViewModel.Describe("storage-dir").Get!(new BridgeConfig()));
     }
