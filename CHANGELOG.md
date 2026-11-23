@@ -49,7 +49,7 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 
 - `SHA256SUMS.txt` uses LF line endings, so `sha256sum -c` verifies it
   directly.
-- Updated the `ws` runtime dependency to 8.22.2.
+- Updated the `ws` runtime dependency to 8.23.0.
 
 ### Fixed
 
