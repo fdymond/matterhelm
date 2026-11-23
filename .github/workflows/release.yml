@@ -1,10 +1,12 @@
 name: release
 
-# Tag-triggered release. Push a `v*` tag (e.g. `v0.7.1`) to run the full
-# verify/build/test gate and publish a GitHub Release with auto-generated
-# notes. Mirrors ci.yml's pinned Node and .NET setup so this job
+# Push a `v*` tag (e.g. `v0.7.1`) to run the full verify/build/test gate and
+# publish an attested GitHub Release with auto-generated notes. A manual
+# workflow_dispatch run builds the same assets from the branch versions as an
+# unattested 14-day release-candidate artifact and publishes nothing. Mirrors ci.yml's pinned Node and .NET setup so this job
 # exercises exactly what CI already proved green on main.
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -19,6 +21,7 @@ permissions: {}
 jobs:
   release:
     permissions:
+      # Dispatch runs skip every step that uses contents:write or id-token.
       contents: write
       id-token: write
       attestations: write
@@ -27,10 +30,33 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Resolve release tag
+        id: release-tag
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          [xml]$project = Get-Content app/MatterHelm/MatterHelm.csproj -Raw
+          $appVersion = $project.SelectSingleNode('//Version').InnerText
+          $bridgeVersion = (Get-Content bridge/package.json -Raw | ConvertFrom-Json).version
+          if ($env:EVENT_NAME -eq 'workflow_dispatch') {
+            if ($appVersion -ne $bridgeVersion) {
+              throw "app/MatterHelm/MatterHelm.csproj Version '$appVersion' does not match bridge/package.json version '$bridgeVersion'."
+            }
+            $tag = "v$appVersion"
+          } else {
+            $tag = $env:REF_NAME
+          }
+          "tag=$tag" | Add-Content -Path $env:GITHUB_OUTPUT
+          "short-sha=$($env:COMMIT_SHA.Substring(0, 7))" | Add-Content -Path $env:GITHUB_OUTPUT
+          Write-Host "Resolved release tag: $tag"
+
       - name: Assert release tag matches package versions
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
           $tagVersion = $env:TAG -replace '^v', ''
           [xml]$project = Get-Content app/MatterHelm/MatterHelm.csproj -Raw
@@ -78,14 +104,14 @@ jobs:
       - name: Zip dist (portable)
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: Compress-Archive -Path dist/* -DestinationPath "matterhelm-$($env:TAG)-win-x64.zip"
 
       # S10: Windows installer. Version = the tag without its leading "v".
       - name: Build installer
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
           INNO_SETUP_DIR: ${{ runner.temp }}\inno-setup-7.1.1
         run: |
           $installerPath = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
@@ -124,7 +150,7 @@ jobs:
       - name: Generate SHA256SUMS
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
           $lines = foreach ($f in @(
               "matterhelm-$($env:TAG)-win-x64.zip",
@@ -140,30 +166,33 @@ jobs:
           Get-Content SHA256SUMS.txt
 
       - name: Attest release build provenance
+        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            matterhelm-${{ github.ref_name }}-win-x64.zip
+            matterhelm-${{ steps.release-tag.outputs.tag }}-win-x64.zip
             dist-installer/MatterHelm-Setup-*.exe
             SHA256SUMS.txt
 
       - name: Create GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           draft: true
           generate_release_notes: true
           files: |
-            matterhelm-${{ github.ref_name }}-win-x64.zip
+            matterhelm-${{ steps.release-tag.outputs.tag }}-win-x64.zip
             dist-installer/MatterHelm-Setup-*.exe
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify draft release assets
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
           $version = $env:TAG.TrimStart("v")
           $expected = @(
@@ -195,8 +224,44 @@ jobs:
           Write-Host "Draft release assets verified: $($expected -join ', ')"
 
       - name: Publish verified GitHub Release
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: gh release edit $env:TAG --draft=false
+
+      - name: Verify release candidate assets
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          $installer = @(Get-ChildItem -LiteralPath dist-installer -Filter 'MatterHelm-Setup-*.exe' -File)
+          if ($installer.Count -ne 1) {
+            throw "Expected exactly one installer asset, found $($installer.Count)."
+          }
+          $assets = @(
+            Get-Item -LiteralPath "matterhelm-$($env:TAG)-win-x64.zip",
+              'SHA256SUMS.txt'
+          ) + $installer
+          if ($assets.Count -ne 3) {
+            throw "Expected exactly three release candidate assets, found $($assets.Count)."
+          }
+          $empty = @($assets | Where-Object { $_.Length -le 0 } | ForEach-Object { $_.FullName })
+          if ($empty.Count -ne 0) {
+            throw "Release candidate has empty assets: $($empty -join ', ')"
+          }
+          Write-Host "Release candidate assets verified: $($assets.Name -join ', ')"
+
+      - name: Upload release candidate
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: matterhelm-${{ steps.release-tag.outputs.tag }}-candidate-${{ steps.release-tag.outputs.short-sha }}
+          path: |
+            matterhelm-${{ steps.release-tag.outputs.tag }}-win-x64.zip
+            dist-installer/MatterHelm-Setup-*.exe
+            SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
