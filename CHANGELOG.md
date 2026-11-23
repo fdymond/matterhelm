@@ -15,9 +15,13 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
 - Added the diagnostic-only
   `HTPC_BRIDGE_DISABLE_MDNS_SCOPEID_WORKAROUND=1` toggle for the Windows mDNS
   scope-id empirical matrix.
-
 - Property-based tests for the C# protocol parser (FsCheck), an STA harness
   for WinForms tests, and direct tests of the CoreAudio volume boundary.
+- Published the [code signing policy](docs/code-signing-policy.md) ahead of
+  SignPath Foundation signing.
+- Contributor tooling: app tests and acceptance demos run headless on a
+  private Windows desktop with a temporary data folder, and
+  `tools/assert-headless.ps1` fails any run that shows a window.
 
 ### Changed
 
@@ -43,13 +47,18 @@ ADR (see `docs/ENGINEERING-STANDARDS.md`).
   during a drag (including cross-monitor DPI changes), and keeps a window the
   user placed inside the screen's work area when it grows.
 
+- `SHA256SUMS.txt` uses LF line endings, so `sha256sum -c` verifies it
+  directly.
+- Updated the `ws` runtime dependency to 8.22.2.
+
 ### Fixed
 
 - Restored the Node 26 SEA to the ADR-007 memory budget by embedding
   `--max-semi-space-size=8` and disabling SEA execution-argument extension.
   The tray also removes inherited `NODE_OPTIONS` before starting either
   sidecar layout, preventing global `--inspect`, `--require`, or heap flags
-  from altering the sidecar.
+  from altering the sidecar. The diagnostic `node.exe` fallback layout uses
+  the same memory cap.
 - The tray log records info-level lines as `INFO` instead of `WARN`, so
   they are no longer counted by warning repeat-suppression (regression in
   0.8.0).
