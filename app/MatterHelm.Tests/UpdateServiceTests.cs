@@ -630,6 +630,7 @@ public sealed class UpdateServiceTests
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            start.Environment["DOTNET_DISABLE_GUI_ERRORS"] = "1";
             start.ArgumentList.Add("-NoProfile");
             start.ArgumentList.Add("-NonInteractive");
             start.ArgumentList.Add("-ExecutionPolicy");
@@ -717,6 +718,7 @@ public sealed class UpdateServiceTests
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            start.Environment["DOTNET_DISABLE_GUI_ERRORS"] = "1";
             start.ArgumentList.Add("-NoProfile");
             start.ArgumentList.Add("-NonInteractive");
             start.ArgumentList.Add("-ExecutionPolicy");

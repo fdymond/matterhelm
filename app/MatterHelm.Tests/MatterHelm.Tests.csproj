@@ -38,11 +38,17 @@
   </ItemGroup>
 
   <Target Name="CopyTestNoOpOutput" AfterTargets="Build">
+    <MSBuild
+      Projects="..\MatterHelm.TestNoOp\MatterHelm.TestNoOp.csproj"
+      Targets="GetTargetPath"
+      Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_TestNoOpTargetPath" />
+    </MSBuild>
     <ItemGroup>
-      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.exe" />
-      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.dll" />
-      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.deps.json" />
-      <_TestNoOpOutput Include="..\MatterHelm.TestNoOp\bin\$(Configuration)\$(TargetFramework)\MatterHelm.TestNoOp.runtimeconfig.json" />
+      <_TestNoOpOutput Include="@(_TestNoOpTargetPath-&gt;'%(RootDir)%(Directory)MatterHelm.TestNoOp.exe')" />
+      <_TestNoOpOutput Include="@(_TestNoOpTargetPath)" />
+      <_TestNoOpOutput Include="@(_TestNoOpTargetPath-&gt;'%(RootDir)%(Directory)MatterHelm.TestNoOp.deps.json')" />
+      <_TestNoOpOutput Include="@(_TestNoOpTargetPath-&gt;'%(RootDir)%(Directory)MatterHelm.TestNoOp.runtimeconfig.json')" />
     </ItemGroup>
     <Copy SourceFiles="@(_TestNoOpOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>

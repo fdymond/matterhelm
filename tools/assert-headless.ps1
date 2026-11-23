@@ -1,11 +1,14 @@
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true, Position = 0)]
-    [string] $FilePath,
+# Usage: ./tools/assert-headless.ps1 <file-path> [child-argument ...]
+# Every token after <file-path> is passed to the child, so child flags cannot
+# bind to this script's PowerShell common parameters. Child output is decoded
+# as UTF-8; output emitted in an OEM code page may display incorrectly.
 
-    [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
-    [string[]] $ArgumentList = @()
-)
+if ($args.Count -lt 1) {
+    throw 'Usage: ./tools/assert-headless.ps1 <file-path> [child-argument ...]'
+}
+
+$FilePath = [string] $args[0]
+$ArgumentList = @($args | Select-Object -Skip 1)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -130,6 +133,10 @@ public static class HeadlessNative
 '@
 
 function ConvertTo-NativeArgument([string] $Value) {
+    if ($Value.Length -eq 0) {
+        return '""'
+    }
+
     if ($Value -notmatch '[\s"]') {
         return $Value
     }
@@ -210,10 +217,14 @@ $knownTree = New-Object 'System.Collections.Generic.HashSet[int]'
 $violations = @{}
 $watchedNames = @(
     'WindowsTerminal', 'OpenConsole', 'conhost',
-    'explorer', 'iexplore', 'msedge', 'chrome', 'firefox', 'brave', 'opera'
+    'explorer', 'iexplore', 'msedge', 'chrome', 'firefox', 'brave', 'opera',
+    'WerFault', 'WerFaultSecure'
 )
 
-do {
+$rootExitTime = $null
+$afterRootExitDeadline = $null
+$descendantDrainTimedOut = $false
+while ($true) {
     $parents = [HeadlessNative]::ProcessParents()
     foreach ($candidate in @($parents.Keys)) {
         if (-not $knownTree.Contains($candidate) -and (Test-IsDescendant $candidate $parents $knownTree)) {
@@ -246,14 +257,62 @@ do {
 
     if (-not $process.HasExited) {
         Start-Sleep -Milliseconds 100
+        continue
     }
+
+    if ($null -eq $rootExitTime) {
+        $rootExitTime = [DateTime]::UtcNow
+        $afterRootExitDeadline = $rootExitTime.AddSeconds(30)
+    }
+
+    $knownDescendantAlive = $false
+    foreach ($candidate in @($parents.Keys)) {
+        if ($candidate -ne $process.Id -and $knownTree.Contains($candidate)) {
+            $knownDescendantAlive = $true
+            break
+        }
+    }
+
+    if (-not $knownDescendantAlive) {
+        break
+    }
+
+    if ([DateTime]::UtcNow -ge $afterRootExitDeadline) {
+        $descendantDrainTimedOut = $true
+        break
+    }
+
+    Start-Sleep -Milliseconds 100
 }
-while (-not $process.HasExited)
 
 $process.WaitForExit()
 $commandExitCode = $process.ExitCode
-[Console]::Out.Write($stdoutTask.Result)
-[Console]::Error.Write($stderrTask.Result)
+
+if ($descendantDrainTimedOut) {
+    Write-Warning 'Headless assertion stopped polling 30 seconds after the root exited because a known descendant was still alive.'
+}
+
+$remainingRelayMilliseconds = [Math]::Max(
+    0,
+    [int] [Math]::Ceiling(($afterRootExitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+$relayTasks = [System.Threading.Tasks.Task[]] @($stdoutTask, $stderrTask)
+$relayFinished = $false
+try {
+    $relayFinished = [System.Threading.Tasks.Task]::WaitAll($relayTasks, $remainingRelayMilliseconds)
+}
+catch [System.AggregateException] {
+    Write-Warning ("Headless assertion could not fully relay child output: {0}" -f $_.Exception.GetBaseException().Message)
+}
+
+if ($stdoutTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+    [Console]::Out.Write($stdoutTask.Result)
+}
+if ($stderrTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+    [Console]::Error.Write($stderrTask.Result)
+}
+if (-not $relayFinished) {
+    Write-Warning 'Headless assertion truncated child output because its stdout/stderr relay did not close within 30 seconds after the root exited.'
+}
 $process.Dispose()
 
 if ($violations.Count -gt 0) {

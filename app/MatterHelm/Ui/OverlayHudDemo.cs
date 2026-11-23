@@ -235,9 +235,17 @@ internal static class OverlayHudDemo
             overall + Environment.NewLine;
         File.WriteAllText(resultsPath, report);
 
-        Console.OutputEncoding = System.Text.Encoding.UTF8;
-        Console.WriteLine(report);
-        Console.WriteLine($"(results file: {resultsPath})");
+        System.Text.Encoding originalOutputEncoding = Console.OutputEncoding;
+        try
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            Console.WriteLine(report);
+            Console.WriteLine($"(results file: {resultsPath})");
+        }
+        finally
+        {
+            Console.OutputEncoding = originalOutputEncoding;
+        }
 
         return allPassed ? 0 : 1;
     }
