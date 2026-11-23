@@ -239,7 +239,7 @@ wrote it.
 
 ## Status
 
-The current release is **v0.7.1**. Known limits are unsigned binaries that may
+The current release is **v0.9.0**. Known limits are unsigned binaries that may
 trigger SmartScreen, the one-time Google test-VID registration, and
 unverifiable delivery to sessionless players such as Kodi.
 
