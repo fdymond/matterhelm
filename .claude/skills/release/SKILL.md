@@ -23,7 +23,9 @@ publishes artifacts; stop before any step not explicitly authorized by the maint
 5. Rename CHANGELOG `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, add a new empty `[Unreleased]`
    section, and update comparison links if present. Keep README evidence generic rather than
    freezing test counts or transient results.
-6. Review the final change set and rerun any check affected by release-file edits.
+6. Review the final change set and rerun any check affected by release-file edits. Before
+   tagging, run `gh workflow run release.yml --ref release/X.Y.Z`, download its 14-day
+   unattested candidate artifact, and complete the hardware release-candidate checks.
 7. Create one conventional release commit, for example `chore(release): vX.Y.Z`.
 8. Create annotated tag `vX.Y.Z`, then push `main` and that tag.
 9. Watch both release and CI workflows to completion with `gh run list` and `gh run view`.

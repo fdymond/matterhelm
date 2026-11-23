@@ -179,6 +179,10 @@ down so the next agent or reviewer has the "why."
 A release uses the Node.js and .NET SDK pins described under Prerequisites;
 update those pins when the release checklist identifies newer security patches.
 
+Before tagging, `gh workflow run release.yml --ref release/X.Y.Z` builds
+unattested candidate assets as a 14-day workflow artifact for hardware testing.
+The tag run rebuilds and attests the assets that it publishes.
+
 A pushed `v*` tag is accepted only when the tag without its leading `v` exactly
 matches both `<Version>` in `app/MatterHelm/MatterHelm.csproj` and `version` in
 `bridge/package.json`; either mismatch fails before packaging. Release
