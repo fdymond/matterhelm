@@ -31,16 +31,20 @@ Pop-Location
 
 ```powershell
 dotnet build app/MatterHelm/MatterHelm.csproj -c Release
-dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
+./tools/assert-headless.ps1 dotnet test app/MatterHelm.Tests/MatterHelm.Tests.csproj -c Release
 ```
+
+`tools/assert-headless.ps1` relays the command's output and fails if any new visible window
+appears during the run; a headless violation is a failing gate.
 
 When `dotnet` is not on `PATH`, resolve it locally; do not put a machine-specific path into
 repo files or reports as a requirement.
 
 ## 3. Acceptance demos
 
-Run the Release executable with every flag relevant to the change (headless by default; a
-check reported as `SKIPPED-HEADLESS` needs a human-observed `--visible` run before release):
+Run the Release executable through `./tools/assert-headless.ps1 <file-path> [child-argument ...]`
+with every flag relevant to the change (headless by default; a check reported as
+`SKIPPED-HEADLESS` needs a human-observed `--visible` run before release):
 
 - UI/HUD: `--demo-overlay`
 - sidecar lifecycle or authentication: `--demo-sidecar-chaos`

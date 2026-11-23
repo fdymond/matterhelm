@@ -36,6 +36,7 @@ internal static partial class Program
         // no single-instance guard (it must work beside a running instance).
         if (args.Contains("--selftest-actions"))
         {
+            PrepareIsolatedDemoState("--selftest-actions");
             Environment.ExitCode = Actions.ActionsSelfTest.Run(
                 includeDisplayTests: args.Contains("--selftest-actions-display"),
                 includeKeySequenceTest: args.Contains("--selftest-actions-keysequence"));
@@ -339,6 +340,11 @@ internal static partial class Program
         catch (TimeoutException)
         {
             Console.WriteLine("OVERALL: FAIL (demo timed out)");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"OVERALL: FAIL (unhandled {ex.GetType().Name}: {ex.Message})");
             return 1;
         }
 
